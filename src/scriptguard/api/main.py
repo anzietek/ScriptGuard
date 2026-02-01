@@ -5,6 +5,7 @@ import torch
 from transformers import AutoTokenizer, AutoModelForCausalLM
 from peft import PeftModel
 from scriptguard.rag.qdrant_store import QdrantStore
+from scriptguard.utils.logger import logger
 import os
 
 app = FastAPI(title="ScriptGuard Inference API")

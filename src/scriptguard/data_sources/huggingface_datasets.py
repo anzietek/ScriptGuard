@@ -3,12 +3,9 @@ Hugging Face Datasets Data Source
 Loads benign code samples from Hugging Face datasets.
 """
 
-import logging
+from scriptguard.utils.logger import logger
 from typing import List, Dict, Optional
 from datetime import datetime
-
-logger = logging.getLogger(__name__)
-
 
 class HuggingFaceDataSource:
     """Hugging Face datasets integration for benign code samples."""

@@ -1,9 +1,7 @@
 from zenml import step
 from datasets import Dataset
 from scriptguard.models.qlora_finetuner import QLoRAFineTuner
-import logging
-
-logger = logging.getLogger(__name__)
+from scriptguard.utils.logger import logger
 
 @step
 def train_model(dataset: Dataset, model_id: str = "bigcode/starcoder2-3b") -> str:

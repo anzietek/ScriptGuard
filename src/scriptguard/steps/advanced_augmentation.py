@@ -5,14 +5,11 @@ Code obfuscation, mutation, and polymorphic variant generation.
 
 import base64
 import random
-import logging
+from scriptguard.utils.logger import logger
 import ast
 import re
 from typing import Dict, List
 from zenml import step
-
-logger = logging.getLogger(__name__)
-
 
 def obfuscate_base64(code: str) -> str:
     """
@@ -28,7 +25,6 @@ def obfuscate_base64(code: str) -> str:
     obfuscated = f"import base64; exec(base64.b64decode('{encoded}').decode())"
     return obfuscated
 
-
 def obfuscate_hex(code: str) -> str:
     """
     Obfuscate code using hex encoding.
@@ -42,7 +38,6 @@ def obfuscate_hex(code: str) -> str:
     hex_encoded = code.encode().hex()
     obfuscated = f"exec(bytes.fromhex('{hex_encoded}').decode())"
     return obfuscated
-
 
 def obfuscate_rot13(code: str) -> str:
     """
@@ -58,7 +53,6 @@ def obfuscate_rot13(code: str) -> str:
     rot13 = codecs.encode(code, 'rot_13')
     obfuscated = f"import codecs; exec(codecs.decode('''{rot13}''', 'rot_13'))"
     return obfuscated
-
 
 def rename_variables(code: str) -> str:
     """
@@ -99,7 +93,6 @@ def rename_variables(code: str) -> str:
 
     return modified_code
 
-
 def split_strings(code: str) -> str:
     """
     Split string literals in code.
@@ -122,7 +115,6 @@ def split_strings(code: str) -> str:
     modified = re.sub(r'"([^"]{4,})"', lambda m: split_string(m).replace("'", '"'), modified)
 
     return modified
-
 
 def add_junk_code(code: str) -> str:
     """
@@ -151,7 +143,6 @@ def add_junk_code(code: str) -> str:
             result.append(random.choice(junk_lines))
 
     return "\n".join(result)
-
 
 def obfuscate_code(code: str, technique: str) -> str:
     """
@@ -182,7 +173,6 @@ def obfuscate_code(code: str, technique: str) -> str:
     else:
         logger.warning(f"Unknown obfuscation technique: {technique}")
         return code
-
 
 def generate_polymorphic_variant(sample: Dict) -> Dict:
     """
@@ -216,7 +206,6 @@ def generate_polymorphic_variant(sample: Dict) -> Dict:
     }
 
     return variant
-
 
 @step
 def augment_malicious_samples(
@@ -253,7 +242,6 @@ def augment_malicious_samples(
     logger.info(f"Total samples after augmentation: {len(combined)}")
 
     return combined
-
 
 @step
 def apply_obfuscation_techniques(
@@ -296,7 +284,6 @@ def apply_obfuscation_techniques(
     logger.info(f"Created {len(augmented)} obfuscated variants")
 
     return data + augmented
-
 
 @step
 def balance_dataset(

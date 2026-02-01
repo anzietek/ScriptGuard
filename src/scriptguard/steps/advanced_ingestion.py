@@ -3,7 +3,7 @@ Advanced Data Ingestion Step
 Integrates multiple data sources with deduplication and database storage.
 """
 
-import logging
+from scriptguard.utils.logger import logger
 from typing import Dict, List
 from zenml import step
 
@@ -15,9 +15,6 @@ from ..data_sources import (
 )
 from ..database import DatasetManager, deduplicate_samples
 from ..monitoring import DatasetStatistics
-
-logger = logging.getLogger(__name__)
-
 
 @step
 def advanced_data_ingestion(config: dict) -> List[Dict]:

@@ -4,12 +4,9 @@ Validates code syntax, filters invalid samples, and performs quality checks.
 """
 
 import ast
-import logging
+from scriptguard.utils.logger import logger
 from typing import Dict, List
 from zenml import step
-
-logger = logging.getLogger(__name__)
-
 
 def validate_python_syntax(code: str) -> bool:
     """
@@ -29,7 +26,6 @@ def validate_python_syntax(code: str) -> bool:
     except Exception:
         return False
 
-
 def check_code_length(code: str, min_length: int = 50, max_length: int = 50000) -> bool:
     """
     Check if code length is within acceptable range.
@@ -44,7 +40,6 @@ def check_code_length(code: str, min_length: int = 50, max_length: int = 50000) 
     """
     length = len(code)
     return min_length <= length <= max_length
-
 
 def check_encoding(code: str) -> bool:
     """
@@ -62,7 +57,6 @@ def check_encoding(code: str) -> bool:
     except UnicodeEncodeError:
         return False
 
-
 def verify_label(label: str) -> bool:
     """
     Verify label is valid.
@@ -74,7 +68,6 @@ def verify_label(label: str) -> bool:
         True if label is "malicious" or "benign"
     """
     return label.lower() in ["malicious", "benign"]
-
 
 def is_mostly_comments(code: str, threshold: float = 0.8) -> bool:
     """
@@ -100,7 +93,6 @@ def is_mostly_comments(code: str, threshold: float = 0.8) -> bool:
     ratio = comment_lines / len(lines)
     return ratio > threshold
 
-
 def has_minimum_code_content(code: str, min_non_whitespace: int = 100) -> bool:
     """
     Check if code has minimum non-whitespace content.
@@ -114,7 +106,6 @@ def has_minimum_code_content(code: str, min_non_whitespace: int = 100) -> bool:
     """
     non_whitespace = len("".join(code.split()))
     return non_whitespace >= min_non_whitespace
-
 
 @step
 def validate_samples(
@@ -216,7 +207,6 @@ def validate_samples(
     logger.info("=" * 60)
 
     return valid_samples
-
 
 @step
 def filter_by_quality(

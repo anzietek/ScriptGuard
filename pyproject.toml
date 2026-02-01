@@ -26,6 +26,7 @@ dependencies = [
     "psycopg2-binary>=2.9.9",
     "sqlalchemy>=2.0.0",
     "wandb>=0.24.1",
+    "loguru>=0.7.0",
 ]
 
 [build-system]

@@ -4,16 +4,13 @@ Improved vector store for CVEs, vulnerabilities, and malware patterns.
 """
 
 import os
-import logging
+from scriptguard.utils.logger import logger
 from typing import List, Dict, Any, Optional
 from qdrant_client import QdrantClient
 from qdrant_client.http import models
 from qdrant_client.http.exceptions import UnexpectedResponse
 from sentence_transformers import SentenceTransformer
 import hashlib
-
-logger = logging.getLogger(__name__)
-
 
 class QdrantStore:
     """Enhanced Qdrant store for RAG (Retrieval-Augmented Generation)."""
@@ -297,7 +294,6 @@ class QdrantStore:
         except Exception as e:
             logger.error(f"Failed to clear collection: {e}")
 
-
 def bootstrap_cve_data(store: QdrantStore):
     """Bootstrap store with common CVE patterns."""
     logger.info("Bootstrapping CVE knowledge base...")
@@ -351,7 +347,6 @@ def bootstrap_cve_data(store: QdrantStore):
 
     store.upsert_vulnerabilities(cve_data)
     logger.info(f"Bootstrapped {len(cve_data)} CVE/pattern records")
-
 
 if __name__ == "__main__":
     # Example usage

@@ -3,12 +3,9 @@ Dataset Statistics
 Tools for analyzing dataset quality, balance, and source distribution.
 """
 
-import logging
+from scriptguard.utils.logger import logger
 from typing import Dict, List
 from collections import Counter
-
-logger = logging.getLogger(__name__)
-
 
 class DatasetStatistics:
     """Comprehensive dataset statistics analyzer."""
@@ -144,7 +141,6 @@ class DatasetStatistics:
         logger.info(f"Balance Quality: {report['balance_quality']}")
         logger.info("=" * 60)
 
-
 def check_balance(samples: List[Dict], target_ratio: float = 1.0, tolerance: float = 0.2) -> bool:
     """
     Check if dataset is balanced within tolerance.
@@ -172,7 +168,6 @@ def check_balance(samples: List[Dict], target_ratio: float = 1.0, tolerance: flo
     else:
         logger.warning(f"Dataset is imbalanced (ratio: {ratio:.2f}, target: {target_ratio:.2f})")
         return False
-
 
 def analyze_sources(samples: List[Dict]) -> Dict[str, Dict]:
     """

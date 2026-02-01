@@ -4,11 +4,8 @@ SHA256-based deduplication for code samples.
 """
 
 import hashlib
-import logging
+from scriptguard.utils.logger import logger
 from typing import List, Dict, Set
-
-logger = logging.getLogger(__name__)
-
 
 def compute_hash(content: str) -> str:
     """
@@ -21,7 +18,6 @@ def compute_hash(content: str) -> str:
         Hexadecimal hash string
     """
     return hashlib.sha256(content.encode("utf-8")).hexdigest()
-
 
 def deduplicate_samples(samples: List[Dict]) -> List[Dict]:
     """
@@ -57,7 +53,6 @@ def deduplicate_samples(samples: List[Dict]) -> List[Dict]:
     )
 
     return unique_samples
-
 
 def deduplicate_against_database(
     samples: List[Dict],

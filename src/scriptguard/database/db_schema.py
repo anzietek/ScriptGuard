@@ -3,15 +3,12 @@ PostgreSQL Database Schema
 Defines PostgreSQL schema for storing code samples and dataset versions.
 """
 
-import logging
+from scriptguard.utils.logger import logger
 from typing import Optional
 import psycopg2
 from psycopg2 import pool, sql
 from psycopg2.extras import RealDictCursor, Json
 import os
-
-logger = logging.getLogger(__name__)
-
 
 class DatabasePool:
     """PostgreSQL connection pool manager."""
@@ -90,7 +87,6 @@ class DatabasePool:
             cls._pool.closeall()
             cls._pool = None
             logger.info("Connection pool closed")
-
 
 def create_database_schema(
     host: str = None,
@@ -259,7 +255,6 @@ def create_database_schema(
         cursor.close()
         conn.close()
 
-
 def get_connection():
     """
     Get database connection from pool.
@@ -269,7 +264,6 @@ def get_connection():
     """
     return DatabasePool.get_connection()
 
-
 def return_connection(conn):
     """
     Return connection to pool.
@@ -278,7 +272,6 @@ def return_connection(conn):
         conn: PostgreSQL connection
     """
     DatabasePool.return_connection(conn)
-
 
 def refresh_statistics():
     """Refresh materialized view for statistics."""

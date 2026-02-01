@@ -5,10 +5,8 @@ import torch
 from transformers import AutoTokenizer, AutoModelForCausalLM, BitsAndBytesConfig
 from peft import PeftModel
 from sklearn.metrics import accuracy_score, precision_recall_fscore_support, confusion_matrix, classification_report
-import logging
+from scriptguard.utils.logger import logger
 import numpy as np
-
-logger = logging.getLogger(__name__)
 
 @step
 def evaluate_model(

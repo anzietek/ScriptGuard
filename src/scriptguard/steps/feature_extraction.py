@@ -5,13 +5,10 @@ AST-based features, entropy analysis, and API call pattern extraction.
 
 import ast
 import math
-import logging
+from scriptguard.utils.logger import logger
 from typing import Dict, List, Set
 from collections import Counter
 from zenml import step
-
-logger = logging.getLogger(__name__)
-
 
 def extract_ast_features(code: str) -> Dict:
     """
@@ -83,7 +80,6 @@ def extract_ast_features(code: str) -> Dict:
 
     return features
 
-
 def calculate_entropy(code: str) -> float:
     """
     Calculate Shannon entropy of code.
@@ -108,7 +104,6 @@ def calculate_entropy(code: str) -> float:
         entropy -= probability * math.log2(probability)
 
     return entropy
-
 
 def extract_api_patterns(code: str) -> Dict:
     """
@@ -168,7 +163,6 @@ def extract_api_patterns(code: str) -> Dict:
 
     return patterns
 
-
 def extract_string_features(code: str) -> Dict:
     """
     Extract features from string literals.
@@ -218,7 +212,6 @@ def extract_string_features(code: str) -> Dict:
 
     return features
 
-
 @step
 def extract_features(data: List[Dict]) -> List[Dict]:
     """
@@ -261,7 +254,6 @@ def extract_features(data: List[Dict]) -> List[Dict]:
     logger.info(f"Feature extraction completed for {len(enriched_samples)} samples")
 
     return enriched_samples
-
 
 @step
 def analyze_feature_importance(data: List[Dict]) -> Dict:

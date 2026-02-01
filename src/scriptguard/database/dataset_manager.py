@@ -4,16 +4,13 @@ CRUD operations, versioning, and statistics for code sample database.
 """
 
 import json
-import logging
+from scriptguard.utils.logger import logger
 from typing import List, Dict, Optional
 from datetime import datetime
 from psycopg2.extras import execute_values, Json
 
 from .db_schema import get_connection, return_connection, refresh_statistics
 from .deduplication import compute_hash
-
-logger = logging.getLogger(__name__)
-
 
 class DatasetManager:
     """Manages code sample database with PostgreSQL and versioning support."""

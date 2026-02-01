@@ -3,10 +3,8 @@ import requests
 import glob
 from typing import List, Dict, Any, Optional
 from zenml import step
-import logging
+from scriptguard.utils.logger import logger
 import random
-
-logger = logging.getLogger(__name__)
 
 def fetch_github_file(url: str) -> Optional[str]:
     """Helper to fetch raw content from a GitHub URL."""

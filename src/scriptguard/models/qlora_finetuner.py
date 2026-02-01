@@ -14,9 +14,7 @@ from peft import (
     TaskType
 )
 from datasets import Dataset
-import logging
-
-logger = logging.getLogger(__name__)
+from scriptguard.utils.logger import logger
 
 class QLoRAFineTuner:
     def __init__(self, model_id: str = "bigcode/starcoder2-3b"):

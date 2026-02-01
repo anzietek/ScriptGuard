@@ -1,9 +1,7 @@
 from typing import List, Dict, Any
 from zenml import step
 from datasets import Dataset
-import logging
-
-logger = logging.getLogger(__name__)
+from scriptguard.utils.logger import logger
 
 @step
 def preprocess_data(data: List[Dict[str, Any]]) -> Dataset:

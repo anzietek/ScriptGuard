@@ -4,13 +4,10 @@ Fetches malicious and benign code samples from GitHub repositories.
 """
 
 import time
-import logging
+from scriptguard.utils.logger import logger
 from typing import List, Dict, Optional
 import requests
 from datetime import datetime
-
-logger = logging.getLogger(__name__)
-
 
 class GitHubDataSource:
     """GitHub API integration with rate limiting and intelligent searching."""

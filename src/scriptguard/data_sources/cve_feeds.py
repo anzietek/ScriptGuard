@@ -3,13 +3,10 @@ CVE Feeds Data Source
 Fetches CVE data and exploit patterns from NVD (National Vulnerability Database).
 """
 
-import logging
+from scriptguard.utils.logger import logger
 import requests
 from typing import List, Dict, Optional
 from datetime import datetime, timedelta
-
-logger = logging.getLogger(__name__)
-
 
 class CVEFeedSource:
     """CVE feeds integration for vulnerability and exploit patterns."""
