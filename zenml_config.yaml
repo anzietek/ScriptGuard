@@ -1,0 +1,36 @@
+# ZenML Pipeline Configuration
+# Controls caching behavior for pipeline steps
+
+steps:
+  advanced_data_ingestion:
+    enable_cache: false  # Always fetch fresh data
+
+  validate_samples:
+    enable_cache: true   # Can reuse validation
+
+  filter_by_quality:
+    enable_cache: true
+
+  extract_features:
+    enable_cache: true
+
+  analyze_feature_importance:
+    enable_cache: true
+
+  augment_malicious_samples:
+    enable_cache: true   # Can reuse augmentation
+
+  balance_dataset:
+    enable_cache: true
+
+  preprocess_data:
+    enable_cache: true
+
+  split_train_test:
+    enable_cache: true
+
+  train_model:
+    enable_cache: false  # Always train fresh
+
+  evaluate_model:
+    enable_cache: false  # Always evaluate fresh

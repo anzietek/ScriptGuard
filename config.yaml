@@ -1,6 +1,15 @@
 # ScriptGuard Configuration
 # Configuration for data sources, training, and database
 
+# Pipeline Configuration
+pipeline:
+  enable_cache: false  # Set to true to use cached results from previous runs
+  cache_steps:         # Individual step cache control (overrides enable_cache if specified)
+    advanced_data_ingestion: false  # Always fetch fresh data
+    validate_samples: true           # Can cache validation
+    augment_malicious_samples: true  # Can cache augmentation
+    train_model: false               # Always train fresh model
+
 # API Keys (loaded from environment variables)
 api_keys:
   github_token: ${GITHUB_API_TOKEN}

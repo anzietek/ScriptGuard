@@ -1,21 +1,22 @@
 from zenml import pipeline, step
 from datasets import Dataset
 from typing import List, Dict, Any, Tuple
+from scriptguard.utils.step_cache import get_cache_setting
 from scriptguard.steps.data_ingestion import (
     github_data_ingestion,
     local_data_ingestion,
     generic_web_ingestion,
     synthetic_data_generation
 )
-from scriptguard.steps.advanced_ingestion import advanced_data_ingestion
-from scriptguard.steps.data_validation import validate_samples, filter_by_quality
+from scriptguard.steps.advanced_ingestion import advanced_data_ingestion as _advanced_data_ingestion
+from scriptguard.steps.data_validation import validate_samples as _validate_samples, filter_by_quality as _filter_by_quality
 from scriptguard.steps.advanced_augmentation import (
-    augment_malicious_samples,
+    augment_malicious_samples as _augment_malicious_samples,
     balance_dataset
 )
 from scriptguard.steps.feature_extraction import extract_features, analyze_feature_importance
 from scriptguard.steps.data_preprocessing import preprocess_data
-from scriptguard.steps.model_training import train_model
+from scriptguard.steps.model_training import train_model as _train_model
 from scriptguard.steps.model_evaluation import evaluate_model
 
 @step

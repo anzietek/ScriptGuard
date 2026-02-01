@@ -85,12 +85,18 @@ def main():
     # Get model ID from config
     model_id = config.get("training", {}).get("model_id", "bigcode/starcoder2-3b")
 
+    # Add timestamp to force cache invalidation (optional)
+    from datetime import datetime
+    config["_run_timestamp"] = datetime.now().isoformat()
+
     logger.info("Starting ScriptGuard Advanced Training Pipeline...")
     logger.info(f"Model: {model_id}")
 
-    # Run advanced pipeline
+    # Run advanced pipeline with ZenML config for caching control
     try:
-        run = advanced_training_pipeline(
+        run = advanced_training_pipeline.with_options(
+            config_path="zenml_config.yaml"  # Load cache settings from file
+        )(
             config=config,
             model_id=model_id
         )

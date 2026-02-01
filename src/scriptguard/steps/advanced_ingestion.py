@@ -16,7 +16,7 @@ from ..data_sources import (
 from ..database import DatasetManager, deduplicate_samples
 from ..monitoring import DatasetStatistics
 
-@step
+@step(enable_cache=False)
 def advanced_data_ingestion(config: dict) -> List[Dict]:
     """
     Ingest data from multiple sources with deduplication.
