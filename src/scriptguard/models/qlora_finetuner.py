@@ -112,7 +112,7 @@ class QLoRAFineTuner:
             bf16=training_config.get("bf16", True),
             optim=training_config.get("optim", "paged_adamw_8bit"),
             logging_steps=training_config.get("logging_steps", 10),
-            evaluation_strategy=training_config.get("evaluation_strategy", "no"),
+            eval_strategy=training_config.get("evaluation_strategy", "no"),
             eval_steps=training_config.get("eval_steps", 100),
             save_strategy="steps",
             save_steps=training_config.get("save_steps", 500),
