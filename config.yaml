@@ -137,8 +137,8 @@ training:
     - "o_proj"
 
   # Training Hyperparameters
-  batch_size: 4
-  gradient_accumulation_steps: 4
+  batch_size: 2  # Reduced for 4GB VRAM
+  gradient_accumulation_steps: 8  # Increased to maintain effective batch size of 16
   num_epochs: 3
   learning_rate: 0.0002
   weight_decay: 0.01
