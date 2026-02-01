@@ -150,15 +150,27 @@ training:
   bf16: true  # Better for modern GPUs
   optim: "paged_adamw_8bit"
 
+  # Tokenization
+  tokenizer_max_length: 512
+  tokenizer_padding: "max_length"  # or "dynamic" for DataCollatorWithPadding
+  tokenizer_truncation: true
+
   # Evaluation
   evaluation_strategy: "steps"
   eval_steps: 100
   save_steps: 500
   logging_steps: 10
+  test_split_size: 0.1  # 10% for test set
 
   # Early Stopping
   early_stopping: true
   early_stopping_patience: 3
+
+  # Model Evaluation
+  eval_max_new_tokens: 20
+  eval_temperature: 0.1
+  eval_batch_size: 1
+  eval_max_code_length: 500
 
 # Inference Configuration
 inference:

@@ -5,6 +5,7 @@ Validates code syntax, filters invalid samples, and performs quality checks.
 
 import ast
 from scriptguard.utils.logger import logger
+from scriptguard.schemas import CodeSample, validate_data_batch, ValidatedCodeSample
 from typing import Dict, List
 from zenml import step
 
@@ -116,7 +117,7 @@ def validate_samples(
     skip_syntax_errors: bool = True
 ) -> List[Dict]:
     """
-    Validate and filter code samples.
+    Validate and filter code samples using Pydantic schemas.
 
     Args:
         data: List of code sample dictionaries
@@ -127,12 +128,30 @@ def validate_samples(
 
     Returns:
         Filtered list of valid samples
+
+    Raises:
+        ValueError: If data schema validation fails critically
     """
     logger.info(f"Validating {len(data)} samples...")
 
+    # First, validate data schema
+    try:
+        validated_schemas = validate_data_batch(data, CodeSample)
+        logger.info(f"Schema validation passed for {len(validated_schemas)} samples")
+    except ValueError as e:
+        logger.warning(f"Schema validation encountered errors: {e}")
+        # Continue with samples that passed validation
+        validated_schemas = []
+        for item in data:
+            try:
+                validated_schemas.append(CodeSample(**item))
+            except Exception:
+                pass
+        logger.info(f"Proceeding with {len(validated_schemas)} schema-valid samples")
+
     valid_samples = []
     stats = {
-        "total": len(data),
+        "total": len(validated_schemas),
         "invalid_syntax": 0,
         "invalid_length": 0,
         "invalid_encoding": 0,
@@ -142,7 +161,9 @@ def validate_samples(
         "valid": 0
     }
 
-    for sample in data:
+    for schema_sample in validated_schemas:
+        # Convert Pydantic model back to dict for compatibility
+        sample = schema_sample.model_dump()
         content = sample.get("content", "")
         label = sample.get("label", "")
 

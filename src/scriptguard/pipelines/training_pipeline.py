@@ -133,20 +133,22 @@ def advanced_training_pipeline(
     # Step 8: Preprocess for training
     processed_dataset = preprocess_data(data=balanced_data)
 
-    # Step 9: Split into train/test (90/10 split)
+    # Step 9: Split into train/test
+    test_size = config.get("training", {}).get("test_split_size", 0.1)
     train_dataset, test_dataset = split_train_test(
         dataset=processed_dataset,
-        test_size=0.1
+        test_size=test_size
     )
 
     # Step 10: Train model
-    adapter_path = _train_model(dataset=train_dataset, model_id=model_id)
+    adapter_path = _train_model(dataset=train_dataset, model_id=model_id, config=config)
 
     # Step 11: Evaluate model
     metrics = evaluate_model(
         adapter_path=adapter_path,
         test_dataset=test_dataset,
-        base_model_id=model_id
+        base_model_id=model_id,
+        config=config
     )
 
     return metrics

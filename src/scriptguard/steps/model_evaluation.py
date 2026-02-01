@@ -6,16 +6,24 @@ from transformers import AutoTokenizer, AutoModelForCausalLM, BitsAndBytesConfig
 from peft import PeftModel
 from sklearn.metrics import accuracy_score, precision_recall_fscore_support, confusion_matrix, classification_report
 from scriptguard.utils.logger import logger
+from scriptguard.utils.prompts import format_inference_prompt, parse_classification_output
 import numpy as np
 
 @step
 def evaluate_model(
     adapter_path: str,
     test_dataset: Dataset,
-    base_model_id: str = "bigcode/starcoder2-3b"
+    base_model_id: str = "bigcode/starcoder2-3b",
+    config: Dict[str, Any] = None
 ) -> Dict[str, Any]:
     """
     Evaluates the fine-tuned model on test set.
+
+    Args:
+        adapter_path: Path to trained LoRA adapter
+        test_dataset: Test dataset (tokenized)
+        base_model_id: Base model identifier
+        config: Configuration dictionary from config.yaml
 
     Computes:
     - Accuracy, Precision, Recall, F1-score
@@ -25,6 +33,13 @@ def evaluate_model(
     """
     logger.info(f"Evaluating model from: {adapter_path}")
     logger.info(f"Test set size: {len(test_dataset)}")
+
+    # Get evaluation config
+    config = config or {}
+    eval_config = config.get("training", {})
+    max_new_tokens = eval_config.get("eval_max_new_tokens", 20)
+    temperature = eval_config.get("eval_temperature", 0.1)
+    max_code_length = eval_config.get("eval_max_code_length", 500)
 
     # Load tokenizer
     tokenizer = AutoTokenizer.from_pretrained(base_model_id)
@@ -60,13 +75,29 @@ def evaluate_model(
         if i % 50 == 0:
             logger.info(f"Processed {i}/{len(test_dataset)} samples")
 
-        # Get true label
-        true_label = sample.get("label", sample.get("is_malicious", 0))
+        # Get true label - convert string labels to binary
+        label_str = sample.get("label", sample.get("is_malicious", "benign"))
+        if isinstance(label_str, str):
+            true_label = 1 if label_str.lower() == "malicious" else 0
+        else:
+            true_label = int(label_str)
         y_true.append(true_label)
 
-        # Prepare prompt for classification
-        code = sample.get("code", sample.get("content", ""))
-        prompt = f"Analyze if this code is malicious (0=benign, 1=malicious):\n\n{code[:500]}\n\nLabel:"
+        # Get code from tokenized dataset (need to decode back)
+        # The test_dataset is already tokenized, so we need to decode it
+        if "input_ids" in sample:
+            # Decode the tokenized input back to text
+            input_text = tokenizer.decode(sample["input_ids"], skip_special_tokens=True)
+            # Extract code portion from training format
+            if "Code:\n" in input_text and "\n\nClassification:" in input_text:
+                code = input_text.split("Code:\n")[1].split("\n\nClassification:")[0]
+            else:
+                code = input_text[:500]
+        else:
+            code = sample.get("code", sample.get("content", ""))
+
+        # Use centralized prompt formatting (matches training format)
+        prompt = format_inference_prompt(code=code, max_code_length=max_code_length)
 
         # Tokenize
         inputs = tokenizer(prompt, return_tensors="pt", truncation=True, max_length=512)
@@ -76,25 +107,17 @@ def evaluate_model(
         with torch.no_grad():
             outputs = model.generate(
                 **inputs,
-                max_new_tokens=10,
-                temperature=0.1,
+                max_new_tokens=max_new_tokens,
+                temperature=temperature,
                 do_sample=False,
                 pad_token_id=tokenizer.pad_token_id
             )
 
         # Decode prediction
         generated_text = tokenizer.decode(outputs[0], skip_special_tokens=True)
-        predicted_text = generated_text.split("Label:")[-1].strip()
 
-        # Parse prediction (look for 0 or 1)
-        if "0" in predicted_text[:5]:
-            predicted_label = 0
-        elif "1" in predicted_text[:5]:
-            predicted_label = 1
-        else:
-            # Default to benign if unclear
-            predicted_label = 0
-            logger.warning(f"Unclear prediction: {predicted_text[:50]}")
+        # Use centralized parsing
+        predicted_label = parse_classification_output(generated_text)
 
         y_pred.append(predicted_label)
 
@@ -104,7 +127,7 @@ def evaluate_model(
                 "code_snippet": code[:200],
                 "true_label": true_label,
                 "predicted_label": predicted_label,
-                "raw_prediction": predicted_text[:100]
+                "raw_prediction": generated_text.split("Classification:")[-1].strip()[:100]
             })
 
     # Compute metrics

@@ -2,6 +2,7 @@ from typing import List, Dict, Any
 from zenml import step
 from datasets import Dataset
 from scriptguard.utils.logger import logger
+from scriptguard.utils.prompts import format_training_prompt
 
 @step
 def preprocess_data(data: List[Dict[str, Any]]) -> Dataset:
@@ -17,12 +18,8 @@ def preprocess_data(data: List[Dict[str, Any]]) -> Dataset:
         label = item.get('label', 'unknown')
         content = item.get('content', '')
 
-        # Format: Instruction + Code + Label
-        text = (
-            f"Analyze if this code is malicious.\n\n"
-            f"Code:\n{content}\n\n"
-            f"Classification: {label}"
-        )
+        # Use centralized prompt formatting
+        text = format_training_prompt(code=content, label=label)
 
         formatted_data.append({"text": text})
 

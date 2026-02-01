@@ -17,23 +17,30 @@ from datasets import Dataset
 from scriptguard.utils.logger import logger
 
 class QLoRAFineTuner:
-    def __init__(self, model_id: str = "bigcode/starcoder2-3b"):
+    def __init__(self, model_id: str = "bigcode/starcoder2-3b", config: dict = None):
         self.model_id = model_id
+        self.config = config or {}
         self.tokenizer = AutoTokenizer.from_pretrained(model_id)
         if self.tokenizer.pad_token is None:
             self.tokenizer.pad_token = self.tokenizer.eos_token
-            
+
     def train(self, dataset: Dataset, output_dir: str = "./results"):
         logger.info(f"Tokenizing dataset with {len(dataset)} samples...")
+
+        # Get config values with defaults
+        training_config = self.config.get("training", {})
+        max_length = training_config.get("tokenizer_max_length", 512)
+        padding = training_config.get("tokenizer_padding", "max_length")
+        truncation = training_config.get("tokenizer_truncation", True)
 
         # Tokenize the dataset
         def tokenize_function(examples):
             # Tokenize with padding and truncation
             result = self.tokenizer(
                 examples["text"],
-                truncation=True,
-                max_length=512,
-                padding="max_length",
+                truncation=truncation,
+                max_length=max_length,
+                padding=padding,
             )
             # For causal LM, labels are the same as input_ids
             result["labels"] = result["input_ids"].copy()
@@ -65,11 +72,12 @@ class QLoRAFineTuner:
 
         model = prepare_model_for_kbit_training(model)
 
+        # Get LoRA config from config.yaml
         lora_config = LoraConfig(
-            r=16,
-            lora_alpha=32,
-            target_modules=["q_proj", "v_proj"],
-            lora_dropout=0.05,
+            r=training_config.get("lora_r", 16),
+            lora_alpha=training_config.get("lora_alpha", 32),
+            target_modules=training_config.get("target_modules", ["q_proj", "v_proj"]),
+            lora_dropout=training_config.get("lora_dropout", 0.05),
             bias="none",
             task_type=TaskType.CAUSAL_LM
         )
@@ -77,18 +85,25 @@ class QLoRAFineTuner:
         model = get_peft_model(model, lora_config)
         logger.info(f"LoRA config applied. Trainable parameters: {model.print_trainable_parameters()}")
 
+        # Get training hyperparameters from config
         training_args = TrainingArguments(
             output_dir=output_dir,
-            per_device_train_batch_size=4,
-            gradient_accumulation_steps=4,
-            learning_rate=2e-4,
-            fp16=True,
-            logging_steps=10,
-            max_steps=100,
+            per_device_train_batch_size=training_config.get("batch_size", 4),
+            gradient_accumulation_steps=training_config.get("gradient_accumulation_steps", 4),
+            learning_rate=training_config.get("learning_rate", 2e-4),
+            weight_decay=training_config.get("weight_decay", 0.01),
+            warmup_steps=training_config.get("warmup_steps", 100),
+            num_train_epochs=training_config.get("num_epochs", 3),
+            fp16=training_config.get("fp16", False),
+            bf16=training_config.get("bf16", True),
+            optim=training_config.get("optim", "paged_adamw_8bit"),
+            logging_steps=training_config.get("logging_steps", 10),
+            evaluation_strategy=training_config.get("evaluation_strategy", "no"),
+            eval_steps=training_config.get("eval_steps", 100),
+            save_strategy="steps",
+            save_steps=training_config.get("save_steps", 500),
             report_to="wandb",
             push_to_hub=False,
-            save_strategy="steps",
-            save_steps=50,
         )
 
         trainer = Trainer(
