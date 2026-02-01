@@ -1,27 +1,94 @@
 version: '3.8'
 
 services:
+  # PostgreSQL Database
+  postgres:
+    image: postgres:15-alpine
+    container_name: scriptguard-postgres
+    environment:
+      POSTGRES_DB: scriptguard
+      POSTGRES_USER: scriptguard
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-scriptguard_secure_password}
+      PGDATA: /var/lib/postgresql/data/pgdata
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./init-db.sql:/docker-entrypoint-initdb.d/init.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U scriptguard -d scriptguard"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - scriptguard-network
+    restart: unless-stopped
+
+  # Qdrant Vector Database
   qdrant:
     image: qdrant/qdrant:latest
+    container_name: scriptguard-qdrant
     ports:
-      - "6333:6333"
-      - "6334:6334"
+      - "${QDRANT_HTTP_PORT:-6333}:6333"
+      - "${QDRANT_GRPC_PORT:-6334}:6334"
     volumes:
       - qdrant_storage:/qdrant/storage
+    environment:
+      - QDRANT__SERVICE__HTTP_PORT=6333
+      - QDRANT__SERVICE__GRPC_PORT=6334
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:6333/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - scriptguard-network
+    restart: unless-stopped
 
-  api:
+  # ScriptGuard Training Service
+  training:
     build:
       context: ..
       dockerfile: docker/Dockerfile
-    ports:
-      - "8000:8000"
+      target: training
+    container_name: scriptguard-training
     environment:
+      # Database
+      - POSTGRES_HOST=postgres
+      - POSTGRES_PORT=5432
+      - POSTGRES_DB=scriptguard
+      - POSTGRES_USER=scriptguard
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-scriptguard_secure_password}
+
+      # Qdrant
       - QDRANT_HOST=qdrant
       - QDRANT_PORT=6333
-      - BASE_MODEL_ID=bigcode/starcoder2-3b
+
+      # API Keys
+      - GITHUB_API_TOKEN=${GITHUB_API_TOKEN}
+      - NVD_API_KEY=${NVD_API_KEY}
+      - HUGGINGFACE_TOKEN=${HUGGINGFACE_TOKEN}
       - COMET_API_KEY=${COMET_API_KEY}
+      - COMET_PROJECT_NAME=${COMET_PROJECT_NAME:-scriptguard}
+
+      # Model
+      - BASE_MODEL_ID=${BASE_MODEL_ID:-bigcode/starcoder2-3b}
+      - MODEL_PATH=/app/models
+
+      # Python
+      - PYTHONUNBUFFERED=1
+      - PYTHONPATH=/app/src
+    volumes:
+      - model_data:/app/models
+      - training_logs:/app/logs
+      - ./config.yaml:/app/config.yaml:ro
     depends_on:
-      - qdrant
+      postgres:
+        condition: service_healthy
+      qdrant:
+        condition: service_healthy
+    networks:
+      - scriptguard-network
     deploy:
       resources:
         reservations:
@@ -29,6 +96,136 @@ services:
             - driver: nvidia
               count: 1
               capabilities: [gpu]
+    restart: "no"  # Training is one-time
+
+  # ScriptGuard Inference API
+  api:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+      target: inference
+    container_name: scriptguard-api
+    ports:
+      - "${API_PORT:-8000}:8000"
+    environment:
+      # Database
+      - POSTGRES_HOST=postgres
+      - POSTGRES_PORT=5432
+      - POSTGRES_DB=scriptguard
+      - POSTGRES_USER=scriptguard
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-scriptguard_secure_password}
+
+      # Qdrant
+      - QDRANT_HOST=qdrant
+      - QDRANT_PORT=6333
+
+      # Model
+      - MODEL_PATH=/app/models/scriptguard-model
+      - DEVICE=${DEVICE:-cuda}
+
+      # API
+      - API_HOST=0.0.0.0
+      - API_PORT=8000
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+
+      # Python
+      - PYTHONUNBUFFERED=1
+      - PYTHONPATH=/app/src
+    volumes:
+      - model_data:/app/models:ro
+      - api_logs:/app/logs
+    depends_on:
+      postgres:
+        condition: service_healthy
+      qdrant:
+        condition: service_healthy
+    networks:
+      - scriptguard-network
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    restart: unless-stopped
+
+  # Nginx Reverse Proxy (optional)
+  nginx:
+    image: nginx:alpine
+    container_name: scriptguard-nginx
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./ssl:/etc/nginx/ssl:ro
+    depends_on:
+      - api
+    networks:
+      - scriptguard-network
+    restart: unless-stopped
+    profiles:
+      - with-nginx
+
+  # Prometheus Monitoring (optional)
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: scriptguard-prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+    networks:
+      - scriptguard-network
+    restart: unless-stopped
+    profiles:
+      - monitoring
+
+  # Grafana Dashboards (optional)
+  grafana:
+    image: grafana/grafana:latest
+    container_name: scriptguard-grafana
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_PASSWORD:-admin}
+    volumes:
+      - grafana_data:/var/lib/grafana
+    depends_on:
+      - prometheus
+    networks:
+      - scriptguard-network
+    restart: unless-stopped
+    profiles:
+      - monitoring
 
 volumes:
+  postgres_data:
+    driver: local
   qdrant_storage:
+    driver: local
+  model_data:
+    driver: local
+  training_logs:
+    driver: local
+  api_logs:
+    driver: local
+  prometheus_data:
+    driver: local
+  grafana_data:
+    driver: local
+
+networks:
+  scriptguard-network:
+    driver: bridge

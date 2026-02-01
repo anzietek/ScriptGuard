@@ -1,0 +1,167 @@
+# ScriptGuard Configuration
+# Configuration for data sources, training, and database
+
+# API Keys (loaded from environment variables)
+api_keys:
+  github_token: ${GITHUB_API_TOKEN}
+  nvd_api_key: ${NVD_API_KEY}
+
+# Data Sources Configuration
+data_sources:
+  github:
+    enabled: true
+    fetch_malicious: true
+    fetch_benign: true
+    malicious_keywords:
+      - "reverse-shell python"
+      - "keylogger python"
+      - "ransomware python"
+      - "backdoor python"
+      - "credential stealer python"
+      - "port scanner python"
+      - "exploit python"
+      - "payload python"
+    benign_repos:
+      - "django/django"
+      - "pallets/flask"
+      - "psf/requests"
+      - "scikit-learn/scikit-learn"
+      - "pandas-dev/pandas"
+      - "pytorch/pytorch"
+    max_samples_per_keyword: 20
+    max_files_per_repo: 50
+
+  malwarebazaar:
+    enabled: true
+    tags:
+      - "python"
+      - "script"
+      - "ransomware"
+      - "backdoor"
+      - "stealer"
+    max_samples: 100
+
+  huggingface:
+    enabled: true
+    datasets:
+      - "codeparrot/github-code"
+      - "bigcode/the-stack-dedup"
+    max_samples: 10000
+
+  cve_feeds:
+    enabled: true
+    days_back: 30
+    keywords:
+      - "script"
+      - "code execution"
+      - "remote code execution"
+      - "command injection"
+
+# Database Configuration (PostgreSQL)
+database:
+  type: "postgresql"  # or "sqlite" for development
+  postgresql:
+    host: ${POSTGRES_HOST:-localhost}
+    port: ${POSTGRES_PORT:-5432}
+    database: ${POSTGRES_DB:-scriptguard}
+    user: ${POSTGRES_USER:-scriptguard}
+    password: ${POSTGRES_PASSWORD:-scriptguard}
+    min_connections: 1
+    max_connections: 10
+  sqlite:
+    path: "./data/scriptguard.db"  # Fallback for development
+  enable_versioning: true
+  auto_backup: false
+
+# Qdrant Configuration
+qdrant:
+  host: ${QDRANT_HOST:-localhost}
+  port: ${QDRANT_PORT:-6333}
+  collection_name: "malware_knowledge"
+  embedding_model: "all-MiniLM-L6-v2"
+  api_key: ${QDRANT_API_KEY:-}
+  use_https: false
+
+# Data Validation Configuration
+validation:
+  validate_syntax: true
+  skip_syntax_errors: true
+  min_length: 50
+  max_length: 50000
+  min_code_lines: 5
+  max_comment_ratio: 0.5
+
+# Data Augmentation Configuration
+augmentation:
+  enabled: true
+  variants_per_sample: 2
+  techniques:
+    - "base64"
+    - "hex"
+    - "rename_vars"
+    - "split_strings"
+  balance_dataset: true
+  target_balance_ratio: 1.0
+  balance_method: "undersample"  # or "oversample"
+
+# Feature Extraction Configuration
+features:
+  extract_ast: true
+  extract_entropy: true
+  extract_api_patterns: true
+  extract_string_features: true
+
+# Training Configuration
+training:
+  model_id: "bigcode/starcoder2-3b"
+  output_dir: "./models/scriptguard-model"
+
+  # QLoRA Configuration
+  use_qlora: true
+  lora_r: 16
+  lora_alpha: 32
+  lora_dropout: 0.05
+  target_modules:
+    - "q_proj"
+    - "v_proj"
+    - "k_proj"
+    - "o_proj"
+
+  # Training Hyperparameters
+  batch_size: 4
+  gradient_accumulation_steps: 4
+  num_epochs: 3
+  learning_rate: 0.0002
+  weight_decay: 0.01
+  warmup_steps: 100
+  max_seq_length: 2048
+
+  # Optimization
+  fp16: false
+  bf16: true  # Better for modern GPUs
+  optim: "paged_adamw_8bit"
+
+  # Evaluation
+  evaluation_strategy: "steps"
+  eval_steps: 100
+  save_steps: 500
+  logging_steps: 10
+
+  # Early Stopping
+  early_stopping: true
+  early_stopping_patience: 3
+
+# Inference Configuration
+inference:
+  host: "0.0.0.0"
+  port: 8000
+  max_length: 2048
+  temperature: 0.1
+  top_p: 0.95
+  device: "cuda"  # or "cpu"
+
+# Logging Configuration
+logging:
+  level: "INFO"
+  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+  file: "./logs/scriptguard.log"

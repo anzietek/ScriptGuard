@@ -1,0 +1,127 @@
+version: '3.8'
+
+# Development Infrastructure Stack
+# Use this for local development - run your code from IDE/CLI
+# This compose file only starts: PostgreSQL, Qdrant, and optional monitoring
+
+services:
+  # PostgreSQL Database
+  postgres:
+    image: postgres:15-alpine
+    container_name: scriptguard-postgres-dev
+    environment:
+      POSTGRES_DB: scriptguard
+      POSTGRES_USER: scriptguard
+      POSTGRES_PASSWORD: scriptguard  # Change in production!
+      PGDATA: /var/lib/postgresql/data/pgdata
+    ports:
+      - "5432:5432"  # Exposed to localhost
+    volumes:
+      - postgres_dev_data:/var/lib/postgresql/data
+      - ../docker/init-db.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U scriptguard -d scriptguard"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    networks:
+      - scriptguard-dev
+    restart: unless-stopped
+
+  # Qdrant Vector Database
+  qdrant:
+    image: qdrant/qdrant:latest
+    container_name: scriptguard-qdrant-dev
+    ports:
+      - "6333:6333"  # HTTP API
+      - "6334:6334"  # gRPC API
+    volumes:
+      - qdrant_dev_storage:/qdrant/storage
+    environment:
+      - QDRANT__SERVICE__HTTP_PORT=6333
+      - QDRANT__SERVICE__GRPC_PORT=6334
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:6333/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    networks:
+      - scriptguard-dev
+    restart: unless-stopped
+
+  # pgAdmin (Optional - Web UI for PostgreSQL)
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    container_name: scriptguard-pgadmin-dev
+    environment:
+      PGADMIN_DEFAULT_EMAIL: admin@scriptguard.local
+      PGADMIN_DEFAULT_PASSWORD: admin
+      PGADMIN_CONFIG_SERVER_MODE: 'False'
+    ports:
+      - "5050:80"
+    volumes:
+      - pgadmin_dev_data:/var/lib/pgadmin
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - scriptguard-dev
+    restart: unless-stopped
+    profiles:
+      - with-pgadmin
+
+  # Prometheus (Optional - Metrics)
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: scriptguard-prometheus-dev
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./prometheus-dev.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_dev_data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/etc/prometheus/console_libraries'
+      - '--web.console.templates=/etc/prometheus/consoles'
+    networks:
+      - scriptguard-dev
+    restart: unless-stopped
+    profiles:
+      - monitoring
+
+  # Grafana (Optional - Dashboards)
+  grafana:
+    image: grafana/grafana:latest
+    container_name: scriptguard-grafana-dev
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_USERS_ALLOW_SIGN_UP=false
+    volumes:
+      - grafana_dev_data:/var/lib/grafana
+      - ./grafana-provisioning:/etc/grafana/provisioning:ro
+    depends_on:
+      - prometheus
+    networks:
+      - scriptguard-dev
+    restart: unless-stopped
+    profiles:
+      - monitoring
+
+volumes:
+  postgres_dev_data:
+    driver: local
+  qdrant_dev_storage:
+    driver: local
+  pgadmin_dev_data:
+    driver: local
+  prometheus_dev_data:
+    driver: local
+  grafana_dev_data:
+    driver: local
+
+networks:
+  scriptguard-dev:
+    driver: bridge

@@ -1,0 +1,26 @@
+# Prometheus configuration for local development
+
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  # PostgreSQL Exporter (if installed)
+  - job_name: 'postgres'
+    static_configs:
+      - targets: ['localhost:9187']
+    scrape_interval: 30s
+
+  # Qdrant Metrics
+  - job_name: 'qdrant'
+    static_configs:
+      - targets: ['qdrant:6333']
+    scrape_interval: 15s
+    metrics_path: '/metrics'
+
+  # Your local API (when running)
+  - job_name: 'scriptguard-api'
+    static_configs:
+      - targets: ['host.docker.internal:8000']
+    scrape_interval: 10s
+    metrics_path: '/metrics'
