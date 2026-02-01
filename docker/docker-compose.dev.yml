@@ -40,14 +40,31 @@ services:
     environment:
       - QDRANT__SERVICE__HTTP_PORT=6333
       - QDRANT__SERVICE__GRPC_PORT=6334
+    networks:
+      - scriptguard-dev
+    restart: unless-stopped
+
+  # ZenML Server (Optional - ML Pipeline Dashboard)
+  zenml:
+    image: zenmldocker/zenml-server:latest
+    container_name: scriptguard-zenml-dev
+    ports:
+      - "8237:8080"  # Dashboard UI (internal port 8080)
+    environment:
+      - ZENML_STORE_URL=sqlite:////zenml/.zenconfig/local_stores/default_zen_store/zenml.db
+      - ZENML_DEFAULT_PROJECT_NAME=scriptguard
+    volumes:
+      - zenml_dev_data:/zenml/.zenconfig
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:6333/health"]
-      interval: 5s
-      timeout: 3s
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 10s
+      timeout: 5s
       retries: 5
     networks:
       - scriptguard-dev
     restart: unless-stopped
+    profiles:
+      - with-zenml
 
   # pgAdmin (Optional - Web UI for PostgreSQL)
   pgadmin:
@@ -114,6 +131,8 @@ volumes:
   postgres_dev_data:
     driver: local
   qdrant_dev_storage:
+    driver: local
+  zenml_dev_data:
     driver: local
   pgadmin_dev_data:
     driver: local
