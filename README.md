@@ -90,18 +90,69 @@ ScriptGuard is an advanced AI-powered system designed to detect malicious and da
 
 ### Installation
 
+#### Prerequisites
+- Python 3.10+
+- NVIDIA GPU with CUDA 11.8+ (recommended) or CPU
+- [uv](https://github.com/astral-sh/uv) package manager (recommended)
+
+#### Step 1: Clone Repository
+
 ```bash
-# Clone repository
 git clone https://github.com/yourusername/ScriptGuard.git
 cd ScriptGuard
-
-# Install dependencies
-pip install -e .
-
-# Configure environment
-cp .env.example .env
-# Edit .env and add your API keys
 ```
+
+#### Step 2: Install Dependencies
+
+**For GPU Training (Recommended - 50-100x faster):**
+
+```bash
+# Install base dependencies
+uv pip install -e .
+
+# Install PyTorch with CUDA 12.4 (for NVIDIA GPUs)
+uv pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124
+
+# Verify CUDA is working
+python -c "import torch; print(f'CUDA available: {torch.cuda.is_available()}')"
+```
+
+**For CUDA 11.8 (Alternative):**
+
+```bash
+uv pip install -e .
+uv pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118
+```
+
+**For CPU Training (Not Recommended - Very Slow):**
+
+```bash
+uv pip install -e ".[cpu]"
+```
+
+#### Step 3: Configure Environment
+
+```bash
+# Copy environment template
+cp .env.example .env
+
+# Edit .env and add your API keys
+nano .env  # or use your preferred editor
+```
+
+#### Hardware Requirements
+
+| Component | Minimum | Recommended |
+|-----------|---------|-------------|
+| GPU | None (CPU) | NVIDIA RTX 3060+ (8GB VRAM) |
+| RAM | 16GB | 32GB+ |
+| Storage | 50GB | 100GB+ |
+| CUDA | N/A | 11.8+ |
+
+**GPU Memory Guidelines:**
+- 4GB VRAM: `batch_size: 2`, effective batch: 16 (with grad accumulation)
+- 8GB VRAM: `batch_size: 4`, effective batch: 16
+- 16GB+ VRAM: `batch_size: 8`, effective batch: 32
 
 ### Configuration
 
