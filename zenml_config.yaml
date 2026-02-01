@@ -3,7 +3,7 @@
 
 steps:
   advanced_data_ingestion:
-    enable_cache: false  # Always fetch fresh data
+    enable_cache: true  # Cache data ingestion by default
 
   validate_samples:
     enable_cache: true   # Can reuse validation
