@@ -24,8 +24,10 @@ class QLoRAFineTuner:
         if self.tokenizer.pad_token is None:
             self.tokenizer.pad_token = self.tokenizer.eos_token
 
-    def train(self, dataset: Dataset, output_dir: str = "./results"):
+    def train(self, dataset: Dataset, eval_dataset: Dataset = None, output_dir: str = "./results"):
         logger.info(f"Tokenizing dataset with {len(dataset)} samples...")
+        if eval_dataset:
+            logger.info(f"Evaluation dataset with {len(eval_dataset)} samples will be used during training")
 
         # Get config values with defaults
         training_config = self.config.get("training", {})
@@ -63,12 +65,23 @@ class QLoRAFineTuner:
             tokenize_function,
             batched=True,
             remove_columns=dataset.column_names,  # Remove original columns
-            desc="Tokenizing dataset"
+            desc="Tokenizing training dataset"
         )
 
-        logger.info(f"Tokenization complete. Sample count: {len(tokenized_dataset)}")
+        logger.info(f"Training tokenization complete. Sample count: {len(tokenized_dataset)}")
         logger.info(f"Dataset columns: {tokenized_dataset.column_names}")
         logger.info(f"Padding strategy: {'Dynamic (batch-level)' if use_dynamic_padding else 'Static (max_length)'}")
+
+        # Tokenize eval dataset if provided
+        tokenized_eval_dataset = None
+        if eval_dataset:
+            tokenized_eval_dataset = eval_dataset.map(
+                tokenize_function,
+                batched=True,
+                remove_columns=eval_dataset.column_names,
+                desc="Tokenizing evaluation dataset"
+            )
+            logger.info(f"Evaluation tokenization complete. Sample count: {len(tokenized_eval_dataset)}")
 
         bnb_config = BitsAndBytesConfig(
             load_in_4bit=True,
@@ -119,6 +132,15 @@ class QLoRAFineTuner:
 
         logger.info(f"Training precision: BF16={use_bf16}, FP16={use_fp16}, Device={'cuda' if has_cuda else 'cpu'}")
 
+        # Determine evaluation strategy based on eval_dataset availability
+        eval_strategy = training_config.get("evaluation_strategy", "no")
+        if eval_strategy != "no" and tokenized_eval_dataset is None:
+            logger.warning("evaluation_strategy is set but no eval_dataset provided. Setting to 'no'.")
+            eval_strategy = "no"
+        elif tokenized_eval_dataset is not None and eval_strategy == "no":
+            logger.info("eval_dataset provided. Enabling evaluation strategy 'steps'.")
+            eval_strategy = "steps"
+
         # Get training hyperparameters from config
         training_args = TrainingArguments(
             output_dir=output_dir,
@@ -132,8 +154,8 @@ class QLoRAFineTuner:
             bf16=use_bf16,
             optim=training_config.get("optim", "paged_adamw_8bit"),
             logging_steps=training_config.get("logging_steps", 10),
-            eval_strategy=training_config.get("evaluation_strategy", "no"),
-            eval_steps=training_config.get("eval_steps", 100),
+            eval_strategy=eval_strategy,
+            eval_steps=training_config.get("eval_steps", 100) if eval_strategy != "no" else None,
             save_strategy="steps",
             save_steps=training_config.get("save_steps", 500),
             report_to="wandb",
@@ -151,6 +173,7 @@ class QLoRAFineTuner:
             model=model,
             args=training_args,
             train_dataset=tokenized_dataset,
+            eval_dataset=tokenized_eval_dataset,  # Pass eval dataset if provided
             data_collator=data_collator,
         )
 

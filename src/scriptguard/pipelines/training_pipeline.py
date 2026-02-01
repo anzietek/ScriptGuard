@@ -140,8 +140,13 @@ def advanced_training_pipeline(
         test_size=test_size
     )
 
-    # Step 10: Train model
-    adapter_path = _train_model(dataset=train_dataset, model_id=model_id, config=config)
+    # Step 10: Train model with evaluation dataset
+    adapter_path = _train_model(
+        dataset=train_dataset,
+        eval_dataset=test_dataset,
+        model_id=model_id,
+        config=config
+    )
 
     # Step 11: Evaluate model
     metrics = evaluate_model(
