@@ -69,7 +69,7 @@ def malware_detection_training_pipeline(
     augmented_data = synthetic_data_generation(base_data=combined_data)
     processed_dataset = preprocess_data(data=augmented_data)
 
-    adapter_path = train_model(dataset=processed_dataset, model_id=model_id)
+    adapter_path = _train_model(dataset=processed_dataset, model_id=model_id)
     metrics = evaluate_model(adapter_path=adapter_path)
 
     return metrics
@@ -88,10 +88,10 @@ def advanced_training_pipeline(
         model_id: Model identifier for training
     """
     # Step 1: Advanced data ingestion from multiple sources
-    raw_data = advanced_data_ingestion(config=config)
+    raw_data = _advanced_data_ingestion(config=config)
 
     # Step 2: Validate samples (syntax, length, encoding)
-    validated_data = validate_samples(
+    validated_data = _validate_samples(
         data=raw_data,
         validate_syntax=config.get("validation", {}).get("validate_syntax", True),
         min_length=config.get("validation", {}).get("min_length", 50),
@@ -99,7 +99,7 @@ def advanced_training_pipeline(
     )
 
     # Step 3: Filter by quality metrics
-    quality_data = filter_by_quality(
+    quality_data = _filter_by_quality(
         data=validated_data,
         min_code_lines=config.get("validation", {}).get("min_code_lines", 5),
         max_comment_ratio=config.get("validation", {}).get("max_comment_ratio", 0.5)
@@ -113,7 +113,7 @@ def advanced_training_pipeline(
 
     # Step 6: Augment malicious samples
     if config.get("augmentation", {}).get("enabled", True):
-        augmented_data = augment_malicious_samples(
+        augmented_data = _augment_malicious_samples(
             data=featured_data,
             variants_per_sample=config.get("augmentation", {}).get("variants_per_sample", 2)
         )
@@ -140,7 +140,7 @@ def advanced_training_pipeline(
     )
 
     # Step 10: Train model
-    adapter_path = train_model(dataset=train_dataset, model_id=model_id)
+    adapter_path = _train_model(dataset=train_dataset, model_id=model_id)
 
     # Step 11: Evaluate model
     metrics = evaluate_model(
