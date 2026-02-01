@@ -33,15 +33,28 @@ class QLoRAFineTuner:
         padding = training_config.get("tokenizer_padding", "max_length")
         truncation = training_config.get("tokenizer_truncation", True)
 
+        # Determine if using dynamic padding
+        use_dynamic_padding = padding == "dynamic"
+
         # Tokenize the dataset
         def tokenize_function(examples):
-            # Tokenize with padding and truncation
-            result = self.tokenizer(
-                examples["text"],
-                truncation=truncation,
-                max_length=max_length,
-                padding=padding,
-            )
+            # For dynamic padding, don't pad during tokenization
+            # DataCollator will handle it during batching
+            if use_dynamic_padding:
+                result = self.tokenizer(
+                    examples["text"],
+                    truncation=truncation,
+                    max_length=max_length,
+                    padding=False,  # No padding here - collator does it
+                )
+            else:
+                # Static padding during tokenization
+                result = self.tokenizer(
+                    examples["text"],
+                    truncation=truncation,
+                    max_length=max_length,
+                    padding=padding,
+                )
             # For causal LM, labels are the same as input_ids
             result["labels"] = result["input_ids"].copy()
             return result
@@ -55,6 +68,7 @@ class QLoRAFineTuner:
 
         logger.info(f"Tokenization complete. Sample count: {len(tokenized_dataset)}")
         logger.info(f"Dataset columns: {tokenized_dataset.column_names}")
+        logger.info(f"Padding strategy: {'Dynamic (batch-level)' if use_dynamic_padding else 'Static (max_length)'}")
 
         bnb_config = BitsAndBytesConfig(
             load_in_4bit=True,
@@ -106,11 +120,18 @@ class QLoRAFineTuner:
             push_to_hub=False,
         )
 
+        # Create data collator - handles dynamic padding if enabled
+        data_collator = DataCollatorForLanguageModeling(
+            tokenizer=self.tokenizer,
+            mlm=False,  # Causal LM, not masked LM
+            pad_to_multiple_of=8 if use_dynamic_padding else None  # Efficient for GPU
+        )
+
         trainer = Trainer(
             model=model,
             args=training_args,
             train_dataset=tokenized_dataset,
-            data_collator=DataCollatorForLanguageModeling(self.tokenizer, mlm=False),
+            data_collator=data_collator,
         )
 
         model.config.use_cache = False
