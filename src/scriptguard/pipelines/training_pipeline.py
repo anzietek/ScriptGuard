@@ -1,4 +1,6 @@
 from zenml import pipeline, step
+from datasets import Dataset
+from typing import List, Dict, Any, Tuple
 from scriptguard.steps.data_ingestion import (
     github_data_ingestion,
     local_data_ingestion,
@@ -15,7 +17,21 @@ from scriptguard.steps.feature_extraction import extract_features, analyze_featu
 from scriptguard.steps.data_preprocessing import preprocess_data
 from scriptguard.steps.model_training import train_model
 from scriptguard.steps.model_evaluation import evaluate_model
-from typing import List, Dict, Any
+
+@step
+def split_train_test(dataset: Dataset, test_size: float = 0.1) -> Tuple[Dataset, Dataset]:
+    """
+    Splits dataset into train and test sets.
+
+    Args:
+        dataset: Input dataset
+        test_size: Fraction for test set (default 0.1 = 10%)
+
+    Returns:
+        Tuple of (train_dataset, test_dataset)
+    """
+    split_dict = dataset.train_test_split(test_size=test_size, seed=42)
+    return split_dict['train'], split_dict['test']
 
 @step
 def merge_data_sources(data_sources: List[List[Dict[str, Any]]]) -> List[Dict[str, Any]]:
@@ -116,10 +132,20 @@ def advanced_training_pipeline(
     # Step 8: Preprocess for training
     processed_dataset = preprocess_data(data=balanced_data)
 
-    # Step 9: Train model
-    adapter_path = train_model(dataset=processed_dataset, model_id=model_id)
+    # Step 9: Split into train/test (90/10 split)
+    train_dataset, test_dataset = split_train_test(
+        dataset=processed_dataset,
+        test_size=0.1
+    )
 
-    # Step 10: Evaluate model
-    metrics = evaluate_model(adapter_path=adapter_path)
+    # Step 10: Train model
+    adapter_path = train_model(dataset=train_dataset, model_id=model_id)
+
+    # Step 11: Evaluate model
+    metrics = evaluate_model(
+        adapter_path=adapter_path,
+        test_dataset=test_dataset,
+        base_model_id=model_id
+    )
 
     return metrics

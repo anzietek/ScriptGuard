@@ -60,7 +60,7 @@ class QLoRAFineTuner:
             fp16=True,
             logging_steps=10,
             max_steps=100, # Small for demonstration
-            report_to="comet_ml",
+            report_to="wandb",  # Weights & Biases for better LLM tracking
             push_to_hub=False
         )
 

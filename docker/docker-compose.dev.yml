@@ -40,6 +40,12 @@ services:
     environment:
       - QDRANT__SERVICE__HTTP_PORT=6333
       - QDRANT__SERVICE__GRPC_PORT=6334
+    healthcheck:
+      test: ["CMD-SHELL", "timeout 5 sh -c ':> /dev/tcp/127.0.0.1/6333' || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 10s
     networks:
       - scriptguard-dev
     restart: unless-stopped
@@ -56,10 +62,11 @@ services:
     volumes:
       - zenml_dev_data:/zenml/.zenconfig
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
-      interval: 10s
-      timeout: 5s
+      test: ["CMD-SHELL", "curl -f http://localhost:8080/health || exit 1"]
+      interval: 30s
+      timeout: 10s
       retries: 5
+      start_period: 20s
     networks:
       - scriptguard-dev
     restart: unless-stopped

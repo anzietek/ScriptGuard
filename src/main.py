@@ -1,16 +1,32 @@
 import os
+import sys
+import signal
 import yaml
 from dotenv import load_dotenv
-from scriptguard.pipelines.training_pipeline import (
-    malware_detection_training_pipeline,
-    advanced_training_pipeline
-)
 import logging
+
+# Disable transformers lazy loading (fixes Python 3.13 Ctrl+C issues)
+os.environ["TRANSFORMERS_NO_ADVISORY_WARNINGS"] = "1"
+os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
 load_dotenv()
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+# Graceful shutdown handler for Ctrl+C
+def signal_handler(sig, frame):
+    logger.info("\n\nShutting down gracefully...")
+    logger.info("Cleaning up resources...")
+    sys.exit(0)
+
+signal.signal(signal.SIGINT, signal_handler)
+
+# Import heavy dependencies after signal handler setup
+from scriptguard.pipelines.training_pipeline import (
+    malware_detection_training_pipeline,
+    advanced_training_pipeline
+)
 
 
 def load_config(config_path: str = "config.yaml") -> dict:
