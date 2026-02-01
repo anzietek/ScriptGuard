@@ -1,0 +1,19 @@
+from zenml import step
+from datasets import Dataset
+from scriptguard.models.qlora_finetuner import QLoRAFineTuner
+import logging
+
+logger = logging.getLogger(__name__)
+
+@step
+def train_model(dataset: Dataset, model_id: str = "bigcode/starcoder2-3b") -> str:
+    """
+    Fine-tunes the base model using QLoRA.
+    """
+    logger.info(f"Starting QLoRA fine-tuning for model: {model_id}")
+    
+    finetuner = QLoRAFineTuner(model_id=model_id)
+    output_dir = "./model_checkpoints"
+    finetuner.train(dataset, output_dir=output_dir)
+    
+    return f"{output_dir}/final_adapter"

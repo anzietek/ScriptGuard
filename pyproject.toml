@@ -1,0 +1,29 @@
+[project]
+name = "scriptguard"
+version = "0.1.0"
+description = "Production-ready Malware Detection System for Scripts"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "zenml[server]",
+    "qdrant-client",
+    "transformers",
+    "peft",
+    "bitsandbytes",
+    "accelerate",
+    "datasets",
+    "comet-ml",
+    "fastapi",
+    "uvicorn",
+    "pydantic",
+    "torch",
+    "sentence-transformers",
+    "python-dotenv",
+    "requests",
+    "tqdm",
+    "scikit-learn",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
