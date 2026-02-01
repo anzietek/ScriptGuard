@@ -97,7 +97,7 @@ class QLoRAFineTuner:
             device_map="auto"
         )
 
-        model = prepare_model_for_kbit_training(model)
+        model = prepare_model_for_kbit_training(model, use_gradient_checkpointing=True)
 
         # Get LoRA config from config.yaml
         lora_config = LoraConfig(
@@ -178,6 +178,11 @@ class QLoRAFineTuner:
         )
 
         model.config.use_cache = False
+
+        # Enable gradient checkpointing with explicit use_reentrant=False for PyTorch 2.9+
+        if hasattr(model, 'gradient_checkpointing_enable'):
+            model.gradient_checkpointing_enable(gradient_checkpointing_kwargs={"use_reentrant": False})
+
         logger.info("Starting training...")
         trainer.train()
         
