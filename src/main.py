@@ -11,6 +11,18 @@ os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
 load_dotenv()
 
+# Fix ZenML Windows path handling (monkey-patch)
+if sys.platform == "win32":
+    import zenml.io.fileio as zenml_fileio
+    _original_open = zenml_fileio.open
+
+    def _patched_open(path, mode="r"):
+        # Normalize Windows paths to use consistent separators
+        normalized_path = path.replace("\\", "/")
+        return _original_open(normalized_path, mode=mode)
+
+    zenml_fileio.open = _patched_open
+
 # Graceful shutdown handler for Ctrl+C
 def signal_handler(sig, frame):
     logger.info("\n\nShutting down gracefully...")

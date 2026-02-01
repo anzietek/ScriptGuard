@@ -99,6 +99,26 @@ class QLoRAFineTuner:
         model = get_peft_model(model, lora_config)
         logger.info(f"LoRA config applied. Trainable parameters: {model.print_trainable_parameters()}")
 
+        # Detect hardware capabilities
+        has_cuda = torch.cuda.is_available()
+        has_bf16 = has_cuda and torch.cuda.is_bf16_supported()
+
+        # Determine precision settings with automatic fallback
+        use_fp16 = training_config.get("fp16", False)
+        use_bf16 = training_config.get("bf16", True)
+
+        if use_bf16 and not has_bf16:
+            logger.warning("BF16 requested but not supported. Falling back to FP16.")
+            use_bf16 = False
+            use_fp16 = has_cuda  # Use FP16 if GPU available
+
+        if not has_cuda:
+            logger.warning("CUDA not available. Training on CPU (this will be very slow).")
+            use_bf16 = False
+            use_fp16 = False
+
+        logger.info(f"Training precision: BF16={use_bf16}, FP16={use_fp16}, Device={'cuda' if has_cuda else 'cpu'}")
+
         # Get training hyperparameters from config
         training_args = TrainingArguments(
             output_dir=output_dir,
@@ -108,8 +128,8 @@ class QLoRAFineTuner:
             weight_decay=training_config.get("weight_decay", 0.01),
             warmup_steps=training_config.get("warmup_steps", 100),
             num_train_epochs=training_config.get("num_epochs", 3),
-            fp16=training_config.get("fp16", False),
-            bf16=training_config.get("bf16", True),
+            fp16=use_fp16,
+            bf16=use_bf16,
             optim=training_config.get("optim", "paged_adamw_8bit"),
             logging_steps=training_config.get("logging_steps", 10),
             eval_strategy=training_config.get("evaluation_strategy", "no"),
