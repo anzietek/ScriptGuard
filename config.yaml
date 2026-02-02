@@ -71,19 +71,21 @@ data_sources:
   additional_hf:
     enabled: true  # ✅ Now using REAL datasets from HuggingFace
     max_samples_per_dataset: 50
-    datasets:
-      - name: "rr4433/Powershell_Malware_Detection_Dataset"
-        description: "Powershell malware samples (script-based)"
-        type: "malicious"
-      - name: "pacificsun/Malware_10k"
-        description: "10k malware samples dataset"
-        type: "malicious"
-      - name: "deepcode-ai/Malware-Prediction"
-        description: "Malware prediction/classification dataset"
-        type: "malicious"
-      - name: "stanpony/phishing_urls"
-        description: "Phishing URLs converted to C2 patterns"
-        type: "malicious_c2"
+    # Available datasets (automatically tried in order):
+    # Malware samples:
+    #   - naorm/malware-text-db (text-based malware)
+    #   - rr4433/Powershell_Malware_Detection_Dataset (script malware)
+    #   - pacificsun/Malware_10k (10k samples)
+    #   - cw1521/ember2018-malware-v2 (EMBER dataset)
+    # Classification:
+    #   - deepcode-ai/Malware-Prediction
+    #   - PurCL/malware-top-100-labels (top 100 with labels)
+    #   - pacificsun/microsoft_malware (Microsoft dataset)
+    # Malicious URLs (converted to C2 scripts):
+    #   - joshtobin/malicious_urls (dedicated malicious URLs)
+    #   - JorgeGMM/malicious_urls
+    #   - stanpony/phishing_urls
+    #   - pirocheto/phishing-url
 
 # Database Configuration (PostgreSQL)
 database:

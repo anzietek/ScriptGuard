@@ -44,10 +44,12 @@ class AdditionalHFDatasets:
         """
         logger.info(f"Loading malware samples from HuggingFace (max {max_samples})")
 
-        # Try multiple real datasets
+        # Try multiple real datasets (ordered by relevance)
         datasets_to_try = [
+            ("naorm/malware-text-db", "Text"),  # Text-based malware samples
             ("rr4433/Powershell_Malware_Detection_Dataset", "Powershell"),  # Script malware
             ("pacificsun/Malware_10k", "Generic"),  # General malware dataset
+            ("cw1521/ember2018-malware-v2", "PE"),  # EMBER malware dataset
         ]
 
         for dataset_name, dataset_type in datasets_to_try:
@@ -162,7 +164,9 @@ for root, dirs, files in os.walk("/"):
 
         datasets_to_try = [
             "deepcode-ai/Malware-Prediction",
+            "PurCL/malware-top-100-labels",  # Labeled malware top 100
             "RanggaAS/malware_detection",
+            "pacificsun/microsoft_malware",  # Microsoft malware dataset
         ]
 
         for dataset_name in datasets_to_try:
@@ -229,7 +233,10 @@ for root, dirs, files in os.walk("/"):
         logger.info(f"Loading malicious URLs from phishing datasets (max {max_samples})")
 
         datasets_to_try = [
-            "stanpony/phishing_urls",
+            "joshtobin/malicious_urls",  # Dedicated malicious URLs dataset
+            "JorgeGMM/malicious_urls",  # Another malicious URLs dataset
+            "stanpony/phishing_urls",  # Phishing URLs
+            "pirocheto/phishing-url",  # Phishing URLs
             "semihGuner2002/PhishingURLsDataset",
             "Bilic/phishing",
         ]
