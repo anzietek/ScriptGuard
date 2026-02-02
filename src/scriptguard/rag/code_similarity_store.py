@@ -1,10 +1,12 @@
 """
 Code Similarity Store for Few-Shot RAG
 Stores vectorized code samples from PostgreSQL for retrieval during inference.
-Enhanced with unified embedding strategies, L2 normalization, and chunking support.
+Enhanced with unified embedding strategies, L2 normalization, chunking support,
+graceful fallback, and reranking.
 """
 
 import os
+import yaml
 from typing import List, Dict, Any, Optional
 from qdrant_client import QdrantClient
 from qdrant_client.http import models
@@ -14,6 +16,7 @@ import hashlib
 from scriptguard.utils.logger import logger
 from .embedding_service import EmbeddingService
 from .chunking_service import ChunkingService, ResultAggregator
+from .reranking_service import create_reranking_service
 
 
 class CodeSimilarityStore:
@@ -34,10 +37,11 @@ class CodeSimilarityStore:
         enable_chunking: bool = True,
         chunk_overlap: int = 64,
         api_key: Optional[str] = None,
-        use_https: bool = False
+        use_https: bool = False,
+        config_path: str = "config.yaml"
     ):
         """
-        Initialize Code Similarity Store with enhanced embedding and chunking.
+        Initialize Code Similarity Store with enhanced embedding, chunking, and reranking.
 
         Args:
             host: Qdrant host
@@ -54,14 +58,37 @@ class CodeSimilarityStore:
             chunk_overlap: Overlap between chunks in tokens
             api_key: Optional API key for Qdrant Cloud
             use_https: Use HTTPS connection
+            config_path: Path to configuration file
         """
         self.host = host or os.getenv("QDRANT_HOST", "localhost")
         self.port = port or int(os.getenv("QDRANT_PORT", "6333"))
         self.collection_name = collection_name
         self.enable_chunking = enable_chunking
+        self.embedding_model = embedding_model
 
         logger.info(f"Initializing Code Similarity Store: {self.host}:{self.port}")
         logger.info(f"  Chunking: {'enabled' if enable_chunking else 'disabled'}")
+
+        # Load configuration
+        self.config = self._load_config(config_path)
+
+        # Extract configuration parameters
+        code_emb_config = self.config.get("code_embedding", {})
+
+        # Score thresholds (model-specific)
+        self.score_thresholds = self._load_score_thresholds(code_emb_config)
+
+        # Graceful fallback configuration
+        fallback_config = code_emb_config.get("graceful_fallback", {})
+        self.graceful_fallback_enabled = fallback_config.get("enabled", True)
+        self.fallback_threshold = fallback_config.get("fallback_threshold", 0.0)
+        self.ensure_label_balance = fallback_config.get("ensure_label_balance", True)
+        self.min_per_label = fallback_config.get("min_per_label", 1)
+
+        logger.info(f"  Graceful Fallback: {'enabled' if self.graceful_fallback_enabled else 'disabled'}")
+        if self.graceful_fallback_enabled:
+            logger.info(f"    - Fallback threshold: {self.fallback_threshold}")
+            logger.info(f"    - Min per label: {self.min_per_label}")
 
         # Initialize Qdrant client
         if api_key:
@@ -91,10 +118,68 @@ class CodeSimilarityStore:
         else:
             self.chunking_service = None
 
+        # Initialize reranking service
+        self.reranking_service = create_reranking_service(self.config)
+        if self.reranking_service:
+            logger.info("  Reranking: enabled")
+
         logger.info(f"✓ Code Similarity Store ready (dim={self.embedding_dim})")
 
         # Ensure collection exists
         self._ensure_collection()
+
+    def _load_config(self, config_path: str) -> Dict[str, Any]:
+        """Load configuration from YAML file."""
+        try:
+            if os.path.exists(config_path):
+                with open(config_path, 'r') as f:
+                    config = yaml.safe_load(f)
+                    logger.debug(f"Configuration loaded from {config_path}")
+                    return config
+            else:
+                logger.warning(f"Config file not found: {config_path}. Using defaults.")
+                return {}
+        except Exception as e:
+            logger.error(f"Failed to load config: {e}. Using defaults.")
+            return {}
+
+    def _load_score_thresholds(self, config: Dict[str, Any]) -> Dict[str, float]:
+        """
+        Load model-specific score thresholds from configuration.
+
+        Returns dict with 'default', 'strict', 'lenient' thresholds.
+        """
+        threshold_config = config.get("score_thresholds", {})
+        model_thresholds = threshold_config.get(self.embedding_model, {})
+
+        # Default fallback values
+        defaults = {
+            "default": 0.30,
+            "strict": 0.45,
+            "lenient": 0.15
+        }
+
+        # Merge with model-specific values
+        thresholds = {**defaults, **model_thresholds}
+
+        logger.info(f"  Score thresholds for {self.embedding_model}:")
+        logger.info(f"    - Default: {thresholds['default']}")
+        logger.info(f"    - Strict: {thresholds['strict']}")
+        logger.info(f"    - Lenient: {thresholds['lenient']}")
+
+        return thresholds
+
+    def get_threshold(self, mode: str = "default") -> float:
+        """
+        Get score threshold for specified mode.
+
+        Args:
+            mode: One of "default", "strict", "lenient"
+
+        Returns:
+            Threshold value
+        """
+        return self.score_thresholds.get(mode, self.score_thresholds["default"])
 
     def _ensure_collection(self):
         """Ensure collection exists with proper configuration."""
@@ -148,9 +233,13 @@ class CodeSimilarityStore:
             logger.error(f"Failed to ensure collection: {e}")
             raise
 
-    def _generate_id(self, content: str) -> str:
-        """Generate deterministic ID from content."""
-        return hashlib.md5(content.encode()).hexdigest()
+    def _generate_id(self, content: str) -> int:
+        """Generate deterministic integer ID from content (compatible with Qdrant)."""
+        # Use MD5 hash for deterministic, collision-resistant IDs
+        hash_bytes = hashlib.md5(content.encode()).digest()
+        # Take first 8 bytes and convert to int, keep within uint64 range
+        hash_int = int.from_bytes(hash_bytes[:8], byteorder='big')
+        return hash_int % (2**63 - 1)  # Use signed int64 max for safety
 
     def _encode_code(self, code: str) -> List[float]:
         """
@@ -274,25 +363,39 @@ class CodeSimilarityStore:
         k: int = 3,
         filter_label: Optional[str] = None,
         balance_labels: bool = True,
-        score_threshold: float = 0.3,
+        score_threshold: Optional[float] = None,
+        threshold_mode: str = "default",
         aggregate_chunks: bool = True,
-        aggregation_strategy: str = "max_score"
+        aggregation_strategy: str = "max_score",
+        enable_reranking: bool = True
     ) -> List[Dict[str, Any]]:
         """
-        Search for similar code samples using vector similarity with chunk aggregation.
+        Search for similar code samples using vector similarity with:
+        - Graceful fallback (guarantees exactly k results)
+        - Configurable thresholds
+        - Optional reranking
+        - Chunk aggregation
 
         Args:
             query_code: Code to find similar samples for
-            k: Number of results to return (at document level if aggregating)
+            k: Number of results to return (GUARANTEED with graceful fallback)
             filter_label: Optional filter by label ("malicious" or "benign")
-            balance_labels: If True, ensure mixed results (min 1 malicious, 1 benign)
-            score_threshold: Minimum similarity score
+            balance_labels: If True, ensure mixed results (min per label configurable)
+            score_threshold: Explicit threshold (overrides threshold_mode)
+            threshold_mode: Threshold mode ("default", "strict", "lenient")
             aggregate_chunks: Aggregate chunk results to document level
             aggregation_strategy: Strategy for aggregation ("max_score", "average_top_n", "weighted_avg")
+            enable_reranking: Enable reranking for improved relevance
 
         Returns:
-            List of similar code samples with scores
+            List of exactly k similar code samples (or fewer only if collection is empty)
         """
+        # Get threshold from config if not explicitly provided
+        if score_threshold is None:
+            score_threshold = self.get_threshold(threshold_mode)
+
+        logger.debug(f"Search params: k={k}, threshold={score_threshold}, balance={balance_labels}")
+
         # Generate query embedding (normalized if configured)
         try:
             query_vector = self._encode_code(query_code)
@@ -301,8 +404,110 @@ class CodeSimilarityStore:
             return []
 
         # Increase search limit if chunking is enabled to get more candidates
-        search_limit = k * 5 if self.enable_chunking and aggregate_chunks else k
+        initial_search_limit = k * 5 if self.enable_chunking and aggregate_chunks else k * 2
 
+        # Attempt 1: Search with primary threshold
+        results = self._search_with_filters(
+            query_vector=query_vector,
+            limit=initial_search_limit,
+            filter_label=filter_label,
+            balance_labels=balance_labels,
+            score_threshold=score_threshold
+        )
+
+        # Aggregate chunks if enabled
+        if aggregate_chunks and self.enable_chunking:
+            logger.debug(f"Aggregating {len(results)} chunk results...")
+            results = ResultAggregator.aggregate_results(
+                results,
+                strategy=aggregation_strategy,
+                top_n=3
+            )
+
+        # Apply reranking if enabled
+        if enable_reranking and self.reranking_service:
+            logger.debug("Applying reranking...")
+            results = self.reranking_service.rerank(query_code, results, k=None)
+
+        # Check if we have enough results
+        if len(results) >= k:
+            logger.debug(f"✓ Found {len(results)} results (>= k={k})")
+            return results[:k]
+
+        # GRACEFUL FALLBACK: Need more results
+        if self.graceful_fallback_enabled:
+            logger.info(
+                f"Graceful fallback triggered: {len(results)} < {k}. "
+                f"Fetching more results with lower threshold..."
+            )
+
+            # Attempt 2: Search with fallback threshold (lower or no threshold)
+            fallback_results = self._search_with_filters(
+                query_vector=query_vector,
+                limit=k * 3,  # Get more candidates
+                filter_label=filter_label,
+                balance_labels=balance_labels,
+                score_threshold=self.fallback_threshold
+            )
+
+            # Aggregate chunks
+            if aggregate_chunks and self.enable_chunking:
+                fallback_results = ResultAggregator.aggregate_results(
+                    fallback_results,
+                    strategy=aggregation_strategy,
+                    top_n=3
+                )
+
+            # Apply reranking to fallback results
+            if enable_reranking and self.reranking_service:
+                fallback_results = self.reranking_service.rerank(
+                    query_code, fallback_results, k=None
+                )
+
+            # Merge results (keeping unique by db_id)
+            seen_ids = {r.get("db_id") for r in results}
+            for r in fallback_results:
+                if r.get("db_id") not in seen_ids:
+                    results.append(r)
+                    seen_ids.add(r.get("db_id"))
+                    if len(results) >= k:
+                        break
+
+        # Check label balance if required
+        if balance_labels and not filter_label and self.ensure_label_balance:
+            results = self._ensure_label_balance(
+                results=results,
+                k=k,
+                query_vector=query_vector,
+                aggregate_chunks=aggregate_chunks,
+                aggregation_strategy=aggregation_strategy
+            )
+
+        # Final limit to k
+        results = results[:k]
+
+        if len(results) < k:
+            logger.warning(
+                f"Could not find {k} results (found {len(results)}). "
+                f"Collection may be too small or filters too restrictive."
+            )
+
+        logger.info(f"✓ Returning {len(results)} results (requested k={k})")
+        return results
+
+    def _search_with_filters(
+        self,
+        query_vector: List[float],
+        limit: int,
+        filter_label: Optional[str],
+        balance_labels: bool,
+        score_threshold: float
+    ) -> List[Dict[str, Any]]:
+        """
+        Execute search with specified filters and threshold.
+
+        Returns list of formatted results.
+        """
         # Build filter
         search_filter = None
         if filter_label:
@@ -315,14 +520,22 @@ class CodeSimilarityStore:
                 ]
             )
 
-        # Search
         try:
+            # Modern Qdrant API uses query_points method
+            if hasattr(self.client, 'query_points'):
+                search_method = self.client.query_points
+            else:
+                # Fallback for older versions
+                search_method = getattr(self.client, 'search', None)
+                if not search_method:
+                    raise AttributeError("QdrantClient has neither 'query_points' nor 'search' method")
+
             if balance_labels and not filter_label:
                 # Get separate results for each label
-                malicious_results = self.client.search(
+                malicious_response = search_method(
                     collection_name=self.collection_name,
-                    query_vector=query_vector,
-                    limit=max(search_limit // 2, 1),
+                    query=query_vector,
+                    limit=max(limit // 2, 1),
                     query_filter=models.Filter(
                         must=[
                             models.FieldCondition(
@@ -334,10 +547,10 @@ class CodeSimilarityStore:
                     score_threshold=score_threshold
                 )
 
-                benign_results = self.client.search(
+                benign_response = search_method(
                     collection_name=self.collection_name,
-                    query_vector=query_vector,
-                    limit=max(search_limit // 2, 1),
+                    query=query_vector,
+                    limit=max(limit // 2, 1),
                     query_filter=models.Filter(
                         must=[
                             models.FieldCondition(
@@ -349,6 +562,10 @@ class CodeSimilarityStore:
                     score_threshold=score_threshold
                 )
 
+                # Extract points from response (query_points returns QueryResponse with .points attribute)
+                malicious_results = malicious_response.points if hasattr(malicious_response, 'points') else malicious_response
+                benign_results = benign_response.points if hasattr(benign_response, 'points') else benign_response
+
                 # Combine and sort by score
                 combined = list(malicious_results) + list(benign_results)
                 combined.sort(key=lambda x: x.score, reverse=True)
@@ -356,17 +573,21 @@ class CodeSimilarityStore:
 
             else:
                 # Regular search
-                search_result = self.client.search(
+                response = search_method(
                     collection_name=self.collection_name,
-                    query_vector=query_vector,
-                    limit=search_limit,
+                    query=query_vector,
+                    limit=limit,
                     query_filter=search_filter,
                     score_threshold=score_threshold
                 )
 
+                # Extract points from response
+                search_result = response.points if hasattr(response, 'points') else response
+
             # Format results
             results = []
             for hit in search_result:
+                # hit is ScoredPoint with .score and .payload attributes
                 results.append({
                     "score": float(hit.score),
                     "code": hit.payload.get("code_content", ""),
@@ -379,23 +600,102 @@ class CodeSimilarityStore:
                     "total_chunks": hit.payload.get("total_chunks", 1)
                 })
 
-            # Aggregate chunks to document level if enabled
-            if aggregate_chunks and self.enable_chunking:
-                logger.debug(f"Aggregating {len(results)} chunk results to document level...")
-                results = ResultAggregator.aggregate_results(
-                    results,
-                    strategy=aggregation_strategy,
-                    top_n=3
-                )
-                # Limit to k documents
-                results = results[:k]
-
-            logger.debug(f"Found {len(results)} similar code samples")
             return results
 
         except Exception as e:
-            logger.error(f"Similarity search failed: {e}")
+            logger.error(f"Search failed: {e}")
             return []
+
+    def _ensure_label_balance(
+        self,
+        results: List[Dict[str, Any]],
+        k: int,
+        query_vector: List[float],
+        aggregate_chunks: bool,
+        aggregation_strategy: str
+    ) -> List[Dict[str, Any]]:
+        """
+        Ensure minimum number of results per label (malicious/benign).
+
+        If balance requirements are not met, fetch additional results of the missing label.
+        """
+        # Count results by label
+        malicious_count = sum(1 for r in results if r.get("label") == "malicious")
+        benign_count = sum(1 for r in results if r.get("label") == "benign")
+
+        logger.debug(f"Label distribution: malicious={malicious_count}, benign={benign_count}")
+
+        # Check if we need more of either label
+        need_malicious = max(0, self.min_per_label - malicious_count)
+        need_benign = max(0, self.min_per_label - benign_count)
+
+        if need_malicious == 0 and need_benign == 0:
+            return results  # Balance satisfied
+
+        logger.info(
+            f"Ensuring label balance: need {need_malicious} malicious, {need_benign} benign"
+        )
+
+        # Get existing IDs to avoid duplicates
+        existing_ids = {r.get("db_id") for r in results}
+
+        # Fetch additional malicious samples if needed
+        if need_malicious > 0:
+            additional_mal = self._search_with_filters(
+                query_vector=query_vector,
+                limit=need_malicious * 2,
+                filter_label="malicious",
+                balance_labels=False,
+                score_threshold=self.fallback_threshold
+            )
+
+            if aggregate_chunks and self.enable_chunking:
+                additional_mal = ResultAggregator.aggregate_results(
+                    additional_mal,
+                    strategy=aggregation_strategy,
+                    top_n=3
+                )
+
+            # Add unique results
+            for r in additional_mal:
+                if r.get("db_id") not in existing_ids:
+                    results.append(r)
+                    existing_ids.add(r.get("db_id"))
+                    need_malicious -= 1
+                    if need_malicious <= 0:
+                        break
+
+        # Fetch additional benign samples if needed
+        if need_benign > 0:
+            additional_ben = self._search_with_filters(
+                query_vector=query_vector,
+                limit=need_benign * 2,
+                filter_label="benign",
+                balance_labels=False,
+                score_threshold=self.fallback_threshold
+            )
+
+            if aggregate_chunks and self.enable_chunking:
+                additional_ben = ResultAggregator.aggregate_results(
+                    additional_ben,
+                    strategy=aggregation_strategy,
+                    top_n=3
+                )
+
+            # Add unique results
+            for r in additional_ben:
+                if r.get("db_id") not in existing_ids:
+                    results.append(r)
+                    existing_ids.add(r.get("db_id"))
+                    need_benign -= 1
+                    if need_benign <= 0:
+                        break
+
+        # Re-sort by score
+        results.sort(key=lambda x: x["score"], reverse=True)
+
+        return results
+
 
     def get_full_context(
         self,

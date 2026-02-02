@@ -46,10 +46,15 @@ class ChunkingService:
             logger.error(f"Failed to load tokenizer: {e}")
             raise
 
-    def _generate_chunk_id(self, content: str, chunk_index: int) -> str:
-        """Generate unique ID for chunk."""
-        base = hashlib.md5(content.encode()).hexdigest()
-        return f"{base}_chunk_{chunk_index}"
+    def _generate_chunk_id(self, content: str, chunk_index: int) -> int:
+        """Generate unique integer ID for chunk (Qdrant-compatible)."""
+        # Use MD5 hash for deterministic, collision-resistant IDs
+        # Convert to int but keep within uint64 range (2^64 - 1)
+        hash_bytes = hashlib.md5(f"{content}_{chunk_index}".encode()).digest()
+        # Take first 8 bytes and convert to int
+        hash_int = int.from_bytes(hash_bytes[:8], byteorder='big')
+        # Ensure it's positive and within uint64 range
+        return hash_int % (2**63 - 1)  # Use signed int64 max for safety
 
     def chunk_code(
         self,
