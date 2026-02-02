@@ -51,14 +51,30 @@ def evaluate_model(
         load_in_4bit=True,
         bnb_4bit_use_double_quant=True,
         bnb_4bit_quant_type="nf4",
-        bnb_4bit_compute_dtype=torch.bfloat16
+        bnb_4bit_compute_dtype=torch.bfloat16,
+        llm_int8_enable_fp32_cpu_offload=True
     )
 
-    base_model = AutoModelForCausalLM.from_pretrained(
-        base_model_id,
-        quantization_config=bnb_config,
-        device_map="auto"
-    )
+    # Try GPU first, fallback to CPU if insufficient VRAM
+    try:
+        base_model = AutoModelForCausalLM.from_pretrained(
+            base_model_id,
+            quantization_config=bnb_config,
+            device_map="auto",
+            low_cpu_mem_usage=True
+        )
+        logger.info("Model loaded on GPU with 4-bit quantization")
+    except (ValueError, RuntimeError) as e:
+        logger.warning(f"GPU loading failed: {e}")
+        logger.info("Falling back to CPU (evaluation will be slower)...")
+        # Load on CPU without quantization for evaluation
+        base_model = AutoModelForCausalLM.from_pretrained(
+            base_model_id,
+            device_map="cpu",
+            torch_dtype=torch.float32,
+            low_cpu_mem_usage=True
+        )
+        logger.info("Model loaded on CPU")
 
     # Load LoRA adapter
     model = PeftModel.from_pretrained(base_model, adapter_path)
