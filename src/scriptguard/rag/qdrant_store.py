@@ -264,10 +264,9 @@ class QdrantStore:
         try:
             info = self.client.get_collection(self.collection_name)
             return {
-                "name": info.config.params.vectors.size,
-                "vectors_count": info.vectors_count,
+                "name": self.collection_name,
+                "vector_size": info.config.params.vectors.size if hasattr(info.config.params, 'vectors') else 384,
                 "points_count": info.points_count,
-                "indexed_vectors_count": info.indexed_vectors_count,
                 "status": info.status
             }
         except Exception as e:
