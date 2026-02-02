@@ -30,7 +30,7 @@ docker run -p 8000:8000 scriptguard/scriptguard
 
 ### 1. Start the API Server
 ```bash
-python -m scriptguard.api.inference
+python -m scriptguard.api.main
 ```
 
 API available at `http://localhost:8000`
@@ -73,11 +73,11 @@ python -m scriptguard.cli analyze ./scripts/ --recursive
 
 ```bash
 # Default configuration
-uvicorn scriptguard.api.inference:app --host 0.0.0.0 --port 8000
+uvicorn scriptguard.api.main:app --host 0.0.0.0 --port 8000
 
 # With custom config
-export MODEL_PATH=./models/scriptguard-model
-uvicorn scriptguard.api.inference:app --host 0.0.0.0 --port 8000
+export POSTGRES_HOST=postgres
+uvicorn scriptguard.api.main:app --host 0.0.0.0 --port 8000
 ```
 
 ### Configuration

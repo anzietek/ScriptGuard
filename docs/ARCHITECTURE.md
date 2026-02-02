@@ -127,35 +127,11 @@ Manages persistent data storage.
 
 #### **PostgreSQL Database**
 - **Purpose:** Primary data store for code samples and metadata
-- **Schema:**
-  ```sql
-  samples (
-    id SERIAL PRIMARY KEY,
-    content_hash VARCHAR(64) UNIQUE,
-    content TEXT,
-    label VARCHAR(20),
-    source VARCHAR(100),
-    metadata JSONB,
-    created_at TIMESTAMP
-  )
-
-  dataset_versions (
-    id SERIAL PRIMARY KEY,
-    version VARCHAR(50) UNIQUE,
-    total_samples INTEGER,
-    malicious_count INTEGER,
-    benign_count INTEGER,
-    sources JSONB,
-    created_at TIMESTAMP
-  )
-  ```
-
-**Features:**
-- Connection pooling (1-10 connections)
-- JSONB indexes for fast metadata queries
-- Materialized views for statistics
-- Automatic `updated_at` triggers
-- Full-text search with `pg_trgm`
+- **Connection:** Uses connection pooling (1-10 connections)
+- **Features:**
+  - JSONB storage for flexible metadata
+  - Materialized views for fast statistics
+  - Dataset versioning support
 
 #### **Qdrant Vector Database**
 - **Purpose:** RAG knowledge base for CVEs and malware patterns

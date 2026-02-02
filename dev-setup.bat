@@ -142,7 +142,7 @@ echo   View logs:            cd docker ^&^& docker-compose -f docker-compose.dev
 echo.
 echo   Activate venv:        venv\Scripts\activate.bat
 echo   Run training:         python src\main.py
-echo   Run API:              uvicorn scriptguard.api.inference:app --reload
+echo   Run API:              uvicorn scriptguard.api.main:app --reload
 echo.
 echo   Python shell:         python
 echo   PostgreSQL shell:     docker exec -it scriptguard-postgres-dev psql -U scriptguard -d scriptguard

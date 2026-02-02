@@ -213,10 +213,10 @@ python src/main.py
 source venv/bin/activate
 
 # Run API with hot reload (development)
-uvicorn scriptguard.api.inference:app --reload --host 0.0.0.0 --port 8000
+uvicorn scriptguard.api.main:app --reload --host 0.0.0.0 --port 8000
 
 # Or run API without reload (production-like)
-uvicorn scriptguard.api.inference:app --host 0.0.0.0 --port 8000
+uvicorn scriptguard.api.main:app --host 0.0.0.0 --port 8000
 ```
 
 **Test API:**
@@ -272,7 +272,7 @@ python
 
 4. **Run/Test:**
    - **Training:** `python src/main.py`
-   - **API:** `uvicorn scriptguard.api.inference:app --reload`
+   - **API:** `uvicorn scriptguard.api.main:app --reload`
    - **Tests:** `pytest tests/`
 
 5. **Check logs:**
@@ -296,7 +296,7 @@ python
 
 **API with hot reload:**
 ```bash
-uvicorn scriptguard.api.inference:app --reload
+uvicorn scriptguard.api.main:app --reload
 ```
 
 Changes to Python files will automatically reload the server!

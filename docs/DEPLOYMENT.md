@@ -109,6 +109,12 @@ DEVICE=cuda
 # API
 API_PORT=8000
 LOG_LEVEL=INFO
+POSTGRES_HOST=localhost
+POSTGRES_PORT=5432
+POSTGRES_DB=scriptguard
+POSTGRES_USER=scriptguard
+QDRANT_HOST=localhost
+QDRANT_PORT=6333
 ```
 
 ### 3. Start Services
@@ -121,7 +127,7 @@ docker-compose -f docker/docker-compose.prod.yml ps
 
 # Initialize database schema
 docker-compose -f docker/docker-compose.prod.yml exec postgres \
-  psql -U scriptguard -d scriptguard -f /docker-entrypoint-initdb.d/init.sql
+  psql -U scriptguard -d scriptguard -f /docker-entrypoint-initdb.d/init-db.sql
 
 # Train model (one-time)
 docker-compose -f docker/docker-compose.prod.yml run --rm training

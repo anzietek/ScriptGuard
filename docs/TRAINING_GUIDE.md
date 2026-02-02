@@ -106,8 +106,8 @@ You can manually collect data before training:
 from scriptguard.database import DatasetManager
 from scriptguard.data_sources import GitHubDataSource, MalwareBazaarDataSource
 
-# Initialize database
-db = DatasetManager("./data/scriptguard.db")
+# Initialize database (automatically uses config.yaml)
+db = DatasetManager()
 
 # Fetch from GitHub
 github = GitHubDataSource(api_token="your_token")
@@ -190,54 +190,64 @@ The training pipeline executes the following steps:
 
 #### 1. Data Ingestion
 ```python
+from scriptguard.steps.advanced_ingestion import advanced_data_ingestion
 # Fetches data from all configured sources
+# config is loaded from config.yaml
 raw_data = advanced_data_ingestion(config=config)
 ```
 
 #### 2. Data Validation
 ```python
+from scriptguard.steps.data_validation import validate_samples
 # Validates syntax, length, encoding
 validated_data = validate_samples(data=raw_data)
 ```
 
 #### 3. Quality Filtering
 ```python
+from scriptguard.steps.data_validation import filter_by_quality
 # Filters by code quality metrics
 quality_data = filter_by_quality(data=validated_data)
 ```
 
 #### 4. Feature Extraction
 ```python
+from scriptguard.steps.feature_extraction import extract_features
 # Extracts AST, entropy, API patterns
 featured_data = extract_features(data=quality_data)
 ```
 
 #### 5. Data Augmentation
 ```python
+from scriptguard.steps.advanced_augmentation import augment_malicious_samples
 # Generates polymorphic variants
 augmented_data = augment_malicious_samples(data=featured_data)
 ```
 
 #### 6. Dataset Balancing
 ```python
+from scriptguard.steps.advanced_augmentation import balance_dataset
 # Balances malicious/benign ratio
 balanced_data = balance_dataset(data=augmented_data)
 ```
 
 #### 7. Preprocessing
 ```python
+from scriptguard.steps.data_preprocessing import preprocess_data
 # Tokenizes and formats for training
 processed_dataset = preprocess_data(data=balanced_data)
 ```
 
 #### 8. Model Training
 ```python
+from scriptguard.steps.model_training import train_model
 # Trains model with QLoRA
 adapter_path = train_model(dataset=processed_dataset)
 ```
 
 #### 9. Evaluation
 ```python
+from scriptguard.steps.model_evaluation import evaluate_model
 # Evaluates model performance
 metrics = evaluate_model(adapter_path=adapter_path)
 ```
@@ -313,16 +323,17 @@ Balance Quality: EXCELLENT - Well balanced
 
 ### Export Trained Model
 
-After training completes, export the model:
+After training completes, the adapter is saved to the output directory specified in `config.yaml`. To use it, you can load it using `PeftModel`:
 
 ```python
-from scriptguard.steps.model_training import export_model
+from peft import PeftModel
+from transformers import AutoModelForCausalLM
 
-# Export adapter
-export_model(
-    adapter_path="./model_checkpoints/final_adapter",
-    output_dir="./models/scriptguard-v1.0"
-)
+# Load base model
+base_model = AutoModelForCausalLM.from_pretrained("bigcode/starcoder2-3b")
+
+# Load adapter
+model = PeftModel.from_pretrained(base_model, "./model_checkpoints/final_adapter")
 ```
 
 ### Merge LoRA Adapter with Base Model
@@ -349,6 +360,7 @@ tokenizer.save_pretrained("./models/scriptguard-merged")
 ### Quantize for Deployment
 
 ```python
+import torch
 from transformers import AutoModelForCausalLM, BitsAndBytesConfig
 
 # 4-bit quantization
@@ -420,13 +432,15 @@ training:
 
 2. **Enable gradient checkpointing** (saves memory):
 ```python
+# During model initialization
 model.gradient_checkpointing_enable()
 ```
 
 3. **Use Flash Attention 2** (faster attention):
 ```python
+from transformers import AutoModelForCausalLM
 model = AutoModelForCausalLM.from_pretrained(
-    model_id,
+    "bigcode/starcoder2-3b",
     attn_implementation="flash_attention_2"
 )
 ```

