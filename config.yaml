@@ -71,21 +71,29 @@ data_sources:
   additional_hf:
     enabled: true  # ✅ Now using REAL datasets from HuggingFace
     max_samples_per_dataset: 50
-    # Available datasets (automatically tried in order):
-    # Malware samples:
-    #   - naorm/malware-text-db (text-based malware)
-    #   - rr4433/Powershell_Malware_Detection_Dataset (script malware)
-    #   - pacificsun/Malware_10k (10k samples)
-    #   - cw1521/ember2018-malware-v2 (EMBER dataset)
-    # Classification:
-    #   - deepcode-ai/Malware-Prediction
-    #   - PurCL/malware-top-100-labels (top 100 with labels)
-    #   - pacificsun/microsoft_malware (Microsoft dataset)
-    # Malicious URLs (converted to C2 scripts):
-    #   - joshtobin/malicious_urls (dedicated malicious URLs)
-    #   - JorgeGMM/malicious_urls
-    #   - stanpony/phishing_urls
-    #   - pirocheto/phishing-url
+
+    # Malware samples datasets (tried in order, first that works is used)
+    malware_datasets:
+      - naorm/malware-text-db                           # Text-based malware
+      - rr4433/Powershell_Malware_Detection_Dataset     # Script malware
+      - pacificsun/Malware_10k                          # 10k samples
+      - cw1521/ember2018-malware-v2                     # EMBER dataset
+
+    # Classification datasets (tried in order)
+    classification_datasets:
+      - deepcode-ai/Malware-Prediction
+      - PurCL/malware-top-100-labels                    # Top 100 with labels
+      - RanggaAS/malware_detection
+      - pacificsun/microsoft_malware                    # Microsoft dataset
+
+    # Malicious URL datasets (converted to C2 scripts, tried in order)
+    url_datasets:
+      - joshtobin/malicious_urls                        # Dedicated malicious URLs
+      - JorgeGMM/malicious_urls
+      - stanpony/phishing_urls
+      - pirocheto/phishing-url
+      - semihGuner2002/PhishingURLsDataset
+      - Bilic/phishing
 
 # Database Configuration (PostgreSQL)
 database:

@@ -121,15 +121,20 @@ def advanced_data_ingestion(config: dict) -> List[Dict]:
         except Exception as e:
             logger.error(f"CVE feeds data source failed: {e}")
 
-    # Additional HuggingFace Datasets (InQuest, dhuynh, cybersixgill)
+    # Additional HuggingFace Datasets
     if config.get("data_sources", {}).get("additional_hf", {}).get("enabled", False):
         logger.info("Fetching data from additional HuggingFace datasets...")
-        additional_config = config["data_sources"]["addiKtional_hf"]
+        additional_config = config["data_sources"]["additional_hf"]
 
         try:
-            # Pass HuggingFace token
+            # Pass HuggingFace token and datasets config
             hf_token = config.get("api_keys", {}).get("huggingface_token")
-            additional_source = AdditionalHFDatasets(token=hf_token)
+            datasets_config = {
+                "malware_datasets": additional_config.get("malware_datasets", []),
+                "classification_datasets": additional_config.get("classification_datasets", []),
+                "url_datasets": additional_config.get("url_datasets", []),
+            }
+            additional_source = AdditionalHFDatasets(token=hf_token, datasets_config=datasets_config)
 
             max_per_dataset = additional_config.get("max_samples_per_dataset", 50)
 

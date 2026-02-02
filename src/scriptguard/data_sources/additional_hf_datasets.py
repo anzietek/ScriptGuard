@@ -12,14 +12,16 @@ import os
 class AdditionalHFDatasets:
     """Integration for additional malware datasets from HuggingFace."""
 
-    def __init__(self, token: Optional[str] = None):
+    def __init__(self, token: Optional[str] = None, datasets_config: Optional[Dict] = None):
         """
         Initialize dataset loader.
 
         Args:
             token: HuggingFace token for accessing datasets
+            datasets_config: Configuration dict with dataset names to try
         """
         self.token = token or os.getenv("HUGGINGFACE_TOKEN")
+        self.datasets_config = datasets_config or {}
 
         if self.token:
             logger.info("HuggingFace token configured for additional datasets")
@@ -44,13 +46,17 @@ class AdditionalHFDatasets:
         """
         logger.info(f"Loading malware samples from HuggingFace (max {max_samples})")
 
-        # Try multiple real datasets (ordered by relevance)
-        datasets_to_try = [
-            ("naorm/malware-text-db", "Text"),  # Text-based malware samples
-            ("rr4433/Powershell_Malware_Detection_Dataset", "Powershell"),  # Script malware
-            ("pacificsun/Malware_10k", "Generic"),  # General malware dataset
-            ("cw1521/ember2018-malware-v2", "PE"),  # EMBER malware dataset
-        ]
+        # Get datasets from config or use defaults
+        datasets_to_try = self.datasets_config.get("malware_datasets", [
+            ("naorm/malware-text-db", "Text"),
+            ("rr4433/Powershell_Malware_Detection_Dataset", "Powershell"),
+            ("pacificsun/Malware_10k", "Generic"),
+            ("cw1521/ember2018-malware-v2", "PE"),
+        ])
+
+        # Convert list of strings to tuples if needed
+        if datasets_to_try and isinstance(datasets_to_try[0], str):
+            datasets_to_try = [(name, "Generic") for name in datasets_to_try]
 
         for dataset_name, dataset_type in datasets_to_try:
             try:
@@ -162,12 +168,12 @@ for root, dirs, files in os.walk("/"):
         """
         logger.info(f"Loading malware classification dataset (max {max_samples})")
 
-        datasets_to_try = [
+        datasets_to_try = self.datasets_config.get("classification_datasets", [
             "deepcode-ai/Malware-Prediction",
-            "PurCL/malware-top-100-labels",  # Labeled malware top 100
+            "PurCL/malware-top-100-labels",
             "RanggaAS/malware_detection",
-            "pacificsun/microsoft_malware",  # Microsoft malware dataset
-        ]
+            "pacificsun/microsoft_malware",
+        ])
 
         for dataset_name in datasets_to_try:
             try:
@@ -232,14 +238,14 @@ for root, dirs, files in os.walk("/"):
         """
         logger.info(f"Loading malicious URLs from phishing datasets (max {max_samples})")
 
-        datasets_to_try = [
-            "joshtobin/malicious_urls",  # Dedicated malicious URLs dataset
-            "JorgeGMM/malicious_urls",  # Another malicious URLs dataset
-            "stanpony/phishing_urls",  # Phishing URLs
-            "pirocheto/phishing-url",  # Phishing URLs
+        datasets_to_try = self.datasets_config.get("url_datasets", [
+            "joshtobin/malicious_urls",
+            "JorgeGMM/malicious_urls",
+            "stanpony/phishing_urls",
+            "pirocheto/phishing-url",
             "semihGuner2002/PhishingURLsDataset",
             "Bilic/phishing",
-        ]
+        ])
 
         for dataset_name in datasets_to_try:
             try:
