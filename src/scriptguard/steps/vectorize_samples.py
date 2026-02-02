@@ -43,17 +43,34 @@ def vectorize_samples(
     # Get Qdrant config
     config = config or {}
     qdrant_config = config.get("qdrant", {})
-    code_embedding_model = config.get("code_embedding", {}).get(
-        "model",
-        "microsoft/unixcoder-base"
-    )
+    embedding_config = config.get("code_embedding", {})
 
-    # Initialize Code Similarity Store
+    # Extract embedding configuration
+    code_embedding_model = embedding_config.get("model", "microsoft/unixcoder-base")
+    pooling_strategy = embedding_config.get("pooling_strategy", "mean_pooling")
+    normalize = embedding_config.get("normalize", True)
+    max_length = embedding_config.get("max_code_length", 512)
+    enable_chunking = embedding_config.get("enable_chunking", True)
+    chunk_overlap = embedding_config.get("chunk_overlap", 64)
+
+    logger.info(f"Embedding configuration:")
+    logger.info(f"  Model: {code_embedding_model}")
+    logger.info(f"  Pooling: {pooling_strategy}")
+    logger.info(f"  Normalize: {normalize}")
+    logger.info(f"  Chunking: {enable_chunking}")
+    logger.info(f"  Max length: {max_length}, Overlap: {chunk_overlap}")
+
+    # Initialize Code Similarity Store with enhanced configuration
     code_store = CodeSimilarityStore(
         host=qdrant_config.get("host", "localhost"),
         port=qdrant_config.get("port", 6333),
         collection_name="code_samples",
-        embedding_model=code_embedding_model
+        embedding_model=code_embedding_model,
+        pooling_strategy=pooling_strategy,
+        normalize=normalize,
+        max_length=max_length,
+        enable_chunking=enable_chunking,
+        chunk_overlap=chunk_overlap
     )
 
     # Clear existing if requested

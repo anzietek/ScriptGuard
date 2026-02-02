@@ -125,8 +125,26 @@ code_embedding:
   model: "microsoft/unixcoder-base"  # Dedicated code embedding model
   # Alternative: "Salesforce/codet5p-110m-embedding"
   # Note: These models are specifically trained for code similarity
+
+  # Pooling Strategy Configuration
+  pooling_strategy: "mean_pooling"  # Options: "cls", "mean_pooling", "pooler_output", "sentence_transformer"
+  # - cls: Use [CLS] token from last_hidden_state
+  # - mean_pooling: Mean pooling with attention mask (RECOMMENDED for code)
+  # - pooler_output: Use model's pooler_output (if available)
+  # - sentence_transformer: Use SentenceTransformer.encode() directly
+
+  # Normalization and Chunking
+  normalize: true  # Apply L2 normalization to embeddings (CRITICAL for stable thresholds)
+  enable_chunking: true  # Enable sliding window chunking for long code files
+  max_code_length: 512  # Maximum tokens per chunk
+  chunk_overlap: 64  # Overlap between consecutive chunks
+
+  # Batch processing
   batch_size: 100
-  max_code_length: 512
+
+  # Search and Aggregation
+  aggregate_chunks: true  # Aggregate chunk results to document level
+  aggregation_strategy: "max_score"  # Options: "max_score", "average_top_n", "weighted_avg"
 
 # Data Validation Configuration
 validation:

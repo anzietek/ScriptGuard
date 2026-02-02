@@ -1,6 +1,7 @@
 """
 Code Similarity Store for Few-Shot RAG
 Stores vectorized code samples from PostgreSQL for retrieval during inference.
+Enhanced with unified embedding strategies, L2 normalization, and chunking support.
 """
 
 import os
@@ -8,11 +9,11 @@ from typing import List, Dict, Any, Optional
 from qdrant_client import QdrantClient
 from qdrant_client.http import models
 from qdrant_client.http.exceptions import UnexpectedResponse
-from transformers import AutoTokenizer, AutoModel
-import torch
 import hashlib
 
 from scriptguard.utils.logger import logger
+from .embedding_service import EmbeddingService
+from .chunking_service import ChunkingService, ResultAggregator
 
 
 class CodeSimilarityStore:
@@ -27,11 +28,16 @@ class CodeSimilarityStore:
         port: int = None,
         collection_name: str = "code_samples",
         embedding_model: str = "microsoft/unixcoder-base",
+        pooling_strategy: str = "mean_pooling",
+        normalize: bool = True,
+        max_length: int = 512,
+        enable_chunking: bool = True,
+        chunk_overlap: int = 64,
         api_key: Optional[str] = None,
         use_https: bool = False
     ):
         """
-        Initialize Code Similarity Store.
+        Initialize Code Similarity Store with enhanced embedding and chunking.
 
         Args:
             host: Qdrant host
@@ -41,15 +47,21 @@ class CodeSimilarityStore:
                 Options:
                 - "microsoft/unixcoder-base" (recommended for code)
                 - "Salesforce/codet5p-110m-embedding" (alternative)
+            pooling_strategy: Pooling strategy ("cls", "mean_pooling", "pooler_output", "sentence_transformer")
+            normalize: Apply L2 normalization to embeddings
+            max_length: Maximum sequence length in tokens
+            enable_chunking: Enable sliding window chunking for long code
+            chunk_overlap: Overlap between chunks in tokens
             api_key: Optional API key for Qdrant Cloud
             use_https: Use HTTPS connection
         """
         self.host = host or os.getenv("QDRANT_HOST", "localhost")
         self.port = port or int(os.getenv("QDRANT_PORT", "6333"))
         self.collection_name = collection_name
-        self.embedding_model_name = embedding_model
+        self.enable_chunking = enable_chunking
 
         logger.info(f"Initializing Code Similarity Store: {self.host}:{self.port}")
+        logger.info(f"  Chunking: {'enabled' if enable_chunking else 'disabled'}")
 
         # Initialize Qdrant client
         if api_key:
@@ -60,30 +72,26 @@ class CodeSimilarityStore:
         else:
             self.client = QdrantClient(host=self.host, port=self.port)
 
-        # Initialize code embedding model
-        logger.info(f"Loading code embedding model: {self.embedding_model_name}")
-        self.device = "cuda" if torch.cuda.is_available() else "cpu"
+        # Initialize embedding service
+        self.embedding_service = EmbeddingService(
+            model_name=embedding_model,
+            pooling_strategy=pooling_strategy,
+            normalize=normalize,
+            max_length=max_length
+        )
+        self.embedding_dim = self.embedding_service.get_embedding_dim()
 
-        try:
-            self.tokenizer = AutoTokenizer.from_pretrained(self.embedding_model_name)
-            self.model = AutoModel.from_pretrained(
-                self.embedding_model_name,
-                trust_remote_code=True
-            ).to(self.device)
-            self.model.eval()
+        # Initialize chunking service if enabled
+        if enable_chunking:
+            self.chunking_service = ChunkingService(
+                tokenizer_name=embedding_model,
+                chunk_size=max_length,
+                overlap=chunk_overlap
+            )
+        else:
+            self.chunking_service = None
 
-            # Get embedding dimension
-            with torch.no_grad():
-                test_input = self.tokenizer("test", return_tensors="pt", truncation=True, max_length=512)
-                test_input = {k: v.to(self.device) for k, v in test_input.items()}
-                test_output = self.model(**test_input)
-                self.embedding_dim = test_output.last_hidden_state[:, 0, :].shape[-1]
-
-            logger.info(f"✓ Code embedding model loaded (dim={self.embedding_dim}, device={self.device})")
-
-        except Exception as e:
-            logger.error(f"Failed to load code embedding model: {e}")
-            raise
+        logger.info(f"✓ Code Similarity Store ready (dim={self.embedding_dim})")
 
         # Ensure collection exists
         self._ensure_collection()
@@ -146,40 +154,23 @@ class CodeSimilarityStore:
 
     def _encode_code(self, code: str) -> List[float]:
         """
-        Generate embedding for code snippet.
+        Generate embedding for code snippet using EmbeddingService.
 
         Args:
             code: Source code string
 
         Returns:
-            Embedding vector as list of floats
+            Embedding vector as list of floats (L2 normalized if configured)
         """
         try:
-            # Tokenize
-            inputs = self.tokenizer(
-                code,
-                return_tensors="pt",
-                truncation=True,
-                max_length=512,
-                padding=True
-            )
-            inputs = {k: v.to(self.device) for k, v in inputs.items()}
-
-            # Generate embedding
-            with torch.no_grad():
-                outputs = self.model(**inputs)
-                # Use [CLS] token embedding (first token)
-                embedding = outputs.last_hidden_state[:, 0, :].cpu().numpy()[0]
-
-            return embedding.tolist()
-
+            return self.embedding_service.encode_single(code).tolist()
         except Exception as e:
             logger.error(f"Failed to encode code: {e}")
             raise
 
     def upsert_code_samples(self, samples: List[Dict[str, Any]], batch_size: int = 100):
         """
-        Upsert code samples to Qdrant.
+        Upsert code samples to Qdrant with optional chunking.
 
         Args:
             samples: List of sample dictionaries with:
@@ -197,17 +188,37 @@ class CodeSimilarityStore:
 
         logger.info(f"Upserting {len(samples)} code samples to Qdrant...")
 
+        # Apply chunking if enabled
+        if self.enable_chunking and self.chunking_service:
+            logger.info("Applying sliding window chunking...")
+            chunks = self.chunking_service.chunk_samples(samples)
+            logger.info(f"Created {len(chunks)} chunks from {len(samples)} samples")
+        else:
+            # No chunking - process samples as-is
+            chunks = []
+            for sample in samples:
+                chunks.append({
+                    "content": sample.get("content", ""),
+                    "db_id": sample.get("id"),
+                    "chunk_index": 0,
+                    "chunk_id": self._generate_id(sample.get("content", "")),
+                    "total_chunks": 1,
+                    "label": sample.get("label"),
+                    "source": sample.get("source"),
+                    "metadata": sample.get("metadata", {})
+                })
+
         # Process in batches
-        for i in range(0, len(samples), batch_size):
-            batch = samples[i:i + batch_size]
+        for i in range(0, len(chunks), batch_size):
+            batch = chunks[i:i + batch_size]
             points = []
 
-            for sample in batch:
-                content = sample.get("content", "")
-                label = sample.get("label", "")
+            for chunk in batch:
+                content = chunk.get("content", "")
+                label = chunk.get("label", "")
 
                 if not content or not label:
-                    logger.warning(f"Skipping sample {sample.get('id')} - missing content or label")
+                    logger.warning(f"Skipping chunk - missing content or label")
                     continue
 
                 # Convert label to binary
@@ -217,21 +228,23 @@ class CodeSimilarityStore:
                 try:
                     vector = self._encode_code(content)
                 except Exception as e:
-                    logger.warning(f"Failed to encode sample {sample.get('id')}: {e}")
+                    logger.warning(f"Failed to encode chunk: {e}")
                     continue
 
-                # Generate point ID
-                point_id = self._generate_id(content)
+                # Use chunk_id as point ID
+                point_id = chunk.get("chunk_id")
 
-                # Prepare payload
+                # Prepare payload with chunk metadata
                 payload = {
-                    "db_id": sample.get("id"),
+                    "db_id": chunk.get("db_id"),
+                    "chunk_index": chunk.get("chunk_index", 0),
+                    "total_chunks": chunk.get("total_chunks", 1),
                     "code_content": content[:1000],  # Store truncated content
                     "label": label.lower(),
                     "label_binary": label_binary,
-                    "source": sample.get("source", "unknown"),
-                    "language": sample.get("language", "python"),
-                    "metadata": sample.get("metadata", {})
+                    "source": chunk.get("source", "unknown"),
+                    "language": "python",
+                    "metadata": chunk.get("metadata", {})
                 }
 
                 points.append(
@@ -249,7 +262,7 @@ class CodeSimilarityStore:
                         collection_name=self.collection_name,
                         points=points
                     )
-                    logger.info(f"✓ Upserted batch {i // batch_size + 1}: {len(points)} samples")
+                    logger.info(f"✓ Upserted batch {i // batch_size + 1}: {len(points)} chunks")
                 except Exception as e:
                     logger.error(f"Failed to upsert batch {i // batch_size + 1}: {e}")
 
@@ -261,27 +274,34 @@ class CodeSimilarityStore:
         k: int = 3,
         filter_label: Optional[str] = None,
         balance_labels: bool = True,
-        score_threshold: float = 0.3
+        score_threshold: float = 0.3,
+        aggregate_chunks: bool = True,
+        aggregation_strategy: str = "max_score"
     ) -> List[Dict[str, Any]]:
         """
-        Search for similar code samples using vector similarity.
+        Search for similar code samples using vector similarity with chunk aggregation.
 
         Args:
             query_code: Code to find similar samples for
-            k: Number of results to return
+            k: Number of results to return (at document level if aggregating)
             filter_label: Optional filter by label ("malicious" or "benign")
             balance_labels: If True, ensure mixed results (min 1 malicious, 1 benign)
             score_threshold: Minimum similarity score
+            aggregate_chunks: Aggregate chunk results to document level
+            aggregation_strategy: Strategy for aggregation ("max_score", "average_top_n", "weighted_avg")
 
         Returns:
             List of similar code samples with scores
         """
-        # Generate query embedding
+        # Generate query embedding (normalized if configured)
         try:
             query_vector = self._encode_code(query_code)
         except Exception as e:
             logger.error(f"Failed to encode query code: {e}")
             return []
+
+        # Increase search limit if chunking is enabled to get more candidates
+        search_limit = k * 5 if self.enable_chunking and aggregate_chunks else k
 
         # Build filter
         search_filter = None
@@ -302,7 +322,7 @@ class CodeSimilarityStore:
                 malicious_results = self.client.search(
                     collection_name=self.collection_name,
                     query_vector=query_vector,
-                    limit=max(k // 2, 1),
+                    limit=max(search_limit // 2, 1),
                     query_filter=models.Filter(
                         must=[
                             models.FieldCondition(
@@ -317,7 +337,7 @@ class CodeSimilarityStore:
                 benign_results = self.client.search(
                     collection_name=self.collection_name,
                     query_vector=query_vector,
-                    limit=max(k // 2, 1),
+                    limit=max(search_limit // 2, 1),
                     query_filter=models.Filter(
                         must=[
                             models.FieldCondition(
@@ -332,14 +352,14 @@ class CodeSimilarityStore:
                 # Combine and sort by score
                 combined = list(malicious_results) + list(benign_results)
                 combined.sort(key=lambda x: x.score, reverse=True)
-                search_result = combined[:k]
+                search_result = combined
 
             else:
                 # Regular search
                 search_result = self.client.search(
                     collection_name=self.collection_name,
                     query_vector=query_vector,
-                    limit=k,
+                    limit=search_limit,
                     query_filter=search_filter,
                     score_threshold=score_threshold
                 )
@@ -354,8 +374,21 @@ class CodeSimilarityStore:
                     "label_binary": hit.payload.get("label_binary", 0),
                     "source": hit.payload.get("source", ""),
                     "language": hit.payload.get("language", "python"),
-                    "db_id": hit.payload.get("db_id")
+                    "db_id": hit.payload.get("db_id"),
+                    "chunk_index": hit.payload.get("chunk_index", 0),
+                    "total_chunks": hit.payload.get("total_chunks", 1)
                 })
+
+            # Aggregate chunks to document level if enabled
+            if aggregate_chunks and self.enable_chunking:
+                logger.debug(f"Aggregating {len(results)} chunk results to document level...")
+                results = ResultAggregator.aggregate_results(
+                    results,
+                    strategy=aggregation_strategy,
+                    top_n=3
+                )
+                # Limit to k documents
+                results = results[:k]
 
             logger.debug(f"Found {len(results)} similar code samples")
             return results
@@ -363,6 +396,23 @@ class CodeSimilarityStore:
         except Exception as e:
             logger.error(f"Similarity search failed: {e}")
             return []
+
+    def get_full_context(
+        self,
+        db_manager,
+        results: List[Dict[str, Any]]
+    ) -> List[Dict[str, Any]]:
+        """
+        Enrich results with full code context from database.
+
+        Args:
+            db_manager: DatasetManager instance
+            results: Search results
+
+        Returns:
+            Results with full_content field added
+        """
+        return ResultAggregator.reconstruct_full_context(db_manager, results)
 
     def get_collection_info(self) -> Dict[str, Any]:
         """Get collection statistics."""
