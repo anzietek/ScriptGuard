@@ -155,33 +155,41 @@ def advanced_data_ingestion(config: dict) -> List[Dict]:
     logger.info("Deduplicating samples...")
     unique_samples = deduplicate_samples(all_samples)
 
-    # Store in database if configured
-    db_path = config.get("database", {}).get("path")
-    if db_path:
-        logger.info(f"Storing samples in database: {db_path}")
-        db_manager = DatasetManager(db_path)
+    # ALWAYS store in PostgreSQL database (for production pipeline)
+    logger.info("Storing samples in PostgreSQL database...")
+    try:
+        # Initialize DatasetManager (uses PostgreSQL by default from env vars)
+        db_manager = DatasetManager()
 
-        # Get existing hashes to avoid duplicates
-        existing_hashes = db_manager.get_existing_hashes()
+        saved_count = 0
+        skipped_count = 0
 
-        # Filter out samples already in database
-        new_samples = [
-            s for s in unique_samples
-            if s.get("content_hash") not in existing_hashes
-        ]
+        for sample in unique_samples:
+            try:
+                db_manager.add_sample(
+                    content=sample.get("content", ""),
+                    label=sample.get("label", "unknown"),
+                    source=sample.get("source", "unknown"),
+                    metadata=sample.get("metadata", {})
+                )
+                saved_count += 1
+            except Exception as e:
+                # Skip duplicates or invalid samples
+                skipped_count += 1
+                logger.debug(f"Skipping sample (likely duplicate): {e}")
+                continue
 
-        logger.info(f"New samples to add: {len(new_samples)}")
+        logger.info(f"✅ Saved {saved_count} samples to PostgreSQL (skipped {skipped_count} duplicates)")
 
-        # Add to database
-        if new_samples:
-            result = db_manager.add_samples_batch(new_samples)
-            logger.info(f"Database insert result: {result}")
+        # Verify what's in the database
+        malicious = db_manager.get_all_samples(label="malicious", limit=None)
+        benign = db_manager.get_all_samples(label="benign", limit=None)
+        logger.info(f"PostgreSQL now contains: {len(malicious)} malicious, {len(benign)} benign samples")
 
-        # Print statistics
-        stats = db_manager.get_dataset_stats()
-        logger.info(f"Database statistics: {stats}")
+    except Exception as e:
+        logger.error(f"Failed to store samples in PostgreSQL: {e}")
+        # Don't fail the pipeline, just log the error
 
-        db_manager.close()
 
     # Print statistics
     logger.info("Generating statistics report...")
