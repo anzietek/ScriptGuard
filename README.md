@@ -260,13 +260,19 @@ Response:
 
 ## 📚 Documentation
 
+### Core Documentation
 - **[ARCHITECTURE.md](docs/ARCHITECTURE.md)** - System architecture and component details
 - **[TRAINING_GUIDE.md](docs/TRAINING_GUIDE.md)** - Complete training guide
 - **[USAGE_GUIDE.md](docs/USAGE_GUIDE.md)** - API usage and integration
 - **[TUNING_GUIDE.md](docs/TUNING_GUIDE.md)** - Hyperparameter tuning
 - **[DEPLOYMENT.md](docs/DEPLOYMENT.md)** - Production deployment guide
-- **[FEW_SHOT_RAG_GUIDE.md](docs/FEW_SHOT_RAG_GUIDE.md)** - Few-Shot RAG implementation (NEW)
-- **[FEW_SHOT_RAG_SUMMARY.md](docs/FEW_SHOT_RAG_SUMMARY.md)** - Quick RAG reference (NEW)
+
+### RAG & Few-Shot Documentation (NEW - 2026-02-02)
+- **[RAG_IMPROVEMENTS_IMPLEMENTATION.md](docs/RAG_IMPROVEMENTS_IMPLEMENTATION.md)** - ✨ Latest improvements guide
+- **[ML_ARCHITECTURE_REVIEW_code_similarity_store.md](docs/ML_ARCHITECTURE_REVIEW_code_similarity_store.md)** - Architecture review
+- **[FEW_SHOT_RAG_GUIDE.md](docs/FEW_SHOT_RAG_GUIDE.md)** - Few-Shot RAG implementation
+- **[FEW_SHOT_RAG_SUMMARY.md](docs/FEW_SHOT_RAG_SUMMARY.md)** - Quick RAG reference
+- **[IMPLEMENTATION_SUMMARY.md](IMPLEMENTATION_SUMMARY.md)** - All implementations summary
 
 ## 🔧 Advanced Features
 

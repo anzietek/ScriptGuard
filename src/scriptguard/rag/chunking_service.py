@@ -65,7 +65,11 @@ class ChunkingService:
         metadata: Optional[Dict[str, Any]] = None
     ) -> List[Dict[str, Any]]:
         """
-        Chunk code into overlapping segments.
+        Chunk code into overlapping segments using TOKEN-BASED sliding window.
+
+        This implementation uses precise token-based boundaries instead of line-based
+        approximations. This ensures consistent chunk sizes regardless of code formatting
+        (minified, long lines, etc.).
 
         Args:
             code: Source code to chunk
@@ -76,11 +80,12 @@ class ChunkingService:
 
         Returns:
             List of chunk dictionaries with:
-                - content: Chunk text
+                - content: Chunk text (decoded from tokens)
                 - db_id: Original document ID
                 - chunk_index: Chunk position
                 - chunk_id: Unique chunk identifier
                 - total_chunks: Total number of chunks for this document
+                - token_count: Actual token count of this chunk
                 - label: Label
                 - source: Source
                 - metadata: Metadata
@@ -88,85 +93,95 @@ class ChunkingService:
         if not code or not code.strip():
             return []
 
-        # Quick token count to check if chunking needed
+        # Tokenize the entire code WITHOUT truncation
         try:
-            test_tokens = self.tokenizer.encode(code, add_special_tokens=False, truncation=False)
-        except:
-            # If encoding fails on full text, we definitely need chunking
-            test_tokens = list(range(self.chunk_size + 1))
+            tokens = self.tokenizer.encode(
+                code,
+                add_special_tokens=False,
+                truncation=False
+            )
+        except Exception as e:
+            logger.error(f"Failed to tokenize code: {e}")
+            return []
 
         # If code fits in one chunk, return as-is
-        if len(test_tokens) <= self.chunk_size:
+        if len(tokens) <= self.chunk_size:
             return [{
                 "content": code,
                 "db_id": db_id,
                 "chunk_index": 0,
                 "chunk_id": self._generate_chunk_id(code, 0),
                 "total_chunks": 1,
+                "token_count": len(tokens),
                 "label": label,
                 "source": source,
                 "metadata": metadata or {}
             }]
 
-        # Split code into lines for better chunking
-        lines = code.split('\n')
+        # Calculate stride (step size between chunks)
+        # Default: chunk_size - overlap (e.g., 512 - 64 = 448 tokens per step)
+        stride = self.chunk_size - self.overlap
 
+        if stride <= 0:
+            logger.warning(f"Invalid stride={stride} (overlap >= chunk_size). Using stride=chunk_size/2")
+            stride = max(1, self.chunk_size // 2)
+
+        # Generate chunks using sliding window
         chunks = []
         chunk_index = 0
-        current_chunk_lines = []
-        current_tokens = 0
+        start_idx = 0
 
-        for line in lines:
-            # Count tokens in this line
-            line_tokens = len(self.tokenizer.encode(line, add_special_tokens=False, truncation=False))
+        while start_idx < len(tokens):
+            # Extract chunk tokens
+            end_idx = min(start_idx + self.chunk_size, len(tokens))
+            chunk_tokens = tokens[start_idx:end_idx]
 
-            # If adding this line would exceed chunk_size, save current chunk
-            if current_tokens + line_tokens > self.chunk_size and current_chunk_lines:
-                chunk_text = '\n'.join(current_chunk_lines)
+            # Decode tokens back to text
+            try:
+                chunk_text = self.tokenizer.decode(
+                    chunk_tokens,
+                    skip_special_tokens=True,
+                    clean_up_tokenization_spaces=True
+                )
+            except Exception as e:
+                logger.warning(f"Failed to decode chunk {chunk_index}: {e}")
+                # Move to next chunk
+                start_idx += stride
+                continue
 
-                chunks.append({
-                    "content": chunk_text,
-                    "db_id": db_id,
-                    "chunk_index": chunk_index,
-                    "chunk_id": self._generate_chunk_id(code, chunk_index),
-                    "total_chunks": -1,
-                    "label": label,
-                    "source": source,
-                    "metadata": metadata or {}
-                })
-
-                chunk_index += 1
-
-                # Keep last few lines for overlap (approximate)
-                overlap_lines = max(1, self.overlap // 20)  # ~20 tokens per line estimate
-                current_chunk_lines = current_chunk_lines[-overlap_lines:] if overlap_lines > 0 else []
-                current_tokens = sum(len(self.tokenizer.encode(l, add_special_tokens=False, truncation=False))
-                                   for l in current_chunk_lines)
-
-            # Add line to current chunk
-            current_chunk_lines.append(line)
-            current_tokens += line_tokens
-
-        # Add final chunk if any lines remain
-        if current_chunk_lines:
-            chunk_text = '\n'.join(current_chunk_lines)
+            # Create chunk metadata
             chunks.append({
                 "content": chunk_text,
                 "db_id": db_id,
                 "chunk_index": chunk_index,
-                "chunk_id": self._generate_chunk_id(code, chunk_index),
-                "total_chunks": -1,
+                "chunk_id": self._generate_chunk_id(chunk_text, chunk_index),
+                "total_chunks": -1,  # Will be updated later
+                "token_count": len(chunk_tokens),
+                "start_token": start_idx,
+                "end_token": end_idx,
                 "label": label,
                 "source": source,
                 "metadata": metadata or {}
             })
+
+            chunk_index += 1
+
+            # Move to next chunk position
+            start_idx += stride
+
+            # Stop if we've reached the end
+            if end_idx >= len(tokens):
+                break
 
         # Update total_chunks for all chunks
         total_chunks = len(chunks)
         for chunk in chunks:
             chunk["total_chunks"] = total_chunks
 
-        logger.debug(f"Chunked document (db_id={db_id}) into {len(chunks)} chunks")
+        logger.debug(
+            f"Chunked document (db_id={db_id}): {len(tokens)} tokens → "
+            f"{len(chunks)} chunks (size={self.chunk_size}, overlap={self.overlap}, stride={stride})"
+        )
         return chunks
 
     def chunk_samples(self, samples: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -328,38 +343,107 @@ class ResultAggregator:
         return aggregated
 
     @staticmethod
-    def reconstruct_full_context(
+    def fetch_full_content_batch(
         db_manager,
-        aggregated_results: List[Dict[str, Any]]
+        aggregated_results: List[Dict[str, Any]],
+        replace_content: bool = True
     ) -> List[Dict[str, Any]]:
         """
-        Reconstruct full document context from database.
+        Batch fetch full document content from database (ELIMINATES PAYLOAD TRUNCATION).
+
+        This is the "Fetch-from-Source" architecture:
+        - Qdrant returns only metadata (db_id, scores, chunk info)
+        - Full, untruncated code is fetched from PostgreSQL (Source of Truth)
+        - Ensures Few-Shot prompt gets 100% original code
 
         Args:
             db_manager: DatasetManager instance
-            aggregated_results: Aggregated document-level results
+            aggregated_results: Aggregated document-level results with db_id
+            replace_content: If True, replace 'content' field with full content;
+                           If False, add as 'full_content' (keeps truncated preview)
 
         Returns:
             Results with full content from database
         """
-        enriched = []
+        if not aggregated_results:
+            return []
 
+        # Extract all db_ids
+        db_ids = [r.get("db_id") for r in aggregated_results if r.get("db_id") is not None]
+
+        if not db_ids:
+            logger.warning("No valid db_ids found in results")
+            return aggregated_results
+
+        logger.debug(f"Batch fetching full content for {len(db_ids)} documents from database...")
+
+        # Batch fetch from database (much more efficient than individual queries)
+        try:
+            from scriptguard.database.connection_pool import get_connection, return_connection
+            conn = get_connection()
+            cursor = conn.cursor()
+
+            # Use parameterized query with IN clause
+            placeholders = ','.join(['%s'] * len(db_ids))
+            query = f"""
+                SELECT id, content, label, source, url, metadata, created_at
+                FROM samples
+                WHERE id IN ({placeholders})
+            """
+
+            cursor.execute(query, tuple(db_ids))
+            rows = cursor.fetchall()
+
+            # Build lookup map: db_id -> full sample data
+            sample_map = {}
+            for row in rows:
+                sample_map[row["id"]] = {
+                    "id": row["id"],
+                    "content": row["content"],
+                    "label": row["label"],
+                    "source": row["source"],
+                    "url": row["url"],
+                    "metadata": row["metadata"] or {},
+                    "created_at": row["created_at"].isoformat() if row["created_at"] else None
+                }
+
+            cursor.close()
+            return_connection(conn)
+
+            logger.debug(f"✓ Fetched {len(sample_map)} full samples from database")
+
+        except Exception as e:
+            logger.error(f"Failed to batch fetch samples from database: {e}")
+            # Fall back to returning results without full content
+            for result in aggregated_results:
+                result["content_fetch_failed"] = True
+            return aggregated_results
+
+        # Enrich results with full content
+        enriched = []
         for result in aggregated_results:
             db_id = result.get("db_id")
-            if db_id is not None:
-                try:
-                    # Fetch full content from database
-                    full_sample = db_manager.get_sample_by_id(db_id)
 
-                    if full_sample:
-                        result["full_content"] = full_sample.get("content", "")
-                        result["content_truncated"] = False
-                    else:
-                        result["content_truncated"] = True
+            if db_id in sample_map:
+                full_sample = sample_map[db_id]
 
-                except Exception as e:
-                    logger.warning(f"Failed to fetch full content for db_id={db_id}: {e}")
-                    result["content_truncated"] = True
+                if replace_content:
+                    # Replace truncated content with full content
+                    result["content"] = full_sample["content"]
+                    result["content_truncated"] = False
+                else:
+                    # Keep both (preview + full)
+                    result["full_content"] = full_sample["content"]
+                    result["content_truncated"] = False
+
+                # Optionally enrich with other DB fields
+                result["url"] = full_sample.get("url")
+                result["db_metadata"] = full_sample.get("metadata", {})
+
+            else:
+                logger.warning(f"db_id={db_id} not found in database")
+                result["content_truncated"] = True
+                result["content_fetch_failed"] = True
 
             enriched.append(result)
 
