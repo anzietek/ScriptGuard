@@ -1,19 +1,30 @@
 """
 Additional HuggingFace Datasets Integration
-Supports InQuest, dhuynh, and cybersixgill datasets
+Uses REAL datasets from HuggingFace Hub
 """
 
 from scriptguard.utils.logger import logger
 from datasets import load_dataset
-from typing import List, Dict
+from typing import List, Dict, Optional
 import random
+import os
 
 class AdditionalHFDatasets:
     """Integration for additional malware datasets from HuggingFace."""
 
-    def __init__(self):
-        """Initialize dataset loader."""
-        pass
+    def __init__(self, token: Optional[str] = None):
+        """
+        Initialize dataset loader.
+
+        Args:
+            token: HuggingFace token for accessing datasets
+        """
+        self.token = token or os.getenv("HUGGINGFACE_TOKEN")
+
+        if self.token:
+            logger.info("HuggingFace token configured for additional datasets")
+        else:
+            logger.warning("No HuggingFace token - some datasets may fail")
 
     def load_inquest_malware_samples(
         self,
@@ -21,7 +32,8 @@ class AdditionalHFDatasets:
         split: str = "train"
     ) -> List[Dict[str, str]]:
         """
-        Load malware samples from InQuest/malware-samples dataset.
+        Load malware samples from real HuggingFace datasets.
+        Uses rr4433/Powershell_Malware_Detection_Dataset as it contains script-based malware.
 
         Args:
             max_samples: Maximum number of samples to fetch
@@ -30,42 +42,61 @@ class AdditionalHFDatasets:
         Returns:
             List of samples with code and metadata
         """
-        logger.info(f"Loading InQuest malware samples (max {max_samples})")
+        logger.info(f"Loading malware samples from HuggingFace (max {max_samples})")
 
-        try:
-            # Try to load dataset
-            dataset = load_dataset("InQuest/malware-samples", split=split, streaming=True)
+        # Try multiple real datasets
+        datasets_to_try = [
+            ("rr4433/Powershell_Malware_Detection_Dataset", "Powershell"),  # Script malware
+            ("pacificsun/Malware_10k", "Generic"),  # General malware dataset
+        ]
 
-            samples = []
-            for i, item in enumerate(dataset):
-                if i >= max_samples:
-                    break
+        for dataset_name, dataset_type in datasets_to_try:
+            try:
+                logger.info(f"Trying dataset: {dataset_name}")
+                dataset = load_dataset(dataset_name, split=split, streaming=True, token=self.token)
 
-                # Extract relevant fields - adapt to actual dataset structure
-                code_content = item.get("content", item.get("data", item.get("code", "")))
+                samples = []
+                for i, item in enumerate(dataset):
+                    if i >= max_samples:
+                        break
 
-                sample = {
-                    "code": code_content,
-                    "label": "malicious",
-                    "source": "inquest",
-                    "metadata": {
-                        "hash": item.get("sha256", item.get("md5", "")),
-                        "file_type": item.get("file_type", "unknown"),
-                        "family": item.get("family", "unknown")
+                    # Try to extract code content from various field names
+                    code_content = (
+                        item.get("content") or
+                        item.get("code") or
+                        item.get("data") or
+                        item.get("script") or
+                        item.get("text") or
+                        str(item.get("features", ""))
+                    )
+
+                    if not code_content or len(str(code_content)) < 50:
+                        continue
+
+                    sample = {
+                        "code": str(code_content),
+                        "label": "malicious",
+                        "source": f"hf_{dataset_name.split('/')[0]}",
+                        "metadata": {
+                            "dataset": dataset_name,
+                            "type": dataset_type,
+                            "family": item.get("family", item.get("label", "unknown"))
+                        }
                     }
-                }
 
-                # Only add if we have actual code content
-                if sample["code"] and len(sample["code"]) > 50:
                     samples.append(sample)
 
-            logger.info(f"Loaded {len(samples)} samples from InQuest")
-            return samples
+                if samples:
+                    logger.info(f"Loaded {len(samples)} samples from {dataset_name}")
+                    return samples
 
-        except Exception as e:
-            logger.warning(f"InQuest dataset not available or failed: {e}")
-            logger.info("Using fallback synthetic samples")
-            return self._generate_fallback_malware_samples(max_samples // 2, "inquest")
+            except Exception as e:
+                logger.warning(f"Dataset {dataset_name} failed: {e}")
+                continue
+
+        # If all fail, use fallback
+        logger.info("All datasets failed, using fallback synthetic samples")
+        return self._generate_fallback_malware_samples(max_samples // 2, "hf_fallback")
 
     def _generate_fallback_malware_samples(self, count: int, source: str) -> List[Dict[str, str]]:
         """Generate synthetic malware samples as fallback."""
@@ -117,7 +148,8 @@ for root, dirs, files in os.walk("/"):
         split: str = "train"
     ) -> List[Dict[str, str]]:
         """
-        Load malware classification data from dhuynh/malware-classification.
+        Load malware classification data from real HuggingFace datasets.
+        Uses deepcode-ai/Malware-Prediction or similar classification datasets.
 
         Args:
             max_samples: Maximum number of samples to fetch
@@ -126,41 +158,57 @@ for root, dirs, files in os.walk("/"):
         Returns:
             List of samples with code and malware type
         """
-        logger.info(f"Loading dhuynh malware classification (max {max_samples})")
+        logger.info(f"Loading malware classification dataset (max {max_samples})")
 
-        try:
-            dataset = load_dataset("dhuynh/malware-classification", split=split, streaming=True)
+        datasets_to_try = [
+            "deepcode-ai/Malware-Prediction",
+            "RanggaAS/malware_detection",
+        ]
 
-            samples = []
-            for i, item in enumerate(dataset):
-                if i >= max_samples:
-                    break
+        for dataset_name in datasets_to_try:
+            try:
+                logger.info(f"Trying dataset: {dataset_name}")
+                dataset = load_dataset(dataset_name, split=split, streaming=True, token=self.token)
 
-                # Extract code and classification - adapt to actual structure
-                code_content = item.get("code", item.get("content", item.get("data", "")))
+                samples = []
+                for i, item in enumerate(dataset):
+                    if i >= max_samples:
+                        break
 
-                sample = {
-                    "code": code_content,
-                    "label": "malicious",
-                    "source": "dhuynh",
-                    "metadata": {
-                        "malware_type": item.get("label", item.get("class", "unknown")),
-                        "family": item.get("family", ""),
-                        "category": item.get("category", "")
+                    # Extract code/features
+                    code_content = (
+                        item.get("code") or
+                        item.get("content") or
+                        item.get("text") or
+                        str(item.get("features", ""))
+                    )
+
+                    if not code_content or len(str(code_content)) < 50:
+                        continue
+
+                    sample = {
+                        "code": str(code_content),
+                        "label": "malicious",
+                        "source": f"hf_{dataset_name.split('/')[0]}",
+                        "metadata": {
+                            "malware_type": item.get("label", item.get("class", item.get("type", "unknown"))),
+                            "family": item.get("family", ""),
+                            "category": item.get("category", "")
+                        }
                     }
-                }
 
-                # Only add if we have actual code content
-                if sample["code"] and len(sample["code"]) > 50:
                     samples.append(sample)
 
-            logger.info(f"Loaded {len(samples)} samples from dhuynh")
-            return samples
+                if samples:
+                    logger.info(f"Loaded {len(samples)} samples from {dataset_name}")
+                    return samples
 
-        except Exception as e:
-            logger.warning(f"dhuynh dataset not available or failed: {e}")
-            logger.info("Using fallback synthetic samples")
-            return self._generate_fallback_malware_samples(max_samples // 2, "dhuynh")
+            except Exception as e:
+                logger.warning(f"Dataset {dataset_name} failed: {e}")
+                continue
+
+        logger.info("All classification datasets failed, using fallback")
+        return self._generate_fallback_malware_samples(max_samples // 2, "classification_fallback")
 
     def load_cybersixgill_malicious_urls(
         self,
@@ -168,7 +216,7 @@ for root, dirs, files in os.walk("/"):
         split: str = "train"
     ) -> List[Dict[str, str]]:
         """
-        Load malicious URLs from cybersixgill/malicious-urls-dataset.
+        Load malicious URLs from real phishing datasets on HuggingFace.
         Converts URLs into Python scripts that demonstrate C2 communication patterns.
 
         Args:
@@ -178,45 +226,70 @@ for root, dirs, files in os.walk("/"):
         Returns:
             List of synthetic scripts with C2 communication patterns
         """
-        logger.info(f"Loading cybersixgill malicious URLs (max {max_samples})")
+        logger.info(f"Loading malicious URLs from phishing datasets (max {max_samples})")
 
-        try:
-            dataset = load_dataset("cybersixgill/malicious-urls-dataset", split=split, streaming=True)
+        datasets_to_try = [
+            "stanpony/phishing_urls",
+            "semihGuner2002/PhishingURLsDataset",
+            "Bilic/phishing",
+        ]
 
-            samples = []
-            for i, item in enumerate(dataset):
-                if i >= max_samples:
-                    break
+        for dataset_name in datasets_to_try:
+            try:
+                logger.info(f"Trying dataset: {dataset_name}")
+                dataset = load_dataset(dataset_name, split=split, streaming=True, token=self.token)
 
-                url = item.get("url", "")
-                url_type = item.get("type", item.get("category", "phishing"))
+                samples = []
+                for i, item in enumerate(dataset):
+                    if i >= max_samples:
+                        break
 
-                if not url:
-                    continue
+                    # Extract URL from various field names
+                    url = (
+                        item.get("url") or
+                        item.get("URL") or
+                        item.get("domain") or
+                        item.get("link") or
+                        ""
+                    )
 
-                # Generate synthetic Python script that uses this URL for C2
-                code = self._generate_c2_script(url, url_type)
+                    if not url or not isinstance(url, str):
+                        continue
 
-                sample = {
-                    "code": code,
-                    "label": "malicious",
-                    "source": "cybersixgill_c2",
-                    "metadata": {
-                        "c2_url": url,
-                        "threat_type": url_type,
-                        "pattern": "c2_communication"
+                    # Get threat type
+                    url_type = (
+                        item.get("type") or
+                        item.get("label") or
+                        item.get("status") or
+                        "phishing"
+                    )
+
+                    # Generate synthetic Python script that uses this URL for C2
+                    code = self._generate_c2_script(url, str(url_type))
+
+                    sample = {
+                        "code": code,
+                        "label": "malicious",
+                        "source": f"hf_{dataset_name.split('/')[0]}_c2",
+                        "metadata": {
+                            "c2_url": url,
+                            "threat_type": str(url_type),
+                            "pattern": "c2_communication"
+                        }
                     }
-                }
 
-                samples.append(sample)
+                    samples.append(sample)
 
-            logger.info(f"Generated {len(samples)} C2 scripts from cybersixgill")
-            return samples
+                if samples:
+                    logger.info(f"Generated {len(samples)} C2 scripts from {dataset_name}")
+                    return samples
 
-        except Exception as e:
-            logger.warning(f"cybersixgill dataset not available or failed: {e}")
-            logger.info("Generating fallback C2 samples")
-            return self._generate_fallback_c2_samples(max_samples)
+            except Exception as e:
+                logger.warning(f"Dataset {dataset_name} failed: {e}")
+                continue
+
+        logger.info("All URL datasets failed, generating fallback C2 samples")
+        return self._generate_fallback_c2_samples(max_samples)
 
     def _generate_c2_script(self, url: str, threat_type: str) -> str:
         """

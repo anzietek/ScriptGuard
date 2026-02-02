@@ -124,10 +124,12 @@ def advanced_data_ingestion(config: dict) -> List[Dict]:
     # Additional HuggingFace Datasets (InQuest, dhuynh, cybersixgill)
     if config.get("data_sources", {}).get("additional_hf", {}).get("enabled", False):
         logger.info("Fetching data from additional HuggingFace datasets...")
-        additional_config = config["data_sources"]["additional_hf"]
+        additional_config = config["data_sources"]["addiKtional_hf"]
 
         try:
-            additional_source = AdditionalHFDatasets()
+            # Pass HuggingFace token
+            hf_token = config.get("api_keys", {}).get("huggingface_token")
+            additional_source = AdditionalHFDatasets(token=hf_token)
 
             max_per_dataset = additional_config.get("max_samples_per_dataset", 50)
 

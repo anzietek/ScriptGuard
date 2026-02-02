@@ -67,23 +67,23 @@ data_sources:
       - "remote code execution"
       - "command injection"
 
-  # Additional HuggingFace Datasets
+  # Additional HuggingFace Datasets (REAL datasets that exist)
   additional_hf:
-    enabled: false  # Disabled - these datasets don't exist or are inaccessible
+    enabled: true  # ✅ Now using REAL datasets from HuggingFace
     max_samples_per_dataset: 50
     datasets:
-      - name: "InQuest/malware-samples"
-        description: "Real malware samples collection"
+      - name: "rr4433/Powershell_Malware_Detection_Dataset"
+        description: "Powershell malware samples (script-based)"
         type: "malicious"
-        note: "Dataset doesn't exist on HuggingFace Hub"
-      - name: "dhuynh/malware-classification"
-        description: "Malware classification dataset"
+      - name: "pacificsun/Malware_10k"
+        description: "10k malware samples dataset"
         type: "malicious"
-        note: "Dataset doesn't exist on HuggingFace Hub"
-      - name: "cybersixgill/malicious-urls-dataset"
-        description: "Malicious URLs for C2 pattern generation"
+      - name: "deepcode-ai/Malware-Prediction"
+        description: "Malware prediction/classification dataset"
+        type: "malicious"
+      - name: "stanpony/phishing_urls"
+        description: "Phishing URLs converted to C2 patterns"
         type: "malicious_c2"
-        note: "Dataset doesn't exist on HuggingFace Hub"
 
 # Database Configuration (PostgreSQL)
 database:
