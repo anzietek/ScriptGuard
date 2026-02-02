@@ -14,6 +14,8 @@ pipeline:
 api_keys:
   github_token: ${GITHUB_API_TOKEN}
   nvd_api_key: ${NVD_API_KEY}
+  malwarebazaar_api_key: ${MALWAREBAZAAR_API_KEY}
+  huggingface_token: ${HUGGINGFACE_TOKEN}
 
 # Data Sources Configuration
 data_sources:
@@ -51,10 +53,9 @@ data_sources:
     max_samples: 100
 
   huggingface:
-    enabled: true
+    enabled: false  # Disabled - the-stack-dedup is gated and requires special access
     datasets:
-      - "codeparrot/github-code"
-      - "bigcode/the-stack-dedup"
+      - "codeparrot/github-code"  # This one might work
     max_samples: 10000
 
   cve_feeds:
@@ -68,18 +69,21 @@ data_sources:
 
   # Additional HuggingFace Datasets
   additional_hf:
-    enabled: true
+    enabled: false  # Disabled - these datasets don't exist or are inaccessible
     max_samples_per_dataset: 50
     datasets:
       - name: "InQuest/malware-samples"
         description: "Real malware samples collection"
         type: "malicious"
+        note: "Dataset doesn't exist on HuggingFace Hub"
       - name: "dhuynh/malware-classification"
         description: "Malware classification dataset"
         type: "malicious"
+        note: "Dataset doesn't exist on HuggingFace Hub"
       - name: "cybersixgill/malicious-urls-dataset"
         description: "Malicious URLs for C2 pattern generation"
         type: "malicious_c2"
+        note: "Dataset doesn't exist on HuggingFace Hub"
 
 # Database Configuration (PostgreSQL)
 database:

@@ -67,6 +67,7 @@ services:
       # API Keys
       - GITHUB_API_TOKEN=${GITHUB_API_TOKEN}
       - NVD_API_KEY=${NVD_API_KEY}
+      - MALWAREBAZAAR_API_KEY=${MALWAREBAZAAR_API_KEY}
       - HUGGINGFACE_TOKEN=${HUGGINGFACE_TOKEN}
       - COMET_API_KEY=${COMET_API_KEY}
       - COMET_PROJECT_NAME=${COMET_PROJECT_NAME:-scriptguard}
@@ -78,10 +79,16 @@ services:
       # Python
       - PYTHONUNBUFFERED=1
       - PYTHONPATH=/app/src
+
+      # ZenML configuration
+      - ZENML_STORE_TYPE=sql
+      - ZENML_STORE_URL=postgresql://scriptguard:${POSTGRES_PASSWORD:-scriptguard_secure_password}@postgres:5432/scriptguard
     volumes:
       - model_data:/app/models
       - training_logs:/app/logs
+      - zenml_data:/root/.config/zenml
       - ./config.yaml:/app/config.yaml:ro
+      - ./zenml_config.yaml:/app/zenml_config.yaml:ro
     depends_on:
       postgres:
         condition: service_healthy
@@ -218,6 +225,8 @@ volumes:
   model_data:
     driver: local
   training_logs:
+    driver: local
+  zenml_data:
     driver: local
   api_logs:
     driver: local

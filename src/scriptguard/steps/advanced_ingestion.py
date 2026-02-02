@@ -69,7 +69,9 @@ def advanced_data_ingestion(config: dict) -> List[Dict]:
         mb_config = config["data_sources"]["malwarebazaar"]
 
         try:
-            mb_source = MalwareBazaarDataSource()
+            # Get API key from config or environment
+            mb_api_key = config.get("api_keys", {}).get("malwarebazaar_api_key")
+            mb_source = MalwareBazaarDataSource(api_key=mb_api_key)
 
             malicious_samples = mb_source.fetch_malicious_samples(
                 tags=mb_config.get("tags"),
@@ -87,7 +89,9 @@ def advanced_data_ingestion(config: dict) -> List[Dict]:
         hf_config = config["data_sources"]["huggingface"]
 
         try:
-            hf_source = HuggingFaceDataSource()
+            # Get HuggingFace token from config
+            hf_token = config.get("api_keys", {}).get("huggingface_token")
+            hf_source = HuggingFaceDataSource(token=hf_token)
 
             benign_samples = hf_source.fetch_benign_samples(
                 max_samples=hf_config.get("max_samples", 10000),

@@ -207,10 +207,23 @@ The pipeline will:
 Start inference API:
 
 ```bash
-# Using Docker
-docker-compose -f docker/docker-compose.yml up --build
+# Using Docker (Recommended for Production)
 
-# Or directly
+## Training in Docker
+```bash
+cd docker
+docker-compose build training
+docker-compose up training
+```
+
+**Note:** ZenML is configured to use PostgreSQL as store backend to avoid Windows path issues. See `docs/DOCKER_ZENML_FIX.md` for details.
+
+## API Server in Docker
+```bash
+docker-compose up -d api
+```
+
+# Or directly (Local Development)
 uvicorn scriptguard.api.main:app --host 0.0.0.0 --port 8000
 ```
 

@@ -1,33 +1,40 @@
 # ZenML Pipeline Configuration
 # Controls caching behavior for pipeline steps
+# CACHE DISABLED: Windows path issues with backslashes in artifact store
 
 steps:
   advanced_data_ingestion:
-    enable_cache: true  # Cache data ingestion by default
+    enable_cache: false  # Disabled - Windows path issues
 
   validate_samples:
-    enable_cache: true   # Can reuse validation
+    enable_cache: false  # Disabled - Windows path issues
 
   filter_by_quality:
-    enable_cache: true
+    enable_cache: false  # Disabled - Windows path issues
 
   extract_features:
-    enable_cache: true
+    enable_cache: false  # Disabled - Windows path issues
 
   analyze_feature_importance:
-    enable_cache: true
+    enable_cache: false  # Disabled - Windows path issues
 
   augment_malicious_samples:
-    enable_cache: true   # Can reuse augmentation
+    enable_cache: false  # Disabled - Windows path issues
 
   balance_dataset:
-    enable_cache: true
+    enable_cache: false  # Disabled - Windows path issues
+
+  augment_with_qdrant_patterns:
+    enable_cache: false  # Disabled - Windows path issues
+
+  validate_qdrant_augmentation:
+    enable_cache: false  # Disabled - Windows path issues
 
   preprocess_data:
-    enable_cache: true
+    enable_cache: false  # Disabled - Windows path issues
 
-  split_train_test:
-    enable_cache: true
+  split_raw_data:
+    enable_cache: false  # Disabled - Windows path issues
 
   train_model:
     enable_cache: false  # Always train fresh

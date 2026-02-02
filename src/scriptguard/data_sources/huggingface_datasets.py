@@ -6,16 +6,30 @@ Loads benign code samples from Hugging Face datasets.
 from scriptguard.utils.logger import logger
 from typing import List, Dict, Optional
 from datetime import datetime
+import os
 
 class HuggingFaceDataSource:
     """Hugging Face datasets integration for benign code samples."""
 
-    def __init__(self):
-        """Initialize Hugging Face data source."""
+    def __init__(self, token: Optional[str] = None):
+        """
+        Initialize Hugging Face data source.
+
+        Args:
+            token: HuggingFace token for accessing gated datasets
+        """
+        self.token = token or os.getenv("HUGGINGFACE_TOKEN")
+
         try:
             from datasets import load_dataset
             self.load_dataset = load_dataset
             self.available = True
+
+            if self.token:
+                logger.info("HuggingFace token configured for gated datasets")
+            else:
+                logger.warning("No HuggingFace token - gated datasets will fail")
+
         except ImportError:
             logger.warning("datasets library not installed. Hugging Face source unavailable.")
             self.available = False
@@ -51,7 +65,8 @@ class HuggingFaceDataSource:
                 dataset_name,
                 split=split,
                 streaming=True,
-                trust_remote_code=True
+                trust_remote_code=True,
+                token=self.token  # Add token for gated datasets
             )
 
             samples = []
@@ -136,7 +151,8 @@ class HuggingFaceDataSource:
                 dataset_name,
                 data_dir=subset,
                 split="train",
-                streaming=True
+                streaming=True,
+                token=self.token  # Add token for gated dataset
             )
 
             samples = []

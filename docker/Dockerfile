@@ -91,9 +91,32 @@ ENV PYTHONPATH="/app/src:${PYTHONPATH}"
 # Create directories for models and logs
 RUN mkdir -p /app/models /app/logs /app/data
 
+# Initialize ZenML with SQL store (will be configured at runtime via env vars)
+RUN mkdir -p /root/.config/zenml && \
+    echo "Using SQL store for ZenML - configured via environment variables"
+
 # Healthcheck
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
     CMD python -c "import sys; sys.exit(0)"
+
+# Create entrypoint script for ZenML initialization
+RUN echo '#!/bin/bash\n\
+set -e\n\
+\n\
+# Initialize ZenML if not already initialized\n\
+if [ ! -f /root/.config/zenml/.zen_store ]; then\n\
+  echo "Initializing ZenML with SQL store..."\n\
+  zenml init\n\
+  if [ -n "$ZENML_STORE_URL" ]; then\n\
+    zenml connect --url "$ZENML_STORE_URL" || echo "Using default local store"\n\
+  fi\n\
+fi\n\
+\n\
+# Run the main application\n\
+exec "$@"\n\
+' > /app/entrypoint.sh && chmod +x /app/entrypoint.sh
+
+ENTRYPOINT ["/app/entrypoint.sh"]
 
 # Default command
 CMD ["python", "src/main.py"]

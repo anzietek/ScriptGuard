@@ -9,7 +9,10 @@ from scriptguard.utils.logger import logger
 os.environ["TRANSFORMERS_NO_ADVISORY_WARNINGS"] = "1"
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
-load_dotenv()
+load_dotenv()  # Load default .env
+# Also load .env.dev if it exists (for development with more keys)
+if os.path.exists(".env.dev"):
+    load_dotenv(".env.dev", override=True)
 
 # Fix ZenML Windows path handling (monkey-patch)
 if sys.platform == "win32":
