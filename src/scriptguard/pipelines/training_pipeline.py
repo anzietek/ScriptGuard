@@ -1,7 +1,6 @@
 from zenml import pipeline, step
 from datasets import Dataset
 from typing import List, Dict, Any, Tuple
-from scriptguard.utils.step_cache import get_cache_setting
 from scriptguard.steps.data_ingestion import (
     github_data_ingestion,
     local_data_ingestion,
@@ -37,6 +36,44 @@ def split_train_test(dataset: Dataset, test_size: float = 0.1) -> Tuple[Dataset,
     """
     split_dict = dataset.train_test_split(test_size=test_size, seed=42)
     return split_dict['train'], split_dict['test']
+
+@step
+def split_raw_data(
+    data: List[Dict[str, Any]],
+    test_size: float = 0.1
+) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]], Dataset]:
+    """
+    Splits raw data (list of dicts) into train and test sets.
+
+    Args:
+        data: List of dictionaries with code samples
+        test_size: Fraction for test set
+
+    Returns:
+        Tuple of (train_list, test_list, raw_test_dataset)
+        - train_list: List for preprocessing
+        - test_list: List for preprocessing
+        - raw_test_dataset: HF Dataset for evaluation (not preprocessed)
+    """
+    from datasets import Dataset as HFDataset
+    from scriptguard.utils.logger import logger
+
+    logger.info(f"Splitting {len(data)} samples into train/test (test_size={test_size})")
+
+    # Convert to HF Dataset for splitting
+    temp_dataset = HFDataset.from_list(data)
+    split_dict = temp_dataset.train_test_split(test_size=test_size, seed=42)
+
+    # Convert to lists for preprocessing
+    train_list = [dict(item) for item in split_dict['train']]
+    test_list = [dict(item) for item in split_dict['test']]
+
+    # Keep raw test as Dataset for evaluation
+    raw_test_dataset = split_dict['test']
+
+    logger.info(f"Split complete: {len(train_list)} train, {len(test_list)} test")
+
+    return train_list, test_list, raw_test_dataset
 
 @step
 def merge_data_sources(data_sources: List[List[Dict[str, Any]]]) -> List[Dict[str, Any]]:
@@ -148,28 +185,29 @@ def advanced_training_pipeline(
     else:
         qdrant_augmented_data = balanced_data
 
-    # Step 8: Preprocess for training
-    processed_dataset = preprocess_data(data=qdrant_augmented_data)
-
-    # Step 9: Split into train/test
+    # Step 8: Split data BEFORE preprocessing (using dedicated step)
     test_size = config.get("training", {}).get("test_split_size", 0.1)
-    train_dataset, test_dataset = split_train_test(
-        dataset=processed_dataset,
+    train_data_list, test_data_list, raw_test_data = split_raw_data(
+        data=qdrant_augmented_data,
         test_size=test_size
     )
 
-    # Step 10: Train model with evaluation dataset
+    # Step 9: Preprocess training and test data
+    processed_train_dataset = preprocess_data(data=train_data_list)
+    processed_test_dataset = preprocess_data(data=test_data_list)
+
+    # Step 10: Train model with preprocessed evaluation dataset
     adapter_path = _train_model(
-        dataset=train_dataset,
-        eval_dataset=test_dataset,
+        dataset=processed_train_dataset,
+        eval_dataset=processed_test_dataset,
         model_id=model_id,
         config=config
     )
 
-    # Step 11: Evaluate model
+    # Step 11: Evaluate model using RAW test data (not tokenized)
     metrics = evaluate_model(
         adapter_path=adapter_path,
-        test_dataset=test_dataset,
+        test_dataset=raw_test_data,
         base_model_id=model_id,
         config=config
     )

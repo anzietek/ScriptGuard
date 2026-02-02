@@ -72,8 +72,15 @@ def evaluate_model(
     logger.info("Running inference on test set...")
 
     for i, sample in enumerate(test_dataset):
-        if i % 50 == 0:
+        if i % 10 == 0:
             logger.info(f"Processed {i}/{len(test_dataset)} samples")
+
+        # Get code from raw dataset - should have 'code' or 'content' field
+        code = sample.get("code", sample.get("content", ""))
+        
+        if not code:
+            logger.warning(f"Sample {i} has no code content, skipping")
+            continue
 
         # Get true label - convert string labels to binary
         label_str = sample.get("label", sample.get("is_malicious", "benign"))
@@ -81,20 +88,6 @@ def evaluate_model(
             true_label = 1 if label_str.lower() == "malicious" else 0
         else:
             true_label = int(label_str)
-        y_true.append(true_label)
-
-        # Get code from tokenized dataset (need to decode back)
-        # The test_dataset is already tokenized, so we need to decode it
-        if "input_ids" in sample:
-            # Decode the tokenized input back to text
-            input_text = tokenizer.decode(sample["input_ids"], skip_special_tokens=True)
-            # Extract code portion from training format
-            if "Code:\n" in input_text and "\n\nClassification:" in input_text:
-                code = input_text.split("Code:\n")[1].split("\n\nClassification:")[0]
-            else:
-                code = input_text[:500]
-        else:
-            code = sample.get("code", sample.get("content", ""))
 
         # Use centralized prompt formatting (matches training format)
         prompt = format_inference_prompt(code=code, max_code_length=max_code_length)
@@ -119,10 +112,12 @@ def evaluate_model(
         # Use centralized parsing
         predicted_label = parse_classification_output(generated_text)
 
+        # Add to results lists (only after successful prediction)
+        y_true.append(true_label)
         y_pred.append(predicted_label)
 
         # Store sample result for inspection (first 10 samples)
-        if i < 10:
+        if len(sample_results) < 10:
             sample_results.append({
                 "code_snippet": code[:200],
                 "true_label": true_label,
