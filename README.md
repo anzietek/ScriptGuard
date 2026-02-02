@@ -7,6 +7,7 @@ ScriptGuard is an advanced AI-powered system designed to detect malicious and da
 - **Multi-Source Data Collection**: GitHub, MalwareBazaar, Hugging Face, CVE Feeds
 - **Advanced Preprocessing**: Syntax validation, quality filtering, feature extraction
 - **Intelligent Augmentation**: Code obfuscation, polymorphic variant generation
+- **Few-Shot RAG**: Code similarity search for context-aware classification (NEW - EXPERIMENTAL)
 - **Database Management**: PostgreSQL-based dataset versioning and deduplication
 - **Production-Ready**: FastAPI inference, Docker deployment, RAG with Qdrant
 
@@ -21,8 +22,9 @@ ScriptGuard is an advanced AI-powered system designed to detect malicious and da
 ### ML Pipeline
 - **Base Model:** `bigcode/starcoder2-3b` (Optimized for code analysis)
 - **Fine-tuning:** Parameter-efficient fine-tuning using **QLoRA** (4-bit quantization)
+- **Few-Shot RAG:** Code similarity search using **microsoft/unixcoder-base** embeddings (NEW)
 - **Orchestration:** **ZenML** manages the end-to-end ML lifecycle
-- **RAG:** **Qdrant** stores embeddings of known CVEs and exploits
+- **RAG:** **Qdrant** stores embeddings of known CVEs and code samples
 - **Tracking:** **Comet.ml** monitors experiments and metrics
 
 ### Deployment
@@ -49,31 +51,37 @@ ScriptGuard is an advanced AI-powered system designed to detect malicious and da
 ├── src/
 │   ├── scriptguard/
 │   │   ├── api/                 # FastAPI inference service
-│   │   ├── data_sources/        # NEW: Multi-source data collectors
+│   │   ├── data_sources/        # Multi-source data collectors
 │   │   │   ├── github_api.py
 │   │   │   ├── malwarebazaar_api.py
 │   │   │   ├── huggingface_datasets.py
 │   │   │   └── cve_feeds.py
-│   │   ├── database/            # NEW: Dataset management
+│   │   ├── database/            # Dataset management
 │   │   │   ├── db_schema.py
 │   │   │   ├── dataset_manager.py
 │   │   │   └── deduplication.py
-│   │   ├── monitoring/          # NEW: Statistics & monitoring
+│   │   ├── monitoring/          # Statistics & monitoring
 │   │   │   └── data_stats.py
 │   │   ├── models/              # QLoRA fine-tuning logic
 │   │   ├── pipelines/           # ZenML pipeline definitions
 │   │   ├── rag/                 # Qdrant RAG store
+│   │   │   ├── qdrant_store.py           # CVE patterns
+│   │   │   └── code_similarity_store.py  # NEW: Code embeddings
 │   │   └── steps/               # ZenML steps
-│   │       ├── advanced_ingestion.py      # NEW
-│   │       ├── data_validation.py         # NEW
-│   │       ├── advanced_augmentation.py   # NEW
-│   │       └── feature_extraction.py      # NEW
+│   │       ├── advanced_ingestion.py
+│   │       ├── data_validation.py
+│   │       ├── advanced_augmentation.py
+│   │       ├── feature_extraction.py
+│   │       └── vectorize_samples.py      # NEW: Few-Shot RAG sync
 │   └── main.py                  # Pipeline entry point
-├── docs/                        # NEW: Comprehensive documentation
+├── docs/                        # Comprehensive documentation
 │   ├── TRAINING_GUIDE.md
 │   ├── USAGE_GUIDE.md
-│   └── TUNING_GUIDE.md
-├── config.yaml                  # NEW: Central configuration
+│   ├── TUNING_GUIDE.md
+│   ├── FEW_SHOT_RAG_GUIDE.md        # NEW: Full RAG guide
+│   └── FEW_SHOT_RAG_SUMMARY.md      # NEW: Quick reference
+├── test_fewshot_rag.py          # NEW: Test script for RAG
+├── config.yaml                  # Central configuration
 ├── .env.example                 # Environment variables template
 ├── pyproject.toml               # Dependency management
 └── README.md
@@ -257,8 +265,35 @@ Response:
 - **[USAGE_GUIDE.md](docs/USAGE_GUIDE.md)** - API usage and integration
 - **[TUNING_GUIDE.md](docs/TUNING_GUIDE.md)** - Hyperparameter tuning
 - **[DEPLOYMENT.md](docs/DEPLOYMENT.md)** - Production deployment guide
+- **[FEW_SHOT_RAG_GUIDE.md](docs/FEW_SHOT_RAG_GUIDE.md)** - Few-Shot RAG implementation (NEW)
+- **[FEW_SHOT_RAG_SUMMARY.md](docs/FEW_SHOT_RAG_SUMMARY.md)** - Quick RAG reference (NEW)
 
 ## 🔧 Advanced Features
+
+### Few-Shot RAG (Code Similarity Search) - NEW v2.1
+
+⚠️ **EXPERIMENTAL FEATURE - NOT YET VALIDATED**
+
+ScriptGuard now includes a **Code Similarity Search** system to potentially improve inference:
+
+**How it works:**
+1. **Vectorization**: Code samples from PostgreSQL are embedded using `microsoft/unixcoder-base`
+2. **Storage**: Embeddings stored in Qdrant vector database
+3. **Retrieval**: During inference, finds k=3 most similar code examples
+4. **Context**: Similar examples added to prompt (Few-Shot Learning)
+
+**Expected benefits (not yet measured):**
+- Model sees actual code patterns, not just CVE descriptions
+- Balanced context with mix of malicious + benign examples
+- May reduce false positives/negatives
+
+**To test:**
+```bash
+python test_fewshot_rag.py  # Test implementation
+python -m scriptguard.pipelines.training_pipeline  # Train with RAG
+```
+
+**See full documentation:** [FEW_SHOT_RAG_GUIDE.md](docs/FEW_SHOT_RAG_GUIDE.md)
 
 ### Data Sources
 
@@ -316,14 +351,29 @@ db.create_version_snapshot("v1.0")
 
 **Model:** starcoder2-3b with QLoRA fine-tuning
 
+### Current Results (Standard Inference)
 | Metric | Score |
 |--------|-------|
-| Accuracy | 96.5% |
-| Precision | 94.2% |
-| Recall | 97.8% |
-| F1 Score | 96.0% |
+| F1 Score | **0.52** |
 
-**Inference Speed:** ~50ms per script (GPU), ~200ms (CPU)
+**Note:** Baseline performance needs improvement.
+
+### Few-Shot RAG (NEW - v2.1) - EXPERIMENTAL
+**Status:** ⚠️ Implementation complete, **NOT YET TESTED**
+
+**Expected improvements (theoretical):**
+- F1 Score target: 0.70-0.85 (needs validation)
+- Approach: Context-aware classification with similar code examples
+
+**To test:**
+```bash
+python test_fewshot_rag.py  # Run tests
+python -m scriptguard.pipelines.training_pipeline  # Train with RAG
+```
+
+**Inference Speed:** 
+- Standard: ~50ms per script (GPU), ~200ms (CPU)
+- Few-Shot RAG: Expected +10-20ms overhead (untested)
 
 ## 🤝 Contributing
 

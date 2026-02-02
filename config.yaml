@@ -120,6 +120,14 @@ qdrant:
   api_key: ""  # or use environment variable QDRANT_API_KEY
   use_https: false
 
+# Code Embedding Configuration (for Few-Shot RAG)
+code_embedding:
+  model: "microsoft/unixcoder-base"  # Dedicated code embedding model
+  # Alternative: "Salesforce/codet5p-110m-embedding"
+  # Note: These models are specifically trained for code similarity
+  batch_size: 100
+  max_code_length: 512
+
 # Data Validation Configuration
 validation:
   validate_syntax: true
@@ -172,7 +180,7 @@ training:
   # Training Hyperparameters
   batch_size: 2  # Reduced for 4GB VRAM
   gradient_accumulation_steps: 8  # Increased to maintain effective batch size of 16
-  num_epochs: 10  # Increased from 3 → model needs more time to learn
+  num_epochs: 5  # Increased from 3 → model needs more time to learn
   learning_rate: 0.0001  # Decreased from 0.0002 → more stable training
   weight_decay: 0.01
   warmup_steps: 200  # Increased from 100 → longer warmup
@@ -198,8 +206,7 @@ training:
 
   # Early Stopping
   early_stopping: true
-  early_stopping_patience: 5  # ZWIĘKSZONE z 3 → dajemy modelowi więcej szans
-
+  early_stopping_patience: 5 # Increased from 3 → more patience
   # Model Evaluation
   eval_max_new_tokens: 20
   eval_temperature: 0.1

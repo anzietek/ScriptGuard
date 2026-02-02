@@ -21,6 +21,7 @@ from scriptguard.steps.feature_extraction import extract_features, analyze_featu
 from scriptguard.steps.data_preprocessing import preprocess_data
 from scriptguard.steps.model_training import train_model as _train_model
 from scriptguard.steps.model_evaluation import evaluate_model
+from scriptguard.steps.vectorize_samples import vectorize_samples
 
 @step
 def split_train_test(dataset: Dataset, test_size: float = 0.1) -> Tuple[Dataset, Dataset]:
@@ -185,6 +186,15 @@ def advanced_training_pipeline(
     else:
         qdrant_augmented_data = balanced_data
 
+    # Step 7.6: Vectorize samples to Qdrant for Few-Shot RAG
+    # This step synchronizes code samples to vector DB BEFORE splitting
+    # so that evaluation can retrieve similar examples
+    vectorization_result = vectorize_samples(
+        config=config,
+        clear_existing=True  # Clear old vectors
+        # max_samples not specified = vectorize all samples
+    )
+
     # Step 8: Split data BEFORE preprocessing (using dedicated step)
     test_size = config.get("training", {}).get("test_split_size", 0.1)
     train_data_list, test_data_list, raw_test_data = split_raw_data(
@@ -205,11 +215,13 @@ def advanced_training_pipeline(
     )
 
     # Step 11: Evaluate model using RAW test data (not tokenized)
+    # Enable Few-Shot RAG for improved evaluation
     metrics = evaluate_model(
         adapter_path=adapter_path,
         test_dataset=raw_test_data,
         base_model_id=model_id,
-        config=config
+        config=config,
+        use_fewshot_rag=True  # NEW: Enable Few-Shot RAG
     )
 
     return metrics
