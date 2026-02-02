@@ -2,12 +2,11 @@ from typing import Dict, Any
 from zenml import step
 from datasets import Dataset
 import torch
-from transformers import AutoTokenizer, AutoModelForCausalLM, BitsAndBytesConfig
+from transformers import AutoTokenizer, AutoModelForCausalLM
 from peft import PeftModel
 from sklearn.metrics import accuracy_score, precision_recall_fscore_support, confusion_matrix, classification_report
 from scriptguard.utils.logger import logger
 from scriptguard.utils.prompts import format_inference_prompt, parse_classification_output
-import numpy as np
 
 @step
 def evaluate_model(
@@ -46,35 +45,42 @@ def evaluate_model(
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
 
-    # Load base model with 4-bit quantization
-    bnb_config = BitsAndBytesConfig(
-        load_in_4bit=True,
-        bnb_4bit_use_double_quant=True,
-        bnb_4bit_quant_type="nf4",
-        bnb_4bit_compute_dtype=torch.bfloat16,
-        llm_int8_enable_fp32_cpu_offload=True
-    )
-
-    # Try GPU first, fallback to CPU if insufficient VRAM
+    # Load base model - try GPU first, fallback to CPU
+    # For evaluation, we use simpler loading without problematic quantization config
     try:
+        # Try loading with 8-bit quantization (more stable than 4-bit for inference)
+        logger.info("Attempting to load model with 8-bit quantization on GPU...")
         base_model = AutoModelForCausalLM.from_pretrained(
             base_model_id,
-            quantization_config=bnb_config,
+            load_in_8bit=True,
             device_map="auto",
-            low_cpu_mem_usage=True
+            low_cpu_mem_usage=True,
+            torch_dtype=torch.float16
         )
-        logger.info("Model loaded on GPU with 4-bit quantization")
-    except (ValueError, RuntimeError) as e:
-        logger.warning(f"GPU loading failed: {e}")
-        logger.info("Falling back to CPU (evaluation will be slower)...")
-        # Load on CPU without quantization for evaluation
-        base_model = AutoModelForCausalLM.from_pretrained(
-            base_model_id,
-            device_map="cpu",
-            torch_dtype=torch.float32,
-            low_cpu_mem_usage=True
-        )
-        logger.info("Model loaded on CPU")
+        logger.info("✓ Model loaded on GPU with 8-bit quantization")
+    except Exception as e:
+        logger.warning(f"8-bit GPU loading failed: {e}")
+        try:
+            # Try loading on GPU without quantization
+            logger.info("Attempting to load model on GPU without quantization...")
+            base_model = AutoModelForCausalLM.from_pretrained(
+                base_model_id,
+                device_map="auto",
+                torch_dtype=torch.float16,
+                low_cpu_mem_usage=True
+            )
+            logger.info("✓ Model loaded on GPU without quantization")
+        except Exception as e2:
+            logger.warning(f"GPU loading failed: {e2}")
+            logger.info("Falling back to CPU (evaluation will be slower)...")
+            # Final fallback: Load on CPU
+            base_model = AutoModelForCausalLM.from_pretrained(
+                base_model_id,
+                device_map="cpu",
+                torch_dtype=torch.float32,
+                low_cpu_mem_usage=True
+            )
+            logger.info("✓ Model loaded on CPU")
 
     # Load LoRA adapter
     model = PeftModel.from_pretrained(base_model, adapter_path)

@@ -82,7 +82,7 @@ class AdditionalHFDatasets:
                         continue
 
                     sample = {
-                        "code": str(code_content),
+                        "content": str(code_content),
                         "label": "malicious",
                         "source": f"hf_{dataset_name.split('/')[0]}",
                         "metadata": {
@@ -142,7 +142,7 @@ for root, dirs, files in os.walk("/"):
 
         for i in range(min(count, len(malware_templates))):
             samples.append({
-                "code": malware_templates[i],
+                "content": malware_templates[i],
                 "label": "malicious",
                 "source": f"{source}_fallback",
                 "metadata": {"type": "synthetic"}
@@ -197,7 +197,7 @@ for root, dirs, files in os.walk("/"):
                         continue
 
                     sample = {
-                        "code": str(code_content),
+                        "content": str(code_content),
                         "label": "malicious",
                         "source": f"hf_{dataset_name.split('/')[0]}",
                         "metadata": {
@@ -281,7 +281,7 @@ for root, dirs, files in os.walk("/"):
                     code = self._generate_c2_script(url, str(url_type))
 
                     sample = {
-                        "code": code,
+                        "content": code,
                         "label": "malicious",
                         "source": f"hf_{dataset_name.split('/')[0]}_c2",
                         "metadata": {
@@ -430,7 +430,7 @@ establish_connection()
         for i, url in enumerate(fallback_urls[:count]):
             code = self._generate_c2_script(url, "c2_fallback")
             samples.append({
-                "code": code,
+                "content": code,
                 "label": "malicious",
                 "source": "cybersixgill_fallback",
                 "metadata": {
