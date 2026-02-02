@@ -81,6 +81,48 @@ def main_legacy():
     logger.info("Pipeline run completed.")
 
 
+def initialize_qdrant(config: dict) -> bool:
+    """
+    Initialize Qdrant vector store with initial data if needed.
+
+    Returns:
+        True if successful or already initialized, False on error
+    """
+    try:
+        from scriptguard.rag.qdrant_store import QdrantStore, bootstrap_cve_data
+
+        qdrant_config = config.get("qdrant", {})
+
+        # Try to connect to Qdrant
+        store = QdrantStore(
+            host=qdrant_config.get("host", "localhost"),
+            port=qdrant_config.get("port", 6333),
+            collection_name=qdrant_config.get("collection_name", "malware_knowledge"),
+            embedding_model=qdrant_config.get("embedding_model", "all-MiniLM-L6-v2"),
+            api_key=qdrant_config.get("api_key") if qdrant_config.get("api_key") else None,
+            use_https=qdrant_config.get("use_https", False)
+        )
+
+        # Check if collection has data
+        info = store.get_collection_info()
+        points_count = info.get('points_count', 0)
+
+        if points_count == 0:
+            logger.info("Qdrant collection is empty. Bootstrapping with initial CVE data...")
+            bootstrap_cve_data(store)
+            logger.info(f"✅ Qdrant initialized with CVE patterns")
+        else:
+            logger.info(f"✅ Qdrant already initialized ({points_count} vectors)")
+
+        return True
+
+    except Exception as e:
+        logger.warning(f"⚠️  Qdrant initialization failed: {e}")
+        logger.warning("Training will continue without RAG support")
+        logger.warning("To use RAG, ensure Qdrant is running: docker-compose up -d")
+        return False
+
+
 def main():
     """Advanced training pipeline with config.yaml."""
     # Load configuration
@@ -93,6 +135,9 @@ def main():
     except Exception as e:
         logger.error(f"Failed to load configuration: {e}")
         return
+
+    # Initialize Qdrant (optional, non-blocking)
+    initialize_qdrant(config)
 
     # Get model ID from config
     model_id = config.get("training", {}).get("model_id", "bigcode/starcoder2-3b")

@@ -84,11 +84,11 @@ database:
 
 # Qdrant Configuration
 qdrant:
-  host: ${QDRANT_HOST:-localhost}
-  port: ${QDRANT_PORT:-6333}
+  host: "localhost"  # or use environment variable QDRANT_HOST
+  port: 6333  # or use environment variable QDRANT_PORT
   collection_name: "malware_knowledge"
   embedding_model: "all-MiniLM-L6-v2"
-  api_key: ${QDRANT_API_KEY:-}
+  api_key: ""  # or use environment variable QDRANT_API_KEY
   use_https: false
 
 # Data Validation Configuration
@@ -112,6 +112,10 @@ augmentation:
   balance_dataset: true
   target_balance_ratio: 1.0
   balance_method: "undersample"  # or "oversample"
+
+  # Qdrant CVE Pattern Augmentation
+  use_qdrant_patterns: true  # Enable augmentation with CVE patterns from Qdrant
+  qdrant_format_style: "detailed"  # Options: "detailed", "pattern_only", "description_only"
 
 # Feature Extraction Configuration
 features:

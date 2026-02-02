@@ -14,6 +14,10 @@ from scriptguard.steps.advanced_augmentation import (
     augment_malicious_samples as _augment_malicious_samples,
     balance_dataset
 )
+from scriptguard.steps.qdrant_augmentation import (
+    augment_with_qdrant_patterns,
+    validate_qdrant_augmentation
+)
 from scriptguard.steps.feature_extraction import extract_features, analyze_feature_importance
 from scriptguard.steps.data_preprocessing import preprocess_data
 from scriptguard.steps.model_training import train_model as _train_model
@@ -130,8 +134,22 @@ def advanced_training_pipeline(
     else:
         balanced_data = augmented_data
 
+    # Step 7.5: Augment with Qdrant CVE patterns (if enabled)
+    if config.get("augmentation", {}).get("use_qdrant_patterns", False):
+        qdrant_augmented_data = augment_with_qdrant_patterns(
+            data=balanced_data,
+            config=config
+        )
+
+        # Validate augmentation
+        augmentation_stats = validate_qdrant_augmentation(
+            data=qdrant_augmented_data
+        )
+    else:
+        qdrant_augmented_data = balanced_data
+
     # Step 8: Preprocess for training
-    processed_dataset = preprocess_data(data=balanced_data)
+    processed_dataset = preprocess_data(data=qdrant_augmented_data)
 
     # Step 9: Split into train/test
     test_size = config.get("training", {}).get("test_split_size", 0.1)

@@ -28,31 +28,52 @@ rag_store = None
 @app.on_event("startup")
 def load_resources():
     global model, tokenizer, rag_store
-    
+
     model_id = os.getenv("BASE_MODEL_ID", "bigcode/starcoder2-3b")
     adapter_path = os.getenv("ADAPTER_PATH", "./model_checkpoints/final_adapter")
-    
+
     device = "cuda" if torch.cuda.is_available() else "cpu"
     torch_dtype = torch.float16 if torch.cuda.is_available() else torch.float32
-    
+
+    logger.info(f"Loading model: {model_id} on {device}")
     tokenizer = AutoTokenizer.from_pretrained(model_id)
     base_model = AutoModelForCausalLM.from_pretrained(
-        model_id, 
-        torch_dtype=torch_dtype, 
+        model_id,
+        torch_dtype=torch_dtype,
         device_map="auto" if torch.cuda.is_available() else None
     )
-    
+
     if os.path.exists(adapter_path):
         model = PeftModel.from_pretrained(base_model, adapter_path)
-        print(f"Loaded adapter from {adapter_path}")
+        logger.info(f"✅ Loaded adapter from {adapter_path}")
     else:
         model = base_model
-        print(f"Adapter not found at {adapter_path}, using base model.")
-        
-    rag_store = QdrantStore(
-        host=os.getenv("QDRANT_HOST", "localhost"),
-        port=int(os.getenv("QDRANT_PORT", 6333))
-    )
+        logger.warning(f"⚠️  Adapter not found at {adapter_path}, using base model.")
+
+    # Initialize Qdrant RAG store
+    try:
+        from scriptguard.rag.qdrant_store import bootstrap_cve_data
+
+        rag_store = QdrantStore(
+            host=os.getenv("QDRANT_HOST", "localhost"),
+            port=int(os.getenv("QDRANT_PORT", 6333))
+        )
+
+        # Bootstrap with data if collection is empty
+        info = rag_store.get_collection_info()
+        points_count = info.get('points_count', 0)
+
+        if points_count == 0:
+            logger.info("Qdrant collection is empty. Bootstrapping...")
+            bootstrap_cve_data(rag_store)
+            logger.info("✅ Qdrant initialized with CVE patterns")
+        else:
+            logger.info(f"✅ Qdrant ready ({points_count} vectors)")
+
+    except Exception as e:
+        logger.error(f"❌ Qdrant initialization failed: {e}")
+        logger.warning("API will run without RAG support")
+        rag_store = None
 
 @app.post("/analyze", response_model=ScriptAnalysisResponse)
 async def analyze_script(request: ScriptAnalysisRequest):
@@ -62,10 +83,13 @@ async def analyze_script(request: ScriptAnalysisRequest):
     # RAG Context
     rag_context = ""
     related_cves = []
-    if request.include_rag:
-        results = rag_store.search(request.script_content, limit=2)
-        related_cves = results
-        rag_context = "\n".join([f"Known Vulnerability: {r['description']}" for r in results])
+    if request.include_rag and rag_store:
+        try:
+            results = rag_store.search(request.script_content, limit=2)
+            related_cves = results
+            rag_context = "\n".join([f"Known Vulnerability: {r['payload']['description']}" for r in results])
+        except Exception as e:
+            logger.warning(f"RAG search failed: {e}")
     
     prompt = f"""
     Context from known vulnerabilities:
