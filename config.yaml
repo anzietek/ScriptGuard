@@ -66,6 +66,21 @@ data_sources:
       - "remote code execution"
       - "command injection"
 
+  # Additional HuggingFace Datasets
+  additional_hf:
+    enabled: true
+    max_samples_per_dataset: 50
+    datasets:
+      - name: "InQuest/malware-samples"
+        description: "Real malware samples collection"
+        type: "malicious"
+      - name: "dhuynh/malware-classification"
+        description: "Malware classification dataset"
+        type: "malicious"
+      - name: "cybersixgill/malicious-urls-dataset"
+        description: "Malicious URLs for C2 pattern generation"
+        type: "malicious_c2"
+
 # Database Configuration (PostgreSQL)
 database:
   type: "postgresql"  # or "sqlite" for development
@@ -163,7 +178,7 @@ training:
   evaluation_strategy: "steps"
   eval_steps: 100
   save_steps: 500
-  logging_steps: 10
+  logging_steps: 2
   test_split_size: 0.1  # 10% for test set
 
   # Early Stopping

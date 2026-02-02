@@ -249,12 +249,24 @@ Response:
 
 ### Data Sources
 
-ScriptGuard collects training data from:
+ScriptGuard collects training data from multiple sources:
 
+**Primary Sources:**
 - **GitHub** - Searches for malicious and benign code repositories
 - **MalwareBazaar** - Fresh malware samples from abuse.ch
 - **Hugging Face** - Large-scale benign code datasets
 - **CVE Feeds** - Exploit patterns from National Vulnerability Database
+
+**Additional HuggingFace Datasets (v2.1):**
+- **InQuest/malware-samples** - Real-world malware sample collection
+- **dhuynh/malware-classification** - Classified malware dataset for threat type identification
+- **cybersixgill/malicious-urls-dataset** - Malicious URLs converted to C2 communication patterns
+
+These additional datasets provide:
+- ✅ More diverse malware samples
+- ✅ Better coverage of malware families
+- ✅ C2 (Command & Control) pattern detection
+- ✅ Enhanced threat classification capabilities
 
 ### Feature Extraction
 

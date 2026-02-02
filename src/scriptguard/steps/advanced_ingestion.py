@@ -13,6 +13,7 @@ from ..data_sources import (
     HuggingFaceDataSource,
     CVEFeedSource
 )
+from ..data_sources.additional_hf_datasets import AdditionalHFDatasets
 from ..database import DatasetManager, deduplicate_samples
 from ..monitoring import DatasetStatistics
 
@@ -115,6 +116,27 @@ def advanced_data_ingestion(config: dict) -> List[Dict]:
 
         except Exception as e:
             logger.error(f"CVE feeds data source failed: {e}")
+
+    # Additional HuggingFace Datasets (InQuest, dhuynh, cybersixgill)
+    if config.get("data_sources", {}).get("additional_hf", {}).get("enabled", False):
+        logger.info("Fetching data from additional HuggingFace datasets...")
+        additional_config = config["data_sources"]["additional_hf"]
+
+        try:
+            additional_source = AdditionalHFDatasets()
+
+            max_per_dataset = additional_config.get("max_samples_per_dataset", 50)
+
+            # Fetch from all additional datasets
+            additional_samples = additional_source.fetch_all_datasets(
+                max_per_dataset=max_per_dataset
+            )
+
+            all_samples.extend(additional_samples)
+            logger.info(f"Fetched {len(additional_samples)} samples from additional HF datasets")
+
+        except Exception as e:
+            logger.error(f"Additional HF datasets failed: {e}")
 
     logger.info(f"Total samples collected: {len(all_samples)}")
 
