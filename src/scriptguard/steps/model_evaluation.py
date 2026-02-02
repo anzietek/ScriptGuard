@@ -4,7 +4,14 @@ from datasets import Dataset
 import torch
 from transformers import AutoTokenizer, AutoModelForCausalLM
 from peft import PeftModel
-from sklearn.metrics import accuracy_score, precision_recall_fscore_support, confusion_matrix, classification_report
+from sklearn.metrics import (
+    accuracy_score,
+    precision_recall_fscore_support,
+    confusion_matrix,
+    classification_report,
+    roc_auc_score,
+    average_precision_score
+)
 from scriptguard.utils.logger import logger
 from scriptguard.utils.prompts import format_inference_prompt, parse_classification_output
 
@@ -151,6 +158,21 @@ def evaluate_model(
     cm = confusion_matrix(y_true, y_pred)
     tn, fp, fn, tp = cm.ravel() if cm.size == 4 else (0, 0, 0, 0)
 
+    # Additional metrics
+    fpr = fp / (fp + tn) if (fp + tn) > 0 else 0.0  # False Positive Rate
+    fnr = fn / (fn + tp) if (fn + tp) > 0 else 0.0  # False Negative Rate
+    specificity = tn / (tn + fp) if (tn + fp) > 0 else 0.0  # True Negative Rate
+
+    # Try to compute ROC AUC if we have both classes
+    roc_auc = None
+    avg_precision = None
+    if len(set(y_true)) > 1 and len(set(y_pred)) > 1:
+        try:
+            roc_auc = roc_auc_score(y_true, y_pred)
+            avg_precision = average_precision_score(y_true, y_pred)
+        except Exception as e:
+            logger.warning(f"Could not compute ROC AUC: {e}")
+
     # Per-class metrics
     class_report = classification_report(y_true, y_pred, output_dict=True, zero_division=0)
 
@@ -159,6 +181,11 @@ def evaluate_model(
         "precision": float(precision),
         "recall": float(recall),
         "f1_score": float(f1),
+        "specificity": float(specificity),
+        "false_positive_rate": float(fpr),
+        "false_negative_rate": float(fnr),
+        "roc_auc": float(roc_auc) if roc_auc is not None else None,
+        "average_precision": float(avg_precision) if avg_precision is not None else None,
         "true_positives": int(tp),
         "true_negatives": int(tn),
         "false_positives": int(fp),
@@ -173,10 +200,20 @@ def evaluate_model(
     logger.info("=" * 60)
     logger.info("EVALUATION RESULTS")
     logger.info("=" * 60)
-    logger.info(f"Accuracy:  {accuracy:.4f}")
-    logger.info(f"Precision: {precision:.4f}")
-    logger.info(f"Recall:    {recall:.4f}")
-    logger.info(f"F1 Score:  {f1:.4f}")
+    logger.info(f"Test Set Size: {len(test_dataset)}")
+    logger.info(f"")
+    logger.info(f"Accuracy:      {accuracy:.4f}")
+    logger.info(f"Precision:     {precision:.4f}")
+    logger.info(f"Recall:        {recall:.4f}")
+    logger.info(f"F1 Score:      {f1:.4f}")
+    logger.info(f"Specificity:   {specificity:.4f}")
+    if roc_auc is not None:
+        logger.info(f"ROC AUC:       {roc_auc:.4f}")
+    if avg_precision is not None:
+        logger.info(f"Avg Precision: {avg_precision:.4f}")
+    logger.info(f"")
+    logger.info(f"False Positive Rate: {fpr:.4f}")
+    logger.info(f"False Negative Rate: {fnr:.4f}")
     logger.info(f"\nConfusion Matrix:")
     logger.info(f"TN: {tn:4d}  FP: {fp:4d}")
     logger.info(f"FN: {fn:4d}  TP: {tp:4d}")

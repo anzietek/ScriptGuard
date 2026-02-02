@@ -149,6 +149,7 @@ class QLoRAFineTuner:
             learning_rate=training_config.get("learning_rate", 2e-4),
             weight_decay=training_config.get("weight_decay", 0.01),
             warmup_steps=training_config.get("warmup_steps", 100),
+            lr_scheduler_type=training_config.get("lr_scheduler_type", "linear"),  # NEW: support for different schedulers
             num_train_epochs=training_config.get("num_epochs", 3),
             fp16=use_fp16,
             bf16=use_bf16,
@@ -158,6 +159,8 @@ class QLoRAFineTuner:
             eval_steps=training_config.get("eval_steps", 100) if eval_strategy != "no" else None,
             save_strategy="steps",
             save_steps=training_config.get("save_steps", 500),
+            load_best_model_at_end=True if eval_strategy != "no" else False,  # NEW: load best model
+            metric_for_best_model="eval_loss" if eval_strategy != "no" else None,  # NEW: metric for best model
             report_to="wandb",
             push_to_hub=False,
         )

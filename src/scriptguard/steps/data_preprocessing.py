@@ -12,6 +12,21 @@ def preprocess_data(data: List[Dict[str, Any]]) -> Dataset:
     """
     logger.info(f"Preprocessing {len(data)} samples.")
 
+    # Log label distribution BEFORE preprocessing
+    label_counts = {}
+    for item in data:
+        label = item.get('label', 'unknown')
+        label_counts[label] = label_counts.get(label, 0) + 1
+
+    logger.info("=" * 60)
+    logger.info("DATASET STATISTICS (before preprocessing)")
+    logger.info("=" * 60)
+    logger.info(f"Total samples: {len(data)}")
+    for label, count in sorted(label_counts.items()):
+        percentage = (count / len(data)) * 100
+        logger.info(f"  {label}: {count} ({percentage:.1f}%)")
+    logger.info("=" * 60)
+
     # Format for causal LM: Include label in text for training
     formatted_data = []
     for item in data:

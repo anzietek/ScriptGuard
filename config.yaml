@@ -39,8 +39,8 @@ data_sources:
       - "scikit-learn/scikit-learn"
       - "pandas-dev/pandas"
       - "pytorch/pytorch"
-    max_samples_per_keyword: 20
-    max_files_per_repo: 50
+    max_samples_per_keyword: 100  # Increased from 20 → 5x more samples
+    max_files_per_repo: 200       # Increased from 50 → 4x more files
 
   malwarebazaar:
     enabled: true
@@ -132,7 +132,7 @@ validation:
 # Data Augmentation Configuration
 augmentation:
   enabled: true
-  variants_per_sample: 2
+  variants_per_sample: 5  # Increased from 2 → more malware variations
   techniques:
     - "base64"
     - "hex"
@@ -140,7 +140,7 @@ augmentation:
     - "split_strings"
   balance_dataset: true
   target_balance_ratio: 1.0
-  balance_method: "undersample"  # or "oversample"
+  balance_method: "oversample"  # Changed from undersample → keeps all data
 
   # Qdrant CVE Pattern Augmentation
   use_qdrant_patterns: true  # Enable augmentation with CVE patterns from Qdrant
@@ -172,10 +172,11 @@ training:
   # Training Hyperparameters
   batch_size: 2  # Reduced for 4GB VRAM
   gradient_accumulation_steps: 8  # Increased to maintain effective batch size of 16
-  num_epochs: 3
-  learning_rate: 0.0002
+  num_epochs: 10  # Increased from 3 → model needs more time to learn
+  learning_rate: 0.0001  # Decreased from 0.0002 → more stable training
   weight_decay: 0.01
-  warmup_steps: 100
+  warmup_steps: 200  # Increased from 100 → longer warmup
+  lr_scheduler_type: "cosine"  # NEW → better LR decay
   max_seq_length: 2048
 
   # Optimization
@@ -197,7 +198,7 @@ training:
 
   # Early Stopping
   early_stopping: true
-  early_stopping_patience: 3
+  early_stopping_patience: 5  # ZWIĘKSZONE z 3 → dajemy modelowi więcej szans
 
   # Model Evaluation
   eval_max_new_tokens: 20

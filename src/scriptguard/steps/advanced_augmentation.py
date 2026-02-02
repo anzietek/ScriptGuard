@@ -319,13 +319,18 @@ def balance_dataset(
             benign = random.sample(benign, target_benign)
 
     elif method == "oversample":
-        # Duplicate minority class
+        # Intelligent oversampling - create augmented variants instead of simple duplication
         target_malicious = int(len(benign) * target_ratio)
         target_benign = int(len(malicious) / target_ratio)
 
+        # For malicious samples, create augmented variants
         while len(malicious) < target_malicious:
-            malicious.append(random.choice(malicious))
+            original = random.choice(malicious)
+            # Create augmented variant instead of duplicate
+            variant = generate_polymorphic_variant(original)
+            malicious.append(variant)
 
+        # For benign samples, just duplicate (we don't want to obfuscate benign code)
         while len(benign) < target_benign:
             benign.append(random.choice(benign))
 
