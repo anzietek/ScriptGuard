@@ -45,42 +45,35 @@ def evaluate_model(
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
 
-    # Load base model - try GPU first, fallback to CPU
-    # For evaluation, we use simpler loading without problematic quantization config
+    # Load base model with proper configuration for evaluation
+    # Starcoder2 doesn't support load_in_8bit parameter, we need to use bitsandbytes config
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+
     try:
-        # Try loading with 8-bit quantization (more stable than 4-bit for inference)
-        logger.info("Attempting to load model with 8-bit quantization on GPU...")
+        if device == "cuda":
+            # Try GPU with float16 and proper memory management
+            logger.info("Attempting to load model on GPU with float16...")
+            base_model = AutoModelForCausalLM.from_pretrained(
+                base_model_id,
+                torch_dtype=torch.float16,
+                low_cpu_mem_usage=True,
+                device_map="auto",
+                max_memory={0: "3.5GB"}  # Reserve some VRAM for operations
+            )
+            logger.info("✓ Model loaded on GPU with float16")
+        else:
+            raise RuntimeError("CUDA not available")
+    except Exception as e:
+        logger.warning(f"GPU loading failed: {e}")
+        logger.info("Falling back to CPU (evaluation will be slower)...")
+        # Final fallback: Load on CPU
         base_model = AutoModelForCausalLM.from_pretrained(
             base_model_id,
-            load_in_8bit=True,
-            device_map="auto",
-            low_cpu_mem_usage=True,
-            torch_dtype=torch.float16
+            torch_dtype=torch.float32,
+            low_cpu_mem_usage=True
         )
-        logger.info("✓ Model loaded on GPU with 8-bit quantization")
-    except Exception as e:
-        logger.warning(f"8-bit GPU loading failed: {e}")
-        try:
-            # Try loading on GPU without quantization
-            logger.info("Attempting to load model on GPU without quantization...")
-            base_model = AutoModelForCausalLM.from_pretrained(
-                base_model_id,
-                device_map="auto",
-                torch_dtype=torch.float16,
-                low_cpu_mem_usage=True
-            )
-            logger.info("✓ Model loaded on GPU without quantization")
-        except Exception as e2:
-            logger.warning(f"GPU loading failed: {e2}")
-            logger.info("Falling back to CPU (evaluation will be slower)...")
-            # Final fallback: Load on CPU
-            base_model = AutoModelForCausalLM.from_pretrained(
-                base_model_id,
-                device_map="cpu",
-                torch_dtype=torch.float32,
-                low_cpu_mem_usage=True
-            )
-            logger.info("✓ Model loaded on CPU")
+        device = "cpu"
+        logger.info("✓ Model loaded on CPU")
 
     # Load LoRA adapter
     model = PeftModel.from_pretrained(base_model, adapter_path)
@@ -118,14 +111,15 @@ def evaluate_model(
         inputs = tokenizer(prompt, return_tensors="pt", truncation=True, max_length=512)
         inputs = {k: v.to(model.device) for k, v in inputs.items()}
 
-        # Generate prediction
+        # Generate prediction with proper generation config
+        # Note: do_sample=False ignores temperature, so we remove it to avoid warnings
         with torch.no_grad():
             outputs = model.generate(
                 **inputs,
                 max_new_tokens=max_new_tokens,
-                temperature=temperature,
-                do_sample=False,
-                pad_token_id=tokenizer.pad_token_id
+                do_sample=False,  # Deterministic generation for evaluation
+                pad_token_id=tokenizer.pad_token_id,
+                eos_token_id=tokenizer.eos_token_id
             )
 
         # Decode prediction

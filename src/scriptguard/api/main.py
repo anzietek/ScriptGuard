@@ -103,8 +103,14 @@ async def analyze_script(request: ScriptAnalysisRequest):
     
     inputs = tokenizer(prompt, return_tensors="pt").to(model.device)
     with torch.no_grad():
-        outputs = model.generate(**inputs, max_new_tokens=100)
-    
+        outputs = model.generate(
+            **inputs,
+            max_new_tokens=100,
+            do_sample=False,  # Deterministic generation
+            pad_token_id=tokenizer.pad_token_id,
+            eos_token_id=tokenizer.eos_token_id
+        )
+
     response_text = tokenizer.decode(outputs[0], skip_special_tokens=True)
     
     # Simplified logic for demonstration
