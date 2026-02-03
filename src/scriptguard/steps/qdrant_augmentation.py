@@ -14,10 +14,11 @@ def augment_with_qdrant_patterns(
     config: Dict[str, Any]
 ) -> List[Dict[str, Any]]:
     """
-    Augment training data with CVE patterns from Qdrant.
+    Augment training data with patterns from Qdrant.
 
-    This step enriches the training dataset by adding known CVE patterns
-    and malware signatures stored in Qdrant as additional training examples.
+    Retrieves samples from TWO Qdrant collections:
+    1. malware_knowledge - CVE patterns and vulnerability signatures
+    2. code_samples - Few-Shot code examples from database
 
     Args:
         data: Existing training data
@@ -34,84 +35,192 @@ def augment_with_qdrant_patterns(
         logger.info("Qdrant augmentation disabled in config. Skipping.")
         return data
 
+    all_augmented_samples = []
+
     try:
-        from scriptguard.rag.qdrant_store import QdrantStore
-
-        # Initialize Qdrant
         qdrant_config = config.get("qdrant", {})
-        store = QdrantStore(
-            host=qdrant_config.get("host", "localhost"),
-            port=qdrant_config.get("port", 6333),
-            collection_name=qdrant_config.get("collection_name", "malware_knowledge"),
-            embedding_model=qdrant_config.get("embedding_model", "all-MiniLM-L6-v2"),
-            api_key=qdrant_config.get("api_key") if qdrant_config.get("api_key") else None,
-            use_https=qdrant_config.get("use_https", False)
-        )
 
-        # Get collection info
-        info = store.get_collection_info()
-        points_count = info.get('points_count', 0)
+        # ========================================
+        # COLLECTION 1: malware_knowledge (CVE patterns)
+        # ========================================
+        logger.info("Fetching CVE patterns from 'malware_knowledge' collection...")
 
-        if points_count == 0:
-            logger.warning("Qdrant collection is empty. No patterns to augment with.")
-            return data
+        try:
+            from scriptguard.rag.qdrant_store import QdrantStore
 
-        logger.info(f"Found {points_count} patterns in Qdrant collection")
-
-        # Scroll through all points in collection
-        # Qdrant scroll API returns batches of points
-        augmented_samples = []
-        offset = None
-        batch_size = 100
-        total_added = 0
-
-        while True:
-            # Scroll through collection
-            scroll_result = store.client.scroll(
-                collection_name=store.collection_name,
-                limit=batch_size,
-                offset=offset,
-                with_payload=True,
-                with_vectors=False  # Don't need vectors, just payload
+            store = QdrantStore(
+                host=qdrant_config.get("host", "localhost"),
+                port=qdrant_config.get("port", 6333),
+                collection_name=qdrant_config.get("collection_name", "malware_knowledge"),
+                embedding_model=qdrant_config.get("embedding_model", "all-MiniLM-L6-v2"),
+                api_key=qdrant_config.get("api_key") if qdrant_config.get("api_key") else None,
+                use_https=qdrant_config.get("use_https", False)
             )
 
-            points, next_offset = scroll_result
+            # Get collection info
+            info = store.get_collection_info()
+            points_count = info.get('points_count', 0)
 
-            if not points:
-                break
+            if points_count > 0:
+                logger.info(f"Found {points_count} CVE patterns in 'malware_knowledge'")
 
-            # Convert Qdrant points to training samples
-            for point in points:
-                payload = point.payload
+                # Scroll through all points
+                offset = None
+                batch_size = 100
+                cve_added = 0
 
-                # Skip if no description
-                if not payload.get('description'):
-                    continue
+                while True:
+                    scroll_result = store.client.scroll(
+                        collection_name=store.collection_name,
+                        limit=batch_size,
+                        offset=offset,
+                        with_payload=True,
+                        with_vectors=False
+                    )
 
-                # Create training sample from CVE/pattern
-                sample = _create_sample_from_pattern(payload, augmentation_config)
-                if sample:
-                    augmented_samples.append(sample)
-                    total_added += 1
+                    points, next_offset = scroll_result
 
-            # Check if we've reached the end
-            if next_offset is None:
-                break
+                    if not points:
+                        break
 
-            offset = next_offset
+                    # Convert Qdrant points to training samples
+                    for point in points:
+                        payload = point.payload
+                        if not payload.get('description'):
+                            continue
 
-        logger.info(f"Added {total_added} CVE/pattern samples from Qdrant")
+                        sample = _create_sample_from_pattern(payload, augmentation_config)
+                        if sample:
+                            all_augmented_samples.append(sample)
+                            cve_added += 1
 
-        # Combine original data with augmented samples
-        combined_data = data + augmented_samples
+                    if next_offset is None:
+                        break
 
+                    offset = next_offset
+
+                logger.info(f"✓ Added {cve_added} CVE patterns from 'malware_knowledge'")
+            else:
+                logger.warning("'malware_knowledge' collection is empty")
+
+        except Exception as e:
+            logger.warning(f"Failed to fetch from 'malware_knowledge': {e}")
+
+        # ========================================
+        # COLLECTION 2: code_samples (Few-Shot examples)
+        # ========================================
+        logger.info("Fetching code samples from 'code_samples' collection...")
+
+        try:
+            from scriptguard.rag.code_similarity_store import CodeSimilarityStore
+            from scriptguard.database.dataset_manager import DatasetManager
+
+            code_store = CodeSimilarityStore(
+                host=qdrant_config.get("host", "localhost"),
+                port=qdrant_config.get("port", 6333),
+                collection_name="code_samples",  # Fixed collection name
+                enable_chunking=False,  # No chunking for augmentation
+                config_path=config.get("config_path", "config.yaml")
+            )
+
+            # Get collection info
+            info = code_store.get_collection_info()
+            points_count = info.get('total_samples', 0)
+
+            if points_count > 0:
+                logger.info(f"Found {points_count} code samples in 'code_samples'")
+
+                # Initialize DB manager to fetch full content
+                db_manager = DatasetManager()
+
+                # Collect unique db_ids first
+                db_ids_to_fetch = set()
+                offset = None
+                batch_size = 100
+
+                while True:
+                    scroll_result = code_store.client.scroll(
+                        collection_name="code_samples",
+                        limit=batch_size,
+                        offset=offset,
+                        with_payload=True,
+                        with_vectors=False
+                    )
+
+                    points, next_offset = scroll_result
+
+                    if not points:
+                        break
+
+                    # Collect db_ids
+                    for point in points:
+                        payload = point.payload
+                        db_id = payload.get('db_id')
+                        if db_id and payload.get('chunk_index', 0) == 0:  # Only first chunk per doc
+                            db_ids_to_fetch.add(db_id)
+
+                    if next_offset is None:
+                        break
+
+                    offset = next_offset
+
+                # Batch fetch full content from PostgreSQL
+                logger.info(f"Fetching full content for {len(db_ids_to_fetch)} unique documents...")
+
+                from scriptguard.database.db_schema import get_connection
+
+                conn = get_connection()
+                cursor = conn.cursor()
+
+                placeholders = ','.join(['%s'] * len(db_ids_to_fetch))
+                query = f"""
+                    SELECT id, content, label, source, metadata
+                    FROM samples
+                    WHERE id IN ({placeholders})
+                """
+
+                cursor.execute(query, tuple(db_ids_to_fetch))
+                rows = cursor.fetchall()
+
+                code_added = 0
+                for row in rows:
+                    sample = {
+                        'content': row['content'],  # FULL content from DB
+                        'label': row['label'],
+                        'source': 'qdrant_code_samples',
+                        'metadata': {
+                            'db_id': row['id'],
+                            'original_source': row['source'],
+                            'db_metadata': row['metadata'] or {}
+                        }
+                    }
+
+                    all_augmented_samples.append(sample)
+                    code_added += 1
+
+                cursor.close()
+                conn.close()
+
+                logger.info(f"✓ Added {code_added} code samples with full content from PostgreSQL")
+            else:
+                logger.warning("'code_samples' collection is empty")
+
+        except Exception as e:
+            logger.warning(f"Failed to fetch from 'code_samples': {e}", exc_info=True)
+
+        # Combine all
+        if all_augmented_samples:
+            logger.info(f"✓ Total augmented: {len(all_augmented_samples)} samples from Qdrant")
+        else:
+            logger.warning("No samples retrieved from any Qdrant collection")
+
+        combined_data = data + all_augmented_samples
         logger.info(f"Final dataset size: {len(combined_data)} samples")
-        logger.info(f"Augmentation added: {len(augmented_samples)} samples ({len(augmented_samples)/len(combined_data)*100:.1f}%)")
 
         return combined_data
 
     except Exception as e:
-        logger.warning(f"Qdrant augmentation failed: {e}")
+        logger.error(f"Qdrant augmentation failed: {e}", exc_info=True)
         logger.warning("Continuing with original dataset without Qdrant augmentation")
         return data
 
@@ -205,12 +314,19 @@ def validate_qdrant_augmentation(
         sources[source] = sources.get(source, 0) + 1
         labels[label] = labels.get(label, 0) + 1
 
+    # Calculate Qdrant totals
+    qdrant_cve = sources.get('qdrant', 0)
+    qdrant_code = sources.get('qdrant_code_samples', 0)
+    qdrant_total = qdrant_cve + qdrant_code
+
     stats = {
         'total_samples': len(data),
         'by_source': sources,
         'by_label': labels,
-        'qdrant_samples': sources.get('qdrant', 0),
-        'qdrant_percentage': sources.get('qdrant', 0) / len(data) * 100 if data else 0
+        'qdrant_samples_total': qdrant_total,
+        'qdrant_cve_patterns': qdrant_cve,
+        'qdrant_code_samples': qdrant_code,
+        'qdrant_percentage': qdrant_total / len(data) * 100 if data else 0
     }
 
     logger.info(f"""
@@ -218,7 +334,9 @@ def validate_qdrant_augmentation(
 ║         QDRANT AUGMENTATION STATISTICS                 ║
 ╠════════════════════════════════════════════════════════╣
 ║  Total Samples:        {stats['total_samples']:>6}                       ║
-║  From Qdrant:          {stats['qdrant_samples']:>6} ({stats['qdrant_percentage']:>5.1f}%)              ║
+║  From Qdrant:          {stats['qdrant_samples_total']:>6} ({stats['qdrant_percentage']:>5.1f}%)              ║
+║    - CVE patterns:     {stats['qdrant_cve_patterns']:>6}                       ║
+║    - Code samples:     {stats['qdrant_code_samples']:>6}                       ║
 ║                                                        ║
 ║  Label Distribution:                                   ║
 ║    Malicious:          {labels.get('malicious', 0):>6}                       ║
