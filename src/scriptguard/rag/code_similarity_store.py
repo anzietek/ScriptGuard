@@ -17,6 +17,7 @@ from scriptguard.utils.logger import logger
 from .embedding_service import EmbeddingService
 from .chunking_service import ChunkingService, ResultAggregator
 from .reranking_service import create_reranking_service
+from .code_sanitization import create_sanitizer, create_enricher
 
 
 class CodeSimilarityStore:
@@ -122,6 +123,27 @@ class CodeSimilarityStore:
         self.reranking_service = create_reranking_service(self.config)
         if self.reranking_service:
             logger.info("  Reranking: enabled")
+
+        # Initialize sanitization and context injection
+        sanitization_config = code_emb_config.get("sanitization", {})
+        self.sanitization_enabled = sanitization_config.get("enabled", True)
+
+        if self.sanitization_enabled:
+            self.sanitizer = create_sanitizer(sanitization_config)
+            logger.info("  Code Sanitization: enabled")
+        else:
+            self.sanitizer = None
+            logger.info("  Code Sanitization: disabled")
+
+        context_injection_config = code_emb_config.get("context_injection", {})
+        self.context_injection_enabled = context_injection_config.get("enabled", True)
+
+        if self.context_injection_enabled:
+            self.enricher = create_enricher(context_injection_config)
+            logger.info("  Context Injection: enabled")
+        else:
+            self.enricher = None
+            logger.info("  Context Injection: disabled")
 
         logger.info(f"✓ Code Similarity Store ready (dim={self.embedding_dim})")
 
@@ -262,10 +284,12 @@ class CodeSimilarityStore:
         Upsert code samples to Qdrant with BATCH EMBEDDING for 3x+ speedup.
 
         This implementation:
-        1. Applies chunking (if enabled)
-        2. Groups chunks into batches
-        3. Computes embeddings in parallel batches (GPU/CPU efficient)
-        4. Uploads to Qdrant in batches
+        0. SANITIZES code (NEW: removes binary data, validates syntax, normalizes)
+        1. ENRICHES with context metadata (NEW: injects file path, repo, language)
+        2. Applies chunking (if enabled) with overlap
+        3. Groups chunks into batches
+        4. Computes embeddings in parallel batches (GPU/CPU efficient)
+        5. Uploads to Qdrant in batches
 
         Args:
             samples: List of sample dictionaries with:
@@ -282,6 +306,89 @@ class CodeSimilarityStore:
             return
 
         logger.info(f"Upserting {len(samples)} code samples to Qdrant...")
+
+        # Step 0: Sanitize and enrich samples (NEW - Quality Gate)
+        processed_samples = []
+        sanitization_stats = {
+            "total": len(samples),
+            "valid": 0,
+            "rejected": 0,
+            "rejection_reasons": {}
+        }
+
+        for sample in samples:
+            content = sample.get("content", "")
+            if not content:
+                continue
+
+            # SANITIZATION PASS
+            if self.sanitization_enabled and self.sanitizer:
+                cleaned_content, report = self.sanitizer.sanitize(
+                    content=content,
+                    language=sample.get("language", "python"),
+                    metadata=sample.get("metadata", {})
+                )
+
+                if not report.get("valid", False):
+                    sanitization_stats["rejected"] += 1
+                    reason = report.get("reason", "unknown")
+                    sanitization_stats["rejection_reasons"][reason] = \
+                        sanitization_stats["rejection_reasons"].get(reason, 0) + 1
+
+                    logger.debug(
+                        f"Rejected sample {sample.get('id')}: {reason} "
+                        f"(entropy={report.get('entropy', 0):.2f})"
+                    )
+                    continue
+
+                # Update content with cleaned version
+                content = cleaned_content
+
+                # Store sanitization report in metadata
+                if "metadata" not in sample:
+                    sample["metadata"] = {}
+                sample["metadata"]["sanitization_report"] = {
+                    "entropy": report.get("entropy"),
+                    "original_length": report.get("original_length"),
+                    "cleaned_length": report.get("cleaned_length"),
+                    "warnings": report.get("warnings", [])
+                }
+
+            # CONTEXT INJECTION PASS
+            if self.context_injection_enabled and self.enricher:
+                # Build metadata dict for enrichment
+                enrichment_metadata = {
+                    "file_path": sample.get("metadata", {}).get("file_path"),
+                    "repository": sample.get("metadata", {}).get("repository"),
+                    "language": sample.get("language", "python"),
+                    "source": sample.get("source"),
+                    "label": sample.get("label")
+                }
+
+                content = self.enricher.enrich(content, enrichment_metadata)
+
+            # Update sample with processed content
+            sample["content"] = content
+            processed_samples.append(sample)
+            sanitization_stats["valid"] += 1
+
+        # Log sanitization statistics
+        if self.sanitization_enabled:
+            logger.info(
+                f"✓ Sanitization: {sanitization_stats['valid']}/{sanitization_stats['total']} "
+                f"samples passed ({sanitization_stats['rejected']} rejected)"
+            )
+
+            if sanitization_stats["rejection_reasons"]:
+                logger.info("  Rejection reasons:")
+                for reason, count in sanitization_stats["rejection_reasons"].items():
+                    logger.info(f"    - {reason}: {count}")
+
+        if not processed_samples:
+            logger.warning("No valid samples after sanitization")
+            return
+
+        samples = processed_samples  # Replace with sanitized samples
 
         # Step 1: Apply chunking if enabled
         if self.enable_chunking and self.chunking_service:

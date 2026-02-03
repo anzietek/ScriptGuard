@@ -137,7 +137,25 @@ code_embedding:
   normalize: true  # Apply L2 normalization to embeddings (CRITICAL for stable thresholds)
   enable_chunking: true  # Enable sliding window chunking for long code files
   max_code_length: 512  # Maximum tokens per chunk
-  chunk_overlap: 64  # Overlap between consecutive chunks
+  chunk_overlap: 64  # Overlap between consecutive chunks (MINIMUM 10-15% recommended)
+
+  # Code Sanitization (NEW - Ingestion Pipeline Quality Control)
+  sanitization:
+    enabled: true  # Enable sanitization before embedding
+    min_entropy: 3.5  # Minimum Shannon entropy (bits/char) - filters low-quality code
+    max_line_length: 500  # Detect minified code
+    min_valid_lines: 3  # Minimum non-empty lines required
+    max_empty_line_ratio: 0.5  # Maximum ratio of empty lines
+    remove_license_headers: true  # Strip copyright/license boilerplate
+    strict_mode: false  # Reject samples with invalid syntax (AST validation)
+
+  # Context Injection (NEW - Metadata Enrichment)
+  context_injection:
+    enabled: true  # Inject metadata into content before embedding
+    injection_format: "structured"  # Options: "structured", "inline", "minimal"
+    # "structured" creates formal header with all metadata
+    # "inline" adds compact inline comment
+    # "minimal" only adds filename
 
   # Batch processing
   batch_size: 100

@@ -1,11 +1,13 @@
 """
 Qdrant-based Data Augmentation Step
 Enriches training data with CVE patterns and malware signatures from Qdrant vector store.
+Enhanced with sanitization and context injection.
 """
 
 from typing import List, Dict, Any, Optional
 from zenml import step
 from scriptguard.utils.logger import logger
+from scriptguard.rag.code_sanitization import create_sanitizer, create_enricher
 
 
 @step
@@ -182,16 +184,68 @@ def augment_with_qdrant_patterns(
                 cursor.execute(query, tuple(db_ids_to_fetch))
                 rows = cursor.fetchall()
 
+                # Initialize sanitizer and enricher (if enabled in config)
+                code_emb_config = config.get("code_embedding", {})
+
+                sanitization_config = code_emb_config.get("sanitization", {})
+                sanitizer = None
+                if sanitization_config.get("enabled", True):
+                    sanitizer = create_sanitizer(sanitization_config)
+                    logger.info("  Sanitization enabled for code samples")
+
+                context_injection_config = code_emb_config.get("context_injection", {})
+                enricher = None
+                if context_injection_config.get("enabled", True):
+                    enricher = create_enricher(context_injection_config)
+                    logger.info("  Context injection enabled for code samples")
+
                 code_added = 0
+                code_rejected = 0
+                rejection_reasons = {}
+
                 for row in rows:
+                    raw_content = row['content']
+
+                    # SANITIZATION PASS
+                    if sanitizer:
+                        cleaned_content, report = sanitizer.sanitize(
+                            content=raw_content,
+                            language="python",
+                            metadata=row.get('metadata', {})
+                        )
+
+                        if not report.get("valid", False):
+                            code_rejected += 1
+                            reason = report.get("reason", "unknown")
+                            rejection_reasons[reason] = rejection_reasons.get(reason, 0) + 1
+                            logger.debug(f"Rejected code sample {row['id']}: {reason}")
+                            continue
+
+                        processed_content = cleaned_content
+                    else:
+                        processed_content = raw_content
+
+                    # CONTEXT INJECTION PASS
+                    if enricher:
+                        enrichment_metadata = {
+                            "file_path": row.get('metadata', {}).get('file_path'),
+                            "repository": row.get('metadata', {}).get('repository'),
+                            "language": "python",
+                            "source": row['source'],
+                            "label": row['label']
+                        }
+                        processed_content = enricher.enrich(processed_content, enrichment_metadata)
+
                     sample = {
-                        'content': row['content'],  # FULL content from DB
+                        'content': processed_content,  # SANITIZED + ENRICHED content
                         'label': row['label'],
                         'source': 'qdrant_code_samples',
                         'metadata': {
                             'db_id': row['id'],
                             'original_source': row['source'],
-                            'db_metadata': row['metadata'] or {}
+                            'db_metadata': row['metadata'] or {},
+                            'sanitized': bool(sanitizer),
+                            'enriched': bool(enricher)
                         }
                     }
 
@@ -201,7 +255,15 @@ def augment_with_qdrant_patterns(
                 cursor.close()
                 conn.close()
 
-                logger.info(f"✓ Added {code_added} code samples with full content from PostgreSQL")
+                logger.info(
+                    f"✓ Added {code_added} code samples with full content from PostgreSQL "
+                    f"({code_rejected} rejected by sanitization)"
+                )
+
+                if rejection_reasons:
+                    logger.info("  Rejection reasons:")
+                    for reason, count in rejection_reasons.items():
+                        logger.info(f"    - {reason}: {count}")
             else:
                 logger.warning("'code_samples' collection is empty")
 
