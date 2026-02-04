@@ -1,0 +1,125 @@
+# ScriptGuard TEST Configuration - MINIMAL DATA for quick testing
+# Configuration for data sources, training, and database
+
+# Pipeline Configuration
+pipeline:
+  enable_cache: false  # Set to true to use cached results from previous runs
+  cache_steps:         # Individual step cache control (overrides enable_cache if specified)
+    advanced_data_ingestion: false  # Always fetch fresh data
+    validate_samples: true           # Can cache validation
+    augment_malicious_samples: true  # Can cache augmentation
+    train_model: false               # Always train fresh model
+
+# API Keys (loaded from environment variables)
+api_keys:
+  github_token: ${GITHUB_API_TOKEN}
+  nvd_api_key: ${NVD_API_KEY}
+  malwarebazaar_api_key: ${MALWAREBAZAAR_API_KEY}
+  huggingface_token: ${HUGGINGFACE_TOKEN}
+
+# Data Sources Configuration - MINIMAL for testing
+data_sources:
+  github:
+    enabled: true
+    fetch_malicious: true
+    fetch_benign: true
+    malicious_keywords:
+      - "reverse-shell python"  # Only 1 keyword
+    benign_repos:
+      - "pallets/flask"  # Only 1 repo
+    max_samples_per_keyword: 5  # MINIMAL - just 5 samples
+    max_files_per_repo: 5       # MINIMAL - just 5 files
+
+  malwarebazaar:
+    enabled: false  # DISABLED for quick test
+    tags:
+      - "python"
+    max_samples: 10
+
+  huggingface:
+    enabled: false  # DISABLED
+
+  cve_feeds:
+    enabled: false  # DISABLED for quick test
+
+  # Additional HuggingFace Datasets
+  additional_hf:
+    enabled: false  # DISABLED for quick test
+
+# Validation Configuration
+validation:
+  validate_syntax: true
+  min_length: 20          # Reduced from 50
+  max_length: 50000
+  min_code_lines: 3       # Reduced from 5
+  max_comment_ratio: 0.7
+
+# Augmentation Configuration
+augmentation:
+  enabled: true
+  variants_per_sample: 1  # Reduced from 2
+  balance_dataset: true
+  target_balance_ratio: 1.0
+  balance_method: "undersample"
+  use_qdrant_patterns: false  # DISABLED for quick test
+
+# Qdrant Configuration
+qdrant:
+  host: "localhost"
+  port: 6333
+  collection_name: "malware_knowledge"
+  cve_collection: "cve_patterns"
+
+# Code Embedding Configuration (for Few-Shot RAG)
+code_embedding:
+  model: "microsoft/unixcoder-base"
+  embedding_dim: 768
+  chunk_size: 512
+  chunk_overlap: 64
+  max_samples_to_vectorize: 10  # MINIMAL - just 10 samples for testing
+
+# Training Configuration - MINIMAL epochs for testing
+training:
+  model_id: "bigcode/starcoder2-3b"
+  output_dir: "./model_checkpoints_test"  # SEPARATE DIR - won't overwrite trained model
+  num_epochs: 1  # MINIMAL - just 1 epoch for testing
+  batch_size: 1
+  gradient_accumulation_steps: 4
+  learning_rate: 0.0002
+  max_seq_length: 512
+  warmup_steps: 10  # Reduced
+  logging_steps: 10
+  save_steps: 100
+  eval_steps: 100
+  save_total_limit: 2
+  fp16: false
+  bf16: false
+  test_split_size: 0.2  # 20% for test
+
+  # LoRA Configuration
+  lora_r: 16
+  lora_alpha: 32
+  lora_dropout: 0.05
+  target_modules:
+    - "q_proj"
+    - "v_proj"
+
+  # Evaluation settings
+  eval_max_new_tokens: 20
+  eval_temperature: 0.1
+  eval_max_code_length: 500
+
+# W&B Configuration
+wandb:
+  enabled: false  # DISABLED for quick test
+  project: "scriptguard"
+  entity: "your-wandb-entity"
+
+# Database Configuration (PostgreSQL)
+database:
+  enabled: false
+  host: "localhost"
+  port: 5432
+  name: "scriptguard"
+  user: "scriptguard"
+  password: "your-secure-password"

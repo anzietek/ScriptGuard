@@ -189,10 +189,11 @@ def advanced_training_pipeline(
     # Step 7.6: Vectorize samples to Qdrant for Few-Shot RAG
     # This step synchronizes code samples to vector DB BEFORE splitting
     # so that evaluation can retrieve similar examples
+    max_vectorize = config.get("code_embedding", {}).get("max_samples_to_vectorize", None)
     vectorization_result = vectorize_samples(
         config=config,
-        clear_existing=True  # Clear old vectors
-        # max_samples not specified = vectorize all samples
+        clear_existing=True,  # Clear old vectors
+        max_samples=max_vectorize  # Limit samples for testing
     )
 
     # Step 8: Split data BEFORE preprocessing (using dedicated step)

@@ -139,6 +139,9 @@ code_embedding:
   max_code_length: 512  # Maximum tokens per chunk
   chunk_overlap: 64  # Overlap between consecutive chunks (MINIMUM 10-15% recommended)
 
+  # Vectorization Limits (NEW - Control vectorization scope)
+  max_samples_to_vectorize: null  # Optional limit (null = vectorize all samples, or set number for testing)
+
   # Code Sanitization (NEW - Ingestion Pipeline Quality Control)
   sanitization:
     enabled: true  # Enable sanitization before embedding
