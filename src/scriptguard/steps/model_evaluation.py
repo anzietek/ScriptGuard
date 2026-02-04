@@ -2,7 +2,7 @@ from typing import Dict, Any
 from zenml import step
 from datasets import Dataset
 import torch
-from transformers import AutoTokenizer, AutoModelForCausalLM, LogitsProcessorList, LogitsProcessor
+from transformers import AutoTokenizer, AutoModelForCausalLM, LogitsProcessor
 from peft import PeftModel
 from sklearn.metrics import (
     accuracy_score,
@@ -15,89 +15,56 @@ from sklearn.metrics import (
 from scriptguard.utils.logger import logger
 from scriptguard.utils.prompts import (
     format_inference_prompt,
-    parse_classification_output,
     format_fewshot_prompt
 )
 from scriptguard.rag.code_similarity_store import CodeSimilarityStore
 
 
-class ClassificationConstraintProcessor(LogitsProcessor):
+class StrictBinaryClassificationProcessor(LogitsProcessor):
     """
-    Custom LogitsProcessor that heavily biases towards MALICIOUS/BENIGN tokens.
-    Forces the model to choose between only these two classification outputs.
-
-    Strategy: Allow only first token of " MALICIOUS" or " BENIGN" (with leading space)
-    since that's what comes after "Classification: "
+    Strict constrained generation: ONLY allow BENIGN or MALICIOUS tokens.
+    Forces the model to output exactly one of these two words by setting
+    all other token logits to -inf for the FIRST token only.
+    After the first token, allows natural completion of the word.
     """
-    def __init__(self, tokenizer, boost_factor: float = 10.0):
+    def __init__(self, benign_token_id: int, malicious_token_id: int, prompt_length: int):
         """
         Args:
-            tokenizer: The tokenizer to use for encoding target words
-            boost_factor: How much to boost the target tokens (log-scale)
+            benign_token_id: Token ID for " BENIGN" first token (with leading space)
+            malicious_token_id: Token ID for " MALICIOUS" first token (with leading space)
+            prompt_length: Length of the prompt in tokens (to detect when we start generating)
         """
-        self.tokenizer = tokenizer
-        self.boost_factor = boost_factor
-        self.prompt_length = None  # Will be set on first call
-
-        # Get FIRST token of each word (with leading space, since prompt ends with ": ")
-        malicious_with_space = tokenizer.encode(" MALICIOUS", add_special_tokens=False)
-        benign_with_space = tokenizer.encode(" BENIGN", add_special_tokens=False)
-
-        # Also try lowercase versions
-        malicious_lower = tokenizer.encode(" malicious", add_special_tokens=False)
-        benign_lower = tokenizer.encode(" benign", add_special_tokens=False)
-
-        # Only allow FIRST token of each word
-        self.valid_first_tokens = set()
-        if malicious_with_space:
-            self.valid_first_tokens.add(malicious_with_space[0])
-        if benign_with_space:
-            self.valid_first_tokens.add(benign_with_space[0])
-        if malicious_lower:
-            self.valid_first_tokens.add(malicious_lower[0])
-        if benign_lower:
-            self.valid_first_tokens.add(benign_lower[0])
-
-        logger.debug(f"ClassificationConstraintProcessor initialized:")
-        logger.debug(f"  Valid first tokens: {self.valid_first_tokens}")
-        logger.debug(f"  ' MALICIOUS' tokens: {malicious_with_space}")
-        logger.debug(f"  ' BENIGN' tokens: {benign_with_space}")
+        self.benign_token_id = benign_token_id
+        self.malicious_token_id = malicious_token_id
+        self.prompt_length = prompt_length
+        self.valid_tokens = {benign_token_id, malicious_token_id}
 
     def __call__(self, input_ids: torch.LongTensor, scores: torch.FloatTensor) -> torch.FloatTensor:
         """
-        Boost scores for MALICIOUS/BENIGN tokens, heavily penalize others.
+        Set all token logits to -inf except for BENIGN and MALICIOUS (first token only).
 
         Args:
             input_ids: Already generated token IDs
             scores: Logits for next token prediction
 
         Returns:
-            Modified scores with boosted classification tokens
+            Modified scores with only valid classification tokens allowed (first token only)
         """
-        # Initialize prompt length on first call
-        if self.prompt_length is None:
-            self.prompt_length = input_ids.shape[1]
-
-        # Calculate how many tokens we've generated after the prompt
-        num_generated = input_ids.shape[1] - self.prompt_length
-
         # Only constrain the FIRST generated token
-        if num_generated > 0:
-            # After first token, allow model to continue naturally
+        current_length = input_ids.shape[1]
+        if current_length > self.prompt_length:
+            # After first token, allow natural completion
             return scores
 
-        # For the first token: heavily constrain to valid first tokens
-        vocab_size = scores.shape[-1]
-        penalty = -1000.0  # Very strong penalty
+        # For first token: Create a mask with -inf for all tokens except valid ones
+        mask = torch.full_like(scores, float('-inf'))
 
-        for token_id in range(vocab_size):
-            if token_id not in self.valid_first_tokens:
-                scores[:, token_id] += penalty
-            else:
-                # Boost valid classification tokens
-                scores[:, token_id] += self.boost_factor
+        # Set valid tokens to original scores (or boost them slightly)
+        mask[:, self.benign_token_id] = scores[:, self.benign_token_id] + 5.0
+        mask[:, self.malicious_token_id] = scores[:, self.malicious_token_id] + 5.0
 
-        return scores
+        return mask
+
 
 @step
 def evaluate_model(
@@ -268,54 +235,80 @@ def evaluate_model(
         inputs = tokenizer(prompt, return_tensors="pt", truncation=True, max_length=512)
         inputs = {k: v.to(model.device) for k, v in inputs.items()}
 
-        # CONSTRAINT GENERATION: Use custom LogitsProcessor
-        # This forces the model to only generate MALICIOUS or BENIGN tokens
-        constraint_processor = ClassificationConstraintProcessor(
-            tokenizer=tokenizer,
-            boost_factor=15.0  # Very strong bias towards classification tokens
-        )
+        # STRICT CONSTRAINED GENERATION: Force model to only output BENIGN or MALICIOUS
+        # Get token IDs for the two valid words (without special tokens, with leading space)
+        benign_tokens = tokenizer.encode(" BENIGN", add_special_tokens=False)
+        malicious_tokens = tokenizer.encode(" MALICIOUS", add_special_tokens=False)
 
-        logits_processor = LogitsProcessorList([constraint_processor])
+        # Debug token encoding on first sample
+        if i == 0:
+            logger.info(f"Token IDs for ' BENIGN': {benign_tokens}")
+            logger.info(f"Token IDs for ' MALICIOUS': {malicious_tokens}")
+            logger.info(f"Decoded ' BENIGN': {[tokenizer.decode([t]) for t in benign_tokens]}")
+            logger.info(f"Decoded ' MALICIOUS': {[tokenizer.decode([t]) for t in malicious_tokens]}")
 
-        if i < 2:  # Debug first few samples
-            logger.debug(f"Using ClassificationConstraintProcessor with boost_factor=15.0")
+        # Get first token of each word (this is what model will generate first)
+        benign_token_id = benign_tokens[0] if benign_tokens else None
+        malicious_token_id = malicious_tokens[0] if malicious_tokens else None
 
-        # Generate prediction with STRICT CONSTRAINTS
-        # Strategy: Force model to choose between MALICIOUS/BENIGN only
-        with torch.no_grad():
-            outputs = model.generate(
-                **inputs,
-                max_new_tokens=3,  # Allow only 1-3 tokens (one word)
-                min_new_tokens=1,  # Force at least one token
-                do_sample=False,  # Deterministic (greedy) generation
-                num_beams=1,  # No beam search for speed
-                pad_token_id=tokenizer.pad_token_id,
-                eos_token_id=tokenizer.eos_token_id,
-                logits_processor=logits_processor  # Apply constraint processor
+        if benign_token_id is None or malicious_token_id is None:
+            logger.error("Failed to get token IDs for BENIGN/MALICIOUS. Using fallback generation.")
+            # Fallback: standard generation
+            with torch.no_grad():
+                outputs = model.generate(
+                    **inputs,
+                    max_new_tokens=1,
+                    do_sample=False,
+                    pad_token_id=tokenizer.pad_token_id,
+                    eos_token_id=tokenizer.eos_token_id,
+                )
+        else:
+            # Create strict constraint processor
+            prompt_length_tokens = inputs['input_ids'].shape[1]
+            constraint_processor = StrictBinaryClassificationProcessor(
+                benign_token_id=benign_token_id,
+                malicious_token_id=malicious_token_id,
+                prompt_length=prompt_length_tokens
             )
 
-        # Decode prediction
-        generated_text = tokenizer.decode(outputs[0], skip_special_tokens=True)
+            if i < 2:  # Debug first few samples
+                logger.debug(f"Using StrictBinaryClassificationProcessor: BENIGN={benign_token_id}, MALICIOUS={malicious_token_id}")
 
-        # Extract only the newly generated part (after the prompt)
-        prompt_length = len(tokenizer.decode(inputs['input_ids'][0], skip_special_tokens=True))
-        generated_only = generated_text[prompt_length:].strip()
+            # Generate with STRICT CONSTRAINTS using LogitsProcessor
+            # Allow up to 5 tokens to complete the full word (MALICIOUS = 4 tokens, BENIGN = 3 tokens)
+            with torch.no_grad():
+                outputs = model.generate(
+                    **inputs,
+                    max_new_tokens=5,  # Allow full word completion
+                    do_sample=False,  # Deterministic greedy decoding
+                    num_beams=1,  # Greedy search
+                    pad_token_id=tokenizer.pad_token_id,
+                    eos_token_id=tokenizer.eos_token_id,
+                    logits_processor=[constraint_processor]  # Apply strict constraint
+                )
+
+        # Decode ONLY the newly generated tokens (not the entire sequence)
+        prompt_length_tokens = inputs['input_ids'].shape[1]
+        generated_token_ids = outputs[0][prompt_length_tokens:]
+        generated_text = tokenizer.decode(generated_token_ids, skip_special_tokens=True).strip()
 
         # Log first few predictions for debugging
         if i < 5:
             logger.info(f"Sample {i} prediction:")
             logger.info(f"  True label: {true_label}")
-            logger.info(f"  Generated text: '{generated_only}'")
-            logger.info(f"  Full output: '{generated_text[-200:]}'")
+            logger.info(f"  Generated token(s): '{generated_text}'")
+            logger.info(f"  Generated token IDs: {generated_token_ids.tolist()}")
 
-        # Use centralized parsing
-        try:
-            predicted_label = parse_classification_output(generated_text)
-        except Exception as e:
-            logger.error(f"Failed to parse prediction for sample {i}: {e}")
-            logger.error(f"  Generated text: {generated_only}")
-            # Default to benign on parsing error (conservative)
+        # Parse prediction: check if generated text contains MALICIOUS or BENIGN
+        generated_upper = generated_text.upper()
+        if "MALICIOUS" in generated_upper:
+            predicted_label = 1
+        elif "BENIGN" in generated_upper:
             predicted_label = 0
+        else:
+            # Fallback: check first character (M vs B)
+            predicted_label = 1 if generated_upper.startswith("M") else 0
+            logger.warning(f"Sample {i}: Unexpected output '{generated_text}', using fallback prediction")
 
         # Add to results lists (only after successful prediction)
         y_true.append(true_label)
@@ -327,7 +320,7 @@ def evaluate_model(
                 "code_snippet": code[:200],
                 "true_label": true_label,
                 "predicted_label": predicted_label,
-                "raw_prediction": generated_text.split("Classification:")[-1].strip()[:100]
+                "raw_prediction": generated_text
             })
 
     # Compute metrics

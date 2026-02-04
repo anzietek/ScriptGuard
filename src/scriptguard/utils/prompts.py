@@ -12,6 +12,8 @@ def format_training_prompt(code: str, label: str) -> str:
     Format prompt for training with causal language modeling.
     Must match inference prompt structure exactly.
 
+    Uses Python comment style to encourage natural completion behavior.
+
     Args:
         code: Source code to analyze
         label: Classification label ('benign' or 'malicious')
@@ -23,9 +25,13 @@ def format_training_prompt(code: str, label: str) -> str:
     label_normalized = label.upper() if label.lower() in ['benign', 'malicious'] else label
 
     return (
-        f"Analyze if this code is malicious.\n\n"
-        f"Code:\n{code}\n\n"
-        f"Classification: {label_normalized}"  # Space after colon to match inference
+        f'"""\n'
+        f"Security Analysis Report\n"
+        f"------------------------\n"
+        f"Target Script:\n"
+        f"{code}\n"
+        f'"""\n'
+        f"# Analysis: The script above is classified as: {label_normalized}"
     )
 
 
@@ -33,7 +39,7 @@ def format_inference_prompt(code: str, max_code_length: int = 500) -> str:
     """
     Format prompt for inference/evaluation.
     Must match the training format structure.
-    Uses explicit constraints to force binary output.
+    Uses Python comment style to encourage natural completion behavior.
 
     Args:
         code: Source code to analyze
@@ -44,64 +50,47 @@ def format_inference_prompt(code: str, max_code_length: int = 500) -> str:
     """
     truncated_code = code[:max_code_length]
     return (
-        f"Analyze if this code is malicious.\n\n"
-        f"Code:\n{truncated_code}\n\n"
-        f"Classification: "  # Added space to anchor the response
+        f'"""\n'
+        f"Security Analysis Report\n"
+        f"------------------------\n"
+        f"Target Script:\n"
+        f"{truncated_code}\n"
+        f'"""\n'
+        f"# Analysis: The script above is classified as:"
     )
 
 
 def parse_classification_output(generated_text: str) -> int:
     """
     Parse model output to extract binary classification.
-    STRICT PARSING: Only accepts unambiguous MALICIOUS or BENIGN responses.
+    SIMPLIFIED PARSING: Extract only the first word after the prompt.
 
     Args:
         generated_text: Full generated text from model
 
     Returns:
         0 for benign, 1 for malicious
-        Raises ValueError if response is ambiguous
     """
-    # Extract text after "Classification:"
-    if "Classification:" in generated_text:
-        prediction_text = generated_text.split("Classification:")[-1].strip()
+    # Extract text after the prompt anchor
+    if "# Analysis: The script above is classified as:" in generated_text:
+        prediction_text = generated_text.split("# Analysis: The script above is classified as:")[-1].strip()
     else:
         prediction_text = generated_text.strip()
 
-    # Get first line only (ignore any continuation)
-    first_line = prediction_text.split('\n')[0].strip()
+    # Get first word only (strip punctuation and whitespace)
+    first_word = prediction_text.split()[0] if prediction_text.split() else ""
+    first_word = first_word.strip('.,!?;:').upper()
 
-    # Normalize to lowercase for comparison
-    prediction_lower = first_line.lower()
-
-    # Count keyword occurrences
-    has_malicious = any(word in prediction_lower for word in ['malicious', 'malware'])
-    has_benign = any(word in prediction_lower for word in ['benign', 'safe', 'clean'])
-
-    # STRICT VALIDATION: Both or neither -> ambiguous
-    if has_malicious and has_benign:
-        logger.warning(f"Ambiguous prediction contains both MALICIOUS and BENIGN: '{first_line}'")
-        # Default to benign (conservative choice)
-        return 0
-
-    if not has_malicious and not has_benign:
-        logger.warning(f"Unclear prediction, no valid keywords: '{first_line}'")
-        # Check for numeric indicators as fallback
-        if '1' in prediction_lower[:5]:
-            return 1
-        elif '0' in prediction_lower[:5]:
-            return 0
-        # Default to benign (conservative choice)
-        return 0
-
-    # Unambiguous response
-    if has_malicious:
+    # Direct comparison
+    if first_word == "MALICIOUS":
         return 1
-    if has_benign:
+    elif first_word == "BENIGN":
         return 0
-
-    # Should never reach here
-    return 0
+    else:
+        # Log unclear prediction
+        logger.warning(f"Unclear prediction, first word: '{first_word}' from text: '{prediction_text[:100]}'")
+        # Default to benign (conservative choice)
+        return 0
 
 
 def format_fewshot_prompt(
@@ -112,6 +101,7 @@ def format_fewshot_prompt(
 ) -> str:
     """
     Format Few-Shot prompt with similar code examples from RAG.
+    Uses Python comment style to encourage natural completion behavior.
 
     This prompt includes retrieved similar code samples as context,
     enabling the model to make more informed classifications based on
@@ -130,44 +120,44 @@ def format_fewshot_prompt(
     Returns:
         Formatted Few-Shot prompt string
     """
-    # Build context section
-    context_lines = ["[CONTEXT]", "The following are examples of Python scripts and their security classification:", ""]
+    # Build reference samples section
+    reference_lines = []
 
     for i, example in enumerate(context_examples, 1):
         code = example.get("code", "")
         label = example.get("label", "unknown").upper()
-        score = example.get("score")
 
         # Truncate code
         truncated_code = code[:max_context_length]
         if len(code) > max_context_length:
             truncated_code += "..."
 
-        # Add example
-        score_info = f" (similarity: {score:.2f})" if score else ""
-        context_lines.append(f"--- Example {i} ({label}){score_info} ---")
-        context_lines.append(truncated_code)
-        context_lines.append("")
+        reference_lines.append(f"Example {i} ({label}):")
+        reference_lines.append(truncated_code)
+        reference_lines.append("")
 
-    # Build task section
+    reference_section = "\n".join(reference_lines) if reference_lines else ""
+
+    # Build complete prompt
     truncated_target = target_code[:max_code_length]
     if len(target_code) > max_code_length:
         truncated_target += "..."
 
-    task_lines = [
-        "[TASK]",
-        "Analyze the script below and determine if it is MALICIOUS or BENIGN.",
-        "Consider the examples above as reference patterns.",
-        "Answer with ONE WORD ONLY: either 'MALICIOUS' or 'BENIGN'.",
-        "",
-        "Script to analyze:",
-        truncated_target,
-        "",
-        "Classification: "  # Added space to anchor the response
-    ]
+    prompt = (
+        f'"""\n'
+        f"Security Analysis Report\n"
+        f"------------------------\n"
+    )
 
-    # Combine all sections
-    prompt = "\n".join(context_lines + task_lines)
+    if reference_section:
+        prompt += f"Reference Samples:\n{reference_section}\n"
+
+    prompt += (
+        f"Target Script:\n"
+        f"{truncated_target}\n"
+        f'"""\n'
+        f"# Analysis: The script above is classified as:"
+    )
 
     return prompt
 
