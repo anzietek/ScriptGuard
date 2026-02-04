@@ -184,6 +184,8 @@ class GitHubDataSource:
         Returns:
             File content as string or None
         """
+        from scriptguard.utils.file_validator import validate_python_content
+
         data = self._make_request(file_api_url)
         if not data or "content" not in data:
             return None
@@ -191,6 +193,13 @@ class GitHubDataSource:
         import base64
         try:
             content = base64.b64decode(data["content"]).decode("utf-8")
+
+            # Validate Python content
+            is_valid, metadata = validate_python_content(content, source_label=file_api_url)
+            if not is_valid:
+                logger.debug(f"Rejected invalid Python content from {file_api_url}: {metadata.get('error')}")
+                return None
+
             return content
         except Exception as e:
             logger.error(f"Failed to decode file content: {e}")

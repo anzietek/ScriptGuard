@@ -50,34 +50,61 @@ def local_data_ingestion(
 ) -> List[Dict[str, Any]]:
     """
     Ingests scripts from local directories with explicit labels based on path.
+    Enforces strict Python file validation.
     """
+    from scriptguard.utils.file_validator import validate_python_file
+
     data = []
-    
+    stats = {
+        "total_files": 0,
+        "valid_files": 0,
+        "rejected_files": 0,
+        "rejection_reasons": {}
+    }
+
     def ingest_from_path(path: str, label: str):
         if not os.path.exists(path):
             logger.warning(f"Path {path} does not exist.")
             return
         
-        files = []
-        for ext in ['*.py', '*.sh', '*.js']:
-            files.extend(glob.glob(os.path.join(path, "**", ext), recursive=True))
-            
+        # Only process .py files (strict gatekeeper)
+        files = glob.glob(os.path.join(path, "**", "*.py"), recursive=True)
+
         for file_path in files:
-            try:
-                with open(file_path, 'r', encoding='utf-8') as f:
-                    data.append({
-                        "content": f.read(),
-                        "label": label,
-                        "source": file_path
-                    })
-            except Exception as e:
-                logger.error(f"Failed to read {file_path}: {e}")
+            stats["total_files"] += 1
+
+            # Strict validation
+            is_valid, content, metadata = validate_python_file(file_path)
+
+            if is_valid:
+                data.append({
+                    "content": content,
+                    "label": label,
+                    "source": file_path,
+                    "metadata": metadata
+                })
+                stats["valid_files"] += 1
+            else:
+                stats["rejected_files"] += 1
+                error = metadata.get("error", "unknown")
+                stats["rejection_reasons"][error] = stats["rejection_reasons"].get(error, 0) + 1
+                logger.debug(f"Rejected {file_path}: {error}")
 
     if malicious_dir:
         ingest_from_path(malicious_dir, "malicious")
     if benign_dir:
         ingest_from_path(benign_dir, "benign")
-        
+
+    # Log statistics
+    logger.info(f"Local ingestion stats:")
+    logger.info(f"  Total files scanned: {stats['total_files']}")
+    logger.info(f"  Valid files: {stats['valid_files']}")
+    logger.info(f"  Rejected files: {stats['rejected_files']}")
+    if stats["rejection_reasons"]:
+        logger.info("  Rejection reasons:")
+        for reason, count in stats["rejection_reasons"].items():
+            logger.info(f"    - {reason}: {count}")
+
     return data
 
 @step

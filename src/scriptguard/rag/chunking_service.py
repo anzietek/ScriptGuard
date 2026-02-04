@@ -56,6 +56,64 @@ class ChunkingService:
         # Ensure it's positive and within uint64 range
         return hash_int % (2**63 - 1)  # Use signed int64 max for safety
 
+    def _generate_parent_id(self, content: str, db_id: Optional[int] = None) -> str:
+        """Generate parent document ID (hash of full content)."""
+        # Use SHA256 for parent ID to avoid collisions
+        identifier = f"{db_id}_{content}" if db_id else content
+        return hashlib.sha256(identifier.encode()).hexdigest()
+
+    def _extract_parent_context(self, code: str, max_length: int = 500) -> str:
+        """
+        Extract parent context from code (module-level info).
+
+        Returns:
+            String containing module docstring, imports, and class/function signatures
+        """
+        import ast
+
+        try:
+            tree = ast.parse(code)
+            context_parts = []
+
+            # Extract module docstring
+            if ast.get_docstring(tree):
+                docstring = ast.get_docstring(tree)[:200]  # First 200 chars
+                context_parts.append(f"# Module: {docstring}")
+
+            # Extract imports
+            imports = []
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Import):
+                    for alias in node.names:
+                        imports.append(alias.name)
+                elif isinstance(node, ast.ImportFrom):
+                    if node.module:
+                        imports.append(node.module)
+
+            if imports:
+                context_parts.append(f"# Imports: {', '.join(imports[:10])}")
+
+            # Extract top-level function/class signatures
+            signatures = []
+            for node in tree.body:
+                if isinstance(node, ast.FunctionDef):
+                    args_list = [arg.arg for arg in node.args.args[:3]]  # First 3 args
+                    sig = f"def {node.name}({', '.join(args_list)}...)"
+                    signatures.append(sig)
+                elif isinstance(node, ast.ClassDef):
+                    signatures.append(f"class {node.name}")
+
+            if signatures:
+                context_parts.append(f"# Definitions: {'; '.join(signatures[:5])}")
+
+            parent_context = " | ".join(context_parts)
+            return parent_context[:max_length]
+
+        except Exception as e:
+            # If AST parsing fails, use first few lines as context
+            lines = code.split('\n')[:5]
+            return " ".join(line.strip() for line in lines if line.strip())[:max_length]
+
     def chunk_code(
         self,
         code: str,
@@ -86,12 +144,18 @@ class ChunkingService:
                 - chunk_id: Unique chunk identifier
                 - total_chunks: Total number of chunks for this document
                 - token_count: Actual token count of this chunk
+                - parent_id: Hash of parent document
+                - parent_context: Module-level context (imports, signatures)
                 - label: Label
                 - source: Source
                 - metadata: Metadata
         """
         if not code or not code.strip():
             return []
+
+        # Generate parent metadata ONCE for all chunks
+        parent_id = self._generate_parent_id(code, db_id)
+        parent_context = self._extract_parent_context(code)
 
         # Tokenize the entire code WITHOUT truncation
         try:
@@ -113,6 +177,8 @@ class ChunkingService:
                 "chunk_id": self._generate_chunk_id(code, 0),
                 "total_chunks": 1,
                 "token_count": len(tokens),
+                "parent_id": parent_id,
+                "parent_context": parent_context,
                 "label": label,
                 "source": source,
                 "metadata": metadata or {}
@@ -149,7 +215,7 @@ class ChunkingService:
                 start_idx += stride
                 continue
 
-            # Create chunk metadata
+            # Create chunk metadata with parent-child structure
             chunks.append({
                 "content": chunk_text,
                 "db_id": db_id,
@@ -159,6 +225,8 @@ class ChunkingService:
                 "token_count": len(chunk_tokens),
                 "start_token": start_idx,
                 "end_token": end_idx,
+                "parent_id": parent_id,  # Parent document hash
+                "parent_context": parent_context,  # Module-level context
                 "label": label,
                 "source": source,
                 "metadata": metadata or {}
@@ -179,7 +247,7 @@ class ChunkingService:
             chunk["total_chunks"] = total_chunks
 
         logger.debug(
-            f"Chunked document (db_id={db_id}): {len(tokens)} tokens → "
+            f"Chunked document (db_id={db_id}, parent_id={parent_id[:8]}...): {len(tokens)} tokens → "
             f"{len(chunks)} chunks (size={self.chunk_size}, overlap={self.overlap}, stride={stride})"
         )
         return chunks
@@ -379,7 +447,7 @@ class ResultAggregator:
 
         # Batch fetch from database (much more efficient than individual queries)
         try:
-            from scriptguard.database.connection_pool import get_connection, return_connection
+            from scriptguard.database.db_schema import get_connection, return_connection
             conn = get_connection()
             cursor = conn.cursor()
 

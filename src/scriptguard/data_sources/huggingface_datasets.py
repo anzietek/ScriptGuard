@@ -162,6 +162,13 @@ class HuggingFaceDataSource:
                 content = item.get("content", item.get("text", ""))
 
                 if content and len(content) > 100:
+                    # Validate Python syntax
+                    from scriptguard.utils.file_validator import validate_python_content
+                    is_valid, metadata = validate_python_content(content, source_label="the-stack")
+
+                    if not is_valid:
+                        continue
+
                     samples.append({
                         "content": content,
                         "label": "benign",
@@ -172,7 +179,8 @@ class HuggingFaceDataSource:
                             "language": language,
                             "size": item.get("size"),
                             "license": item.get("license"),
-                            "fetched_at": datetime.now().isoformat()
+                            "fetched_at": datetime.now().isoformat(),
+                            "validation": metadata
                         }
                     })
 

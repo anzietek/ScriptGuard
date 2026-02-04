@@ -396,16 +396,29 @@ class CodeSimilarityStore:
             chunks = self.chunking_service.chunk_samples(samples)
             logger.info(f"✓ Created {len(chunks)} chunks from {len(samples)} samples")
         else:
-            # No chunking - process samples as-is
+            # No chunking - process samples as-is but still add parent structure
             chunks = []
             for sample in samples:
+                content = sample.get("content", "")
+                db_id = sample.get("id")
+
+                # Generate parent metadata even for single-chunk documents
+                import hashlib
+                parent_id = hashlib.sha256(f"{db_id}_{content}".encode()).hexdigest()
+
+                # Extract simple parent context
+                lines = content.split('\n')[:5]
+                parent_context = " ".join(line.strip() for line in lines if line.strip())[:500]
+
                 chunks.append({
-                    "content": sample.get("content", ""),
-                    "db_id": sample.get("id"),
+                    "content": content,
+                    "db_id": db_id,
                     "chunk_index": 0,
-                    "chunk_id": self._generate_id(sample.get("content", "")),
+                    "chunk_id": self._generate_id(content),
                     "total_chunks": 1,
                     "token_count": None,
+                    "parent_id": parent_id,
+                    "parent_context": parent_context,
                     "label": sample.get("label"),
                     "source": sample.get("source"),
                     "metadata": sample.get("metadata", {})
@@ -461,13 +474,15 @@ class CodeSimilarityStore:
                 # Use chunk_id as point ID
                 point_id = chunk.get("chunk_id")
 
-                # Prepare payload (MINIMAL - no truncation, just metadata)
+                # Prepare payload with parent-child structure
                 payload = {
                     "db_id": chunk.get("db_id"),
                     "chunk_index": chunk.get("chunk_index", 0),
                     "total_chunks": chunk.get("total_chunks", 1),
                     "token_count": chunk.get("token_count"),
                     "code_preview": chunk.get("content", "")[:200],  # Only small preview
+                    "parent_id": chunk.get("parent_id", ""),  # Parent document hash
+                    "parent_context": chunk.get("parent_context", ""),  # Module-level context
                     "label": label,
                     "label_binary": label_binary,
                     "source": chunk.get("source", "unknown"),
