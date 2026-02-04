@@ -40,8 +40,9 @@ def load_resources():
     base_model = AutoModelForCausalLM.from_pretrained(
         model_id,
         torch_dtype=torch_dtype,
-        device_map="auto" if torch.cuda.is_available() else None
+        low_cpu_mem_usage=True
     )
+    base_model = base_model.to(device)
 
     if os.path.exists(adapter_path):
         model = PeftModel.from_pretrained(base_model, adapter_path)

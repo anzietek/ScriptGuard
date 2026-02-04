@@ -93,20 +93,19 @@ def evaluate_model(
         tokenizer.pad_token = tokenizer.eos_token
 
     # Load base model with proper configuration for evaluation
-    # Starcoder2 doesn't support load_in_8bit parameter, we need to use bitsandbytes config
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
     try:
         if device == "cuda":
-            # Try GPU with float16 and proper memory management
+            # Load model on GPU without device_map to avoid PEFT adapter issues
             logger.info("Attempting to load model on GPU with float16...")
             base_model = AutoModelForCausalLM.from_pretrained(
                 base_model_id,
                 torch_dtype=torch.float16,
                 low_cpu_mem_usage=True,
-                device_map="auto",
-                max_memory={0: "3.5GB"}  # Reserve some VRAM for operations
+                # NO device_map="auto" - causes issues with PEFT adapter loading
             )
+            base_model = base_model.to(device)
             logger.info("✓ Model loaded on GPU with float16")
         else:
             raise RuntimeError("CUDA not available")
@@ -119,10 +118,12 @@ def evaluate_model(
             torch_dtype=torch.float32,
             low_cpu_mem_usage=True
         )
+        base_model = base_model.to("cpu")
         device = "cpu"
         logger.info("✓ Model loaded on CPU")
 
-    # Load LoRA adapter
+    # Load LoRA adapter - must be after base model is loaded and placed on device
+    logger.info(f"Loading PEFT adapter from {adapter_path}")
     model = PeftModel.from_pretrained(base_model, adapter_path)
     model.eval()
 
