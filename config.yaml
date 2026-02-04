@@ -309,8 +309,8 @@ training:
   early_stopping: true
   early_stopping_patience: 5 # Increased from 3 → more patience
   # Model Evaluation
-  eval_max_new_tokens: 20
-  eval_temperature: 0.1
+  eval_max_new_tokens: 3  # Reduced from 20 → only allow 1-3 tokens (one word: MALICIOUS or BENIGN)
+  eval_temperature: 0.0  # Reduced from 0.1 → fully deterministic
   eval_batch_size: 1
   eval_max_code_length: 500
 
