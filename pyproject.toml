@@ -31,6 +31,8 @@ dependencies = [
     "torchvision>=0.20.0",
     "torchaudio>=2.5.0",
     "transformers>=4.36.0",
+    "py7zr>=1.1.0",
+    "pyzipper>=0.3.6",
 ]
 
 [[tool.uv.index]]

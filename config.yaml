@@ -52,6 +52,27 @@ data_sources:
       - "stealer"
     max_samples: 100
 
+  vxunderground:
+    enabled: true
+    script_types:
+      - ".py"
+      - ".ps1"
+      - ".js"
+      - ".vbs"
+    max_samples: 50
+
+  thezoo:
+    enabled: true
+    script_types:
+      - ".py"
+      - ".ps1"
+      - ".js"
+      - ".vbs"
+      - ".sh"
+      - ".bat"
+      - ".cmd"
+    max_samples: 50
+
   huggingface:
     enabled: false  # Disabled - the-stack-dedup is gated and requires special access
     datasets:

@@ -11,7 +11,9 @@ from ..data_sources import (
     GitHubDataSource,
     MalwareBazaarDataSource,
     HuggingFaceDataSource,
-    CVEFeedSource
+    CVEFeedSource,
+    VXUndergroundDataSource,
+    TheZooDataSource
 )
 from ..data_sources.additional_hf_datasets import AdditionalHFDatasets
 from ..database import DatasetManager, deduplicate_samples
@@ -82,6 +84,44 @@ def advanced_data_ingestion(config: dict) -> List[Dict]:
 
         except Exception as e:
             logger.error(f"MalwareBazaar data source failed: {e}")
+
+    # VX-Underground Data Source
+    if config.get("data_sources", {}).get("vxunderground", {}).get("enabled", False):
+        logger.info("Fetching data from VX-Underground...")
+        vx_config = config["data_sources"]["vxunderground"]
+
+        try:
+            github_token = config.get("api_keys", {}).get("github_token")
+            vx_source = VXUndergroundDataSource(github_token=github_token)
+
+            malicious_samples = vx_source.fetch_malicious_samples(
+                script_types=vx_config.get("script_types", [".py", ".ps1", ".js", ".vbs"]),
+                max_samples=vx_config.get("max_samples", 50)
+            )
+            all_samples.extend(malicious_samples)
+            logger.info(f"Fetched {len(malicious_samples)} samples from VX-Underground")
+
+        except Exception as e:
+            logger.error(f"VX-Underground data source failed: {e}")
+
+    # TheZoo Data Source
+    if config.get("data_sources", {}).get("thezoo", {}).get("enabled", False):
+        logger.info("Fetching data from TheZoo...")
+        zoo_config = config["data_sources"]["thezoo"]
+
+        try:
+            github_token = config.get("api_keys", {}).get("github_token")
+            zoo_source = TheZooDataSource(github_token=github_token)
+
+            malicious_samples = zoo_source.fetch_malicious_samples(
+                script_types=zoo_config.get("script_types", [".py", ".ps1", ".js", ".vbs", ".sh"]),
+                max_samples=zoo_config.get("max_samples", 50)
+            )
+            all_samples.extend(malicious_samples)
+            logger.info(f"Fetched {len(malicious_samples)} samples from TheZoo")
+
+        except Exception as e:
+            logger.error(f"TheZoo data source failed: {e}")
 
     # Hugging Face Data Source
     if config.get("data_sources", {}).get("huggingface", {}).get("enabled", False):
