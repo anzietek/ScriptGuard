@@ -147,6 +147,18 @@ code_embedding:
   # Alternative: "Salesforce/codet5p-110m-embedding"
   # Note: These models are specifically trained for code similarity
 
+  # Few-Shot RAG Configuration (P1.1/P1.5 fix)
+  fewshot:
+    enabled: true                    # Enable/disable few-shot RAG without code changes
+    k: 3                              # Number of similar examples to retrieve
+    balance_labels: true              # Ensure mix of malicious/benign examples
+    score_threshold_mode: "default"  # Options: "default", "strict", "lenient"
+    score_threshold: null             # Explicit threshold (null = use score_thresholds[model][mode])
+    max_context_length: 300           # Maximum length for each reference example
+    max_code_length: 500              # Maximum length for target code
+    aggregate_chunks: true            # Aggregate chunk results to document level
+    enable_reranking: true            # Enable reranking for improved relevance
+
   # Pooling Strategy Configuration
   pooling_strategy: "mean_pooling"  # Options: "cls", "mean_pooling", "pooler_output", "sentence_transformer"
   # - cls: Use [CLS] token from last_hidden_state

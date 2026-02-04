@@ -3,6 +3,7 @@ Embedding Service - Unified Strategy for Code Embeddings
 Supports multiple pooling strategies, L2 normalization, and configurable models.
 """
 
+import os
 import torch
 import numpy as np
 from typing import List, Dict, Any, Optional, Literal
@@ -77,10 +78,20 @@ class EmbeddingService:
     def _init_transformers(self):
         """Initialize standard Transformers model."""
         try:
+            # Security: trust_remote_code disabled by default (supply-chain risk)
+            trust_remote = os.getenv("SCRIPTGUARD_TRUST_EMBEDDING_CODE", "false").lower() == "true"
+
+            if trust_remote:
+                logger.warning(
+                    f"⚠️  SECURITY WARNING: trust_remote_code=True for embedding model '{self.model_name}'. "
+                    "This allows arbitrary code execution from the model repository. "
+                    "Only enable for trusted models."
+                )
+
             self.tokenizer = AutoTokenizer.from_pretrained(self.model_name)
             self.model = AutoModel.from_pretrained(
                 self.model_name,
-                trust_remote_code=True
+                trust_remote_code=trust_remote
             ).to(self.device)
             self.model.eval()
 

@@ -60,12 +60,22 @@ class HuggingFaceDataSource:
         logger.info(f"Loading dataset: {dataset_name} (language: {language})")
 
         try:
+            # Security: trust_remote_code disabled by default (supply-chain risk)
+            trust_remote = os.getenv("SCRIPTGUARD_TRUST_DATASET_CODE", "false").lower() == "true"
+
+            if trust_remote:
+                logger.warning(
+                    f"⚠️  SECURITY WARNING: trust_remote_code=True for dataset '{dataset_name}'. "
+                    "This allows arbitrary code execution from the dataset repository. "
+                    "Only enable for trusted datasets."
+                )
+
             # Load dataset with streaming for large datasets
             dataset = self.load_dataset(
                 dataset_name,
                 split=split,
                 streaming=True,
-                trust_remote_code=True,
+                trust_remote_code=trust_remote,
                 token=self.token  # Add token for gated datasets
             )
 

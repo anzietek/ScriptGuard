@@ -7,6 +7,7 @@ graceful fallback, and reranking.
 
 import os
 import yaml
+import numpy as np
 from typing import List, Dict, Any, Optional
 from qdrant_client import QdrantClient
 from qdrant_client.http import models
@@ -727,11 +728,101 @@ class CodeSimilarityStore:
                 db_manager, results, replace_content=True
             )
 
+        # Log retrieval metrics (P1.2 fix)
+        self._log_retrieval_metrics(results, query_metadata={
+            "k": k,
+            "balance_labels": balance_labels,
+            "score_threshold": score_threshold,
+            "threshold_mode": threshold_mode,
+            "aggregate_chunks": aggregate_chunks,
+            "enable_reranking": enable_reranking
+        })
+
         logger.info(
             f"✓ Returning {len(results)}/{k} results "
-            f"({sum(1 for r in results if r.get('low_confidence')) } low_confidence)"
+            f"({sum(1 for r in results if r.get('low_confidence'))} low_confidence)"
         )
         return results
+
+    def _log_retrieval_metrics(self, results: List[Dict[str, Any]], query_metadata: dict):
+        """
+        Log retrieval quality metrics for monitoring (P1.2 fix).
+
+        Tracks:
+        - Result quality (scores, confidence)
+        - Label distribution (balance)
+        - Fallback usage (level tracking)
+
+        Args:
+            results: List of retrieval results
+            query_metadata: Query parameters for context
+        """
+        if not results:
+            logger.warning("[Retrieval Metrics] Empty results returned")
+            return
+
+        # Extract metrics
+        scores = [r.get('score', 0.0) for r in results]
+        labels = [r.get('label', 'unknown') for r in results]
+        low_confidence_count = sum(1 for r in results if r.get('low_confidence', False))
+
+        # Calculate statistics
+        metrics = {
+            "num_results": len(results),
+            "requested_k": query_metadata.get("k", "unknown"),
+            "avg_score": float(np.mean(scores)) if scores else 0.0,
+            "min_score": float(np.min(scores)) if scores else 0.0,
+            "max_score": float(np.max(scores)) if scores else 0.0,
+            "median_score": float(np.median(scores)) if scores else 0.0,
+            "low_confidence_count": low_confidence_count,
+            "low_confidence_rate": low_confidence_count / len(results) if results else 0.0,
+            "label_distribution": {
+                "malicious": labels.count("malicious"),
+                "benign": labels.count("benign"),
+                "unknown": labels.count("unknown")
+            },
+            "label_balance_achieved": (
+                labels.count("malicious") > 0 and labels.count("benign") > 0
+            ) if query_metadata.get("balance_labels") else None,
+            "query_params": {
+                "score_threshold": query_metadata.get("score_threshold"),
+                "threshold_mode": query_metadata.get("threshold_mode"),
+                "balance_labels": query_metadata.get("balance_labels"),
+                "aggregate_chunks": query_metadata.get("aggregate_chunks"),
+                "enable_reranking": query_metadata.get("enable_reranking")
+            }
+        }
+
+        # Log metrics
+        logger.info(
+            f"[Retrieval Metrics] "
+            f"Results: {metrics['num_results']}/{metrics['requested_k']}, "
+            f"Avg score: {metrics['avg_score']:.3f}, "
+            f"Min: {metrics['min_score']:.3f}, "
+            f"Max: {metrics['max_score']:.3f}, "
+            f"Low confidence: {metrics['low_confidence_count']}"
+        )
+
+        logger.info(
+            f"[Retrieval Metrics] "
+            f"Labels: malicious={metrics['label_distribution']['malicious']}, "
+            f"benign={metrics['label_distribution']['benign']}, "
+            f"unknown={metrics['label_distribution']['unknown']}, "
+            f"Balanced: {metrics['label_balance_achieved']}"
+        )
+
+        # Alert if quality is degraded
+        if metrics['avg_score'] < 0.2:
+            logger.warning(
+                f"[Retrieval Metrics] LOW QUALITY ALERT: Average score {metrics['avg_score']:.3f} "
+                f"is below 0.2. Consider adjusting thresholds or model."
+            )
+
+        if metrics['low_confidence_rate'] > 0.5:
+            logger.warning(
+                f"[Retrieval Metrics] HIGH FALLBACK RATE: {metrics['low_confidence_rate']:.1%} "
+                f"of results required Level 3 fallback. Collection may be too small."
+            )
 
     def _search_with_filters(
         self,

@@ -99,7 +99,37 @@ def evaluate_model(
     eval_config = config.get("training", {})
     max_new_tokens = eval_config.get("eval_max_new_tokens", 20)
     temperature = eval_config.get("eval_temperature", 0.1)
-    max_code_length = eval_config.get("eval_max_code_length", 500)
+
+    # Load Few-Shot RAG configuration from config.yaml (P1.1/P1.5 fix)
+    code_embedding_config = config.get("code_embedding", {})
+    fewshot_config = code_embedding_config.get("fewshot", {})
+
+    # Override use_fewshot_rag from config if specified
+    use_fewshot_rag = fewshot_config.get("enabled", use_fewshot_rag)
+
+    # Load RAG parameters from config
+    rag_k = fewshot_config.get("k", 3)
+    rag_balance_labels = fewshot_config.get("balance_labels", True)
+    rag_threshold_mode = fewshot_config.get("score_threshold_mode", "default")
+    rag_score_threshold = fewshot_config.get("score_threshold")  # Can be None
+    rag_max_context_length = fewshot_config.get("max_context_length", 300)
+    rag_max_code_length = fewshot_config.get("max_code_length", 500)
+    rag_aggregate_chunks = fewshot_config.get("aggregate_chunks", True)
+    rag_enable_reranking = fewshot_config.get("enable_reranking", True)
+
+    # Legacy fallback for max_code_length
+    max_code_length = rag_max_code_length or eval_config.get("eval_max_code_length", 500)
+
+    logger.info(f"Few-Shot RAG Configuration:")
+    logger.info(f"  Enabled: {use_fewshot_rag}")
+    logger.info(f"  k (retrieval count): {rag_k}")
+    logger.info(f"  Balance labels: {rag_balance_labels}")
+    logger.info(f"  Score threshold mode: {rag_threshold_mode}")
+    logger.info(f"  Score threshold: {rag_score_threshold if rag_score_threshold is not None else 'auto (from model config)'}")
+    logger.info(f"  Max context length: {rag_max_context_length}")
+    logger.info(f"  Max code length: {max_code_length}")
+    logger.info(f"  Aggregate chunks: {rag_aggregate_chunks}")
+    logger.info(f"  Enable reranking: {rag_enable_reranking}")
 
     # Initialize Code Similarity Store for Few-Shot RAG
     code_store = None
@@ -178,6 +208,10 @@ def evaluate_model(
     y_pred = []
     sample_results = []
 
+    # Format error tracking (P1.3 fix)
+    format_errors = 0
+    unclear_predictions = []
+
     logger.info("Running inference on test set...")
 
     for i, sample in enumerate(test_dataset):
@@ -202,11 +236,19 @@ def evaluate_model(
         if code_store is not None:
             # Retrieve similar code examples from Qdrant
             try:
+                # Resolve score_threshold from mode if not explicitly set
+                search_threshold = rag_score_threshold
+                if search_threshold is None:
+                    search_threshold = code_store.get_threshold(rag_threshold_mode)
+
                 similar_examples = code_store.search_similar_code(
                     query_code=code,
-                    k=3,  # Retrieve top 3 similar examples
-                    balance_labels=True,  # Ensure mix of malicious/benign
-                    score_threshold=0.3
+                    k=rag_k,  # From config
+                    balance_labels=rag_balance_labels,  # From config
+                    score_threshold=search_threshold,  # From config
+                    threshold_mode=rag_threshold_mode,  # From config
+                    aggregate_chunks=rag_aggregate_chunks,  # From config
+                    enable_reranking=rag_enable_reranking  # From config
                 )
 
                 if similar_examples:
@@ -214,12 +256,15 @@ def evaluate_model(
                     prompt = format_fewshot_prompt(
                         target_code=code,
                         context_examples=similar_examples,
-                        max_code_length=max_code_length,
-                        max_context_length=300
+                        max_code_length=max_code_length,  # From config
+                        max_context_length=rag_max_context_length  # From config
                     )
 
                     if i < 3:  # Log first few prompts for debugging
-                        logger.debug(f"Sample {i} using Few-Shot RAG with {len(similar_examples)} examples")
+                        logger.debug(
+                            f"Sample {i} using Few-Shot RAG with {len(similar_examples)} examples "
+                            f"(threshold={search_threshold:.2f}, mode={rag_threshold_mode})"
+                        )
                 else:
                     # No similar examples found, use standard prompt
                     prompt = format_inference_prompt(code=code, max_code_length=max_code_length)
@@ -306,9 +351,24 @@ def evaluate_model(
         elif "BENIGN" in generated_upper:
             predicted_label = 0
         else:
+            # Format error detected (P1.3 fix)
+            format_errors += 1
+
+            # Store for detailed logging
+            if len(unclear_predictions) < 10:  # Keep first 10 examples
+                unclear_predictions.append({
+                    "sample_idx": i,
+                    "generated": generated_text,
+                    "true_label": true_label,
+                    "generated_token_ids": generated_token_ids.tolist()
+                })
+
             # Fallback: check first character (M vs B)
             predicted_label = 1 if generated_upper.startswith("M") else 0
-            logger.warning(f"Sample {i}: Unexpected output '{generated_text}', using fallback prediction")
+            logger.warning(
+                f"[FORMAT_ERROR] Sample {i}: Unexpected output '{generated_text}', "
+                f"using fallback prediction: {'MALICIOUS' if predicted_label == 1 else 'BENIGN'}"
+            )
 
         # Add to results lists (only after successful prediction)
         y_true.append(true_label)
@@ -322,6 +382,39 @@ def evaluate_model(
                 "predicted_label": predicted_label,
                 "raw_prediction": generated_text
             })
+
+    # Log format error metrics (P1.3 fix)
+    total_samples = len(y_true)
+    format_error_rate = format_errors / total_samples if total_samples > 0 else 0.0
+
+    logger.info("=" * 60)
+    logger.info("[Format Error Report]")
+    logger.info(f"Total samples: {total_samples}")
+    logger.info(f"Format errors: {format_errors}")
+    logger.info(f"Format error rate: {format_error_rate:.2%}")
+
+    if format_error_rate > 0.05:  # 5% threshold
+        logger.error(
+            f"⚠️  HIGH FORMAT ERROR RATE: {format_error_rate:.2%} "
+            f"({format_errors}/{total_samples} samples)"
+        )
+        logger.error("Model is not consistently following the expected output format.")
+
+        if unclear_predictions:
+            logger.error(f"Sample unclear predictions (first {len(unclear_predictions)}):")
+            for pred in unclear_predictions[:5]:
+                logger.error(
+                    f"  Sample {pred['sample_idx']}: "
+                    f"Generated='{pred['generated']}', "
+                    f"True={pred['true_label']}, "
+                    f"Token IDs={pred['generated_token_ids']}"
+                )
+    elif format_error_rate > 0:
+        logger.warning(f"Format errors detected: {format_error_rate:.2%}")
+    else:
+        logger.info("✓ No format errors - all predictions follow expected format")
+
+    logger.info("=" * 60)
 
     # Compute metrics
     accuracy = accuracy_score(y_true, y_pred)
@@ -359,6 +452,8 @@ def evaluate_model(
         "specificity": float(specificity),
         "false_positive_rate": float(fpr),
         "false_negative_rate": float(fnr),
+        "format_error_rate": float(format_error_rate),  # P1.3 fix
+        "format_errors": int(format_errors),  # P1.3 fix
         "roc_auc": float(roc_auc) if roc_auc is not None else None,
         "average_precision": float(avg_precision) if avg_precision is not None else None,
         "true_positives": int(tp),
