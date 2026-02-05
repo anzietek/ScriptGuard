@@ -9,6 +9,10 @@ import psycopg2
 from psycopg2 import pool, sql
 from psycopg2.extras import RealDictCursor, Json
 import os
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+load_dotenv()
 
 class DatabasePool:
     """PostgreSQL connection pool manager."""

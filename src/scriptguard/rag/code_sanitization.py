@@ -112,10 +112,14 @@ class CodeSanitizer:
         report["entropy"] = entropy
 
         if entropy < self.min_entropy:
-            report["valid"] = False
-            report["reason"] = f"low_entropy_{entropy:.2f}"
-            report["warnings"].append(f"Entropy {entropy:.2f} < {self.min_entropy}")
-            return None, report
+            # P2.1 Fix: Soften entropy check to warning instead of hard reject
+            # Only reject if extremely low (likely repetitions)
+            if entropy < 1.5:
+                report["valid"] = False
+                report["reason"] = f"extremely_low_entropy_{entropy:.2f}"
+                return None, report
+            else:
+                report["warnings"].append(f"Low entropy: {entropy:.2f} < {self.min_entropy}")
 
         # Step 3: Check for minified code (excessively long lines)
         lines = content.split('\n')
@@ -138,9 +142,13 @@ class CodeSanitizer:
         report["empty_line_ratio"] = empty_line_ratio
 
         if len(non_empty_lines) < self.min_valid_lines:
-            report["valid"] = False
-            report["reason"] = "too_few_valid_lines"
-            return None, report
+            # P2.1 Fix: Allow short samples (one-liners) but warn
+            if len(non_empty_lines) == 0:
+                report["valid"] = False
+                report["reason"] = "no_valid_lines"
+                return None, report
+            else:
+                report["warnings"].append(f"Few valid lines: {len(non_empty_lines)} < {self.min_valid_lines}")
 
         if empty_line_ratio > self.max_empty_line_ratio:
             report["warnings"].append(f"High empty line ratio: {empty_line_ratio:.2%}")
@@ -173,7 +181,8 @@ class CodeSanitizer:
         report["compression_ratio"] = len(cleaned_content) / len(content) if content else 0
 
         # Final check: ensure we haven't over-cleaned
-        if len(cleaned_content) < 50:  # Minimum viable code length
+        # P2.1 Fix: Relaxed minimum length from 50 to 10 chars to allow one-liners
+        if len(cleaned_content) < 10:
             report["valid"] = False
             report["reason"] = "content_too_short_after_cleaning"
             return None, report
