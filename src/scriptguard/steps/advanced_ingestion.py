@@ -149,11 +149,56 @@ def advanced_data_ingestion(config: dict) -> List[Dict]:
         cve_config = config["data_sources"]["cve_feeds"]
 
         try:
-            cve_source = CVEFeedSource(
-                api_key=config.get("api_keys", {}).get("nvd_api_key")
-            )
+            # Get NVD API key from env or config
+            import os
+            nvd_api_key = os.getenv("NVD_API_KEY") or config.get("api_keys", {}).get("nvd_api_key")
 
-            # Get synthetic exploit patterns
+            cve_source = CVEFeedSource(api_key=nvd_api_key)
+
+            # 1. Add CVE patterns to Qdrant malware_knowledge collection
+            logger.info("Adding CVE data to Qdrant malware_knowledge collection...")
+            try:
+                from scriptguard.rag.qdrant_store import QdrantStore
+
+                qdrant_config = config.get("qdrant", {})
+                store = QdrantStore(
+                    host=qdrant_config.get("host", "localhost"),
+                    port=qdrant_config.get("port", 6333),
+                    collection_name="malware_knowledge",
+                    embedding_model=qdrant_config.get("embedding_model", "all-MiniLM-L6-v2")
+                )
+
+                # Fetch real CVE data from NVD
+                days_back = cve_config.get("days_back", 30)
+                keywords = cve_config.get("keywords", ["script", "code execution"])
+
+                logger.info(f"Fetching CVEs: {days_back} days back, keywords={keywords}")
+                cves = cve_source.fetch_recent_cves(days=days_back, keywords=keywords)
+
+                if cves:
+                    # Convert to Qdrant format
+                    cve_data = []
+                    for cve in cves:
+                        cve_data.append({
+                            "cve_id": cve["cve_id"],
+                            "description": cve["description"],
+                            "severity": cve.get("severity", "UNKNOWN"),
+                            "pattern": "",
+                            "type": "cve",
+                            "cvss_score": cve.get("cvss_score"),
+                            "published": cve.get("published")
+                        })
+
+                    # Add to Qdrant
+                    store.upsert_vulnerabilities(cve_data)
+                    logger.info(f"✓ Added {len(cve_data)} CVEs to Qdrant malware_knowledge")
+                else:
+                    logger.warning("No CVEs fetched from NVD")
+
+            except Exception as qdrant_error:
+                logger.error(f"Failed to add CVEs to Qdrant: {qdrant_error}")
+
+            # 2. Get synthetic exploit patterns for training data
             exploit_samples = cve_source.get_exploit_pattern_samples()
             all_samples.extend(exploit_samples)
             logger.info(f"Generated {len(exploit_samples)} samples from CVE patterns")

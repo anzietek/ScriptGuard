@@ -26,8 +26,10 @@ if 'scriptguard.rag.qdrant_store' in sys.modules:
 
 from scriptguard.rag.qdrant_store import QdrantStore
 from scriptguard.data_sources.cve_feeds import CVEFeedSource
-from scriptguard.utils.logger import logger
 import yaml
+
+# Use standard logging instead of scriptguard logger to avoid conflicts
+logger = logging.getLogger(__name__)
 
 
 def load_config():
@@ -39,6 +41,15 @@ def load_config():
 
 def main():
     logger.info("Starting Qdrant CVE enrichment...")
+
+    # Load .env file for API keys
+    import os
+    from dotenv import load_dotenv
+
+    env_path = Path(__file__).parent.parent / ".env"
+    if env_path.exists():
+        load_dotenv(env_path)
+        logger.info("Loaded .env file")
 
     # Load config
     try:
@@ -76,9 +87,11 @@ def main():
     initial_count = initial_info.get('points_count', 0)
     logger.info(f"Initial collection size: {initial_count} points")
 
-    # Initialize CVE source
-    nvd_api_key = api_keys.get("nvd_api_key")
-    if not nvd_api_key:
+    # Initialize CVE source - prioritize env variable over config
+    nvd_api_key = os.getenv("NVD_API_KEY") or api_keys.get("nvd_api_key")
+    if nvd_api_key:
+        logger.info(f"Using NVD API key: {nvd_api_key[:8]}...")
+    else:
         logger.warning("No NVD API key found. Rate limits will be lower.")
         logger.info("Set NVD_API_KEY environment variable for higher rate limits")
 

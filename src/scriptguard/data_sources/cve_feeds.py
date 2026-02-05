@@ -40,10 +40,8 @@ class CVEFeedSource:
 
         for attempt in range(retry_count):
             try:
-                logger.debug(f"Making request to {self.NVD_API_URL} (attempt {attempt + 1}/{retry_count})")
-                logger.debug(f"Params: {params}")
-
                 # Create a new session for each request to avoid connection reuse issues
+                # This fixes the 404 error when used with httpx (from QdrantStore)
                 session = requests.Session()
                 session.headers.update(self.headers)
 
@@ -54,9 +52,6 @@ class CVEFeedSource:
                 )
 
                 session.close()
-
-                logger.debug(f"Response status: {response.status_code}")
-                logger.debug(f"Full URL: {response.url}")
 
                 if response.status_code == 200:
                     try:
@@ -73,9 +68,8 @@ class CVEFeedSource:
                     return None
 
                 elif response.status_code == 404:
-                    logger.error(f"NVD API returned 404 - invalid endpoint or parameters")
-                    logger.error(f"Full URL: {response.url}")
-                    logger.error(f"Response: {response.text[:500]}")
+                    logger.error(f"NVD API returned 404")
+                    logger.error(f"URL: {response.url}")
 
                     # 404 might be temporary, retry with backoff
                     if attempt < retry_count - 1:
@@ -86,7 +80,6 @@ class CVEFeedSource:
 
                 else:
                     logger.error(f"NVD API error: {response.status_code}")
-                    logger.error(f"Response text: {response.text[:500]}")
 
                     if attempt < retry_count - 1:
                         time.sleep(2 ** attempt)
