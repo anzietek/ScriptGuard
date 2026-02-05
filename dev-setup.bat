@@ -1,11 +1,23 @@
 @echo off
 REM ScriptGuard Development Setup Script for Windows
 REM This script sets up the infrastructure and prepares local development environment
+REM Usage:
+REM   dev-setup.bat         - Normal setup
+REM   dev-setup.bat --clean - Clean databases and restart
 
 setlocal enabledelayedexpansion
 
+REM Check for --clean argument
+set CLEAN_MODE=0
+if "%1"=="--clean" set CLEAN_MODE=1
+
 echo ========================================================
 echo   ScriptGuard Development Setup (Windows)
+if %CLEAN_MODE%==1 (
+    echo   MODE: Clean databases and restart
+) else (
+    echo   MODE: Normal setup
+)
 echo ========================================================
 echo.
 
@@ -50,10 +62,27 @@ if not exist logs mkdir logs
 if not exist model_checkpoints mkdir model_checkpoints
 echo [SUCCESS] Directories created
 
+REM Clean databases if --clean flag is set
+if %CLEAN_MODE%==1 (
+    echo.
+    echo [WARNING] Clean mode enabled - this will DELETE ALL DATA!
+    set /p CONFIRM="Are you sure you want to clean databases? (yes/no): "
+    if /i "!CONFIRM!"=="yes" (
+        echo [INFO] Stopping services and cleaning databases...
+        cd docker
+        docker-compose -f docker-compose.dev.yml down -v
+        echo [SUCCESS] Databases cleaned
+        cd ..
+    ) else (
+        echo [INFO] Clean cancelled, proceeding with normal startup...
+        set CLEAN_MODE=0
+    )
+)
+
 REM Start infrastructure
-echo [INFO] Starting infrastructure services...
+echo [INFO] Starting infrastructure services (PostgreSQL, Qdrant, ZenML)...
 cd docker
-docker-compose -f docker-compose.dev.yml up -d postgres qdrant
+docker-compose -f docker-compose.dev.yml --profile with-zenml up -d postgres qdrant zenml
 cd ..
 echo [SUCCESS] Infrastructure services started
 
@@ -74,12 +103,22 @@ echo [SUCCESS] PostgreSQL is ready
 REM Check Qdrant
 echo [INFO] Checking Qdrant...
 :check_qdrant
-curl -f http://localhost:6333/health >nul 2>nul
+curl -f http://localhost:6333/ >nul 2>nul
 if %errorlevel% neq 0 (
     timeout /t 2 /nobreak >nul
     goto check_qdrant
 )
 echo [SUCCESS] Qdrant is ready
+
+REM Check ZenML
+echo [INFO] Checking ZenML...
+:check_zenml
+curl -f http://localhost:8237/health >nul 2>nul
+if %errorlevel% neq 0 (
+    timeout /t 2 /nobreak >nul
+    goto check_zenml
+)
+echo [SUCCESS] ZenML is ready
 
 REM Initialize database
 echo [INFO] Initializing database schema...
@@ -131,13 +170,18 @@ echo.
 echo   Qdrant:      http://localhost:6333
 echo     Dashboard: http://localhost:6333/dashboard
 echo.
+echo   ZenML:       http://localhost:8237
+echo     Dashboard: http://localhost:8237
+echo.
 echo Connection Strings:
 echo   PostgreSQL: postgresql://scriptguard:scriptguard@localhost:5432/scriptguard
 echo   Qdrant:     http://localhost:6333
+echo   ZenML:      http://localhost:8237
 echo.
 echo Useful Commands:
-echo   Start infrastructure:  cd docker ^&^& docker-compose -f docker-compose.dev.yml up -d
+echo   Start infrastructure:  cd docker ^&^& docker-compose -f docker-compose.dev.yml --profile with-zenml up -d
 echo   Stop infrastructure:   cd docker ^&^& docker-compose -f docker-compose.dev.yml down
+echo   Clean databases:       dev-setup.bat --clean
 echo   View logs:            cd docker ^&^& docker-compose -f docker-compose.dev.yml logs -f
 echo.
 echo   Activate venv:        venv\Scripts\activate.bat

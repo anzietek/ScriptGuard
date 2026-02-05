@@ -50,7 +50,7 @@ data_sources:
       - "ransomware"
       - "backdoor"
       - "stealer"
-    max_samples: 100
+    max_samples: 500
 
   vxunderground:
     enabled: true
@@ -59,7 +59,7 @@ data_sources:
       - ".ps1"
       - ".js"
       - ".vbs"
-    max_samples: 50
+    max_samples: 500
 
   thezoo:
     enabled: true
@@ -71,7 +71,7 @@ data_sources:
       - ".sh"
       - ".bat"
       - ".cmd"
-    max_samples: 50
+    max_samples: 500
 
   huggingface:
     enabled: false  # Disabled - the-stack-dedup is gated and requires special access

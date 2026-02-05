@@ -54,6 +54,7 @@ class DatabasePool:
         password = password or os.getenv("POSTGRES_PASSWORD", "scriptguard")
 
         logger.info(f"Initializing PostgreSQL pool: {user}@{host}:{port}/{database}")
+        logger.debug(f"Using password: {password[:4]}...{password[-4:] if len(password) > 8 else '****'}")
 
         try:
             cls._pool = pool.ThreadedConnectionPool(

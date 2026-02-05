@@ -1,8 +1,17 @@
 #!/bin/bash
 # ScriptGuard Development Setup Script
 # This script sets up the infrastructure and prepares local development environment
+# Usage:
+#   ./dev-setup.sh         - Normal setup
+#   ./dev-setup.sh --clean - Clean databases and restart
 
 set -e  # Exit on error
+
+# Check for --clean argument
+CLEAN_MODE=0
+if [ "$1" == "--clean" ]; then
+    CLEAN_MODE=1
+fi
 
 # Colors for output
 RED='\033[0;31m'
@@ -62,12 +71,28 @@ setup_env() {
     fi
 }
 
+# Clean databases
+clean_databases() {
+    print_warning "Clean mode enabled - this will DELETE ALL DATA!"
+    read -p "Are you sure you want to clean databases? (yes/no): " CONFIRM
+    if [ "$CONFIRM" == "yes" ]; then
+        print_info "Stopping services and cleaning databases..."
+        cd docker
+        docker-compose -f docker-compose.dev.yml down -v
+        cd ..
+        print_success "Databases cleaned"
+    else
+        print_info "Clean cancelled, proceeding with normal startup..."
+        CLEAN_MODE=0
+    fi
+}
+
 # Start infrastructure
 start_infrastructure() {
-    print_info "Starting infrastructure services..."
+    print_info "Starting infrastructure services (PostgreSQL, Qdrant, ZenML)..."
 
     cd docker
-    docker-compose -f docker-compose.dev.yml up -d postgres qdrant
+    docker-compose -f docker-compose.dev.yml --profile with-zenml up -d postgres qdrant zenml
     cd ..
 
     print_success "Infrastructure services started"
@@ -99,10 +124,35 @@ wait_for_services() {
     print_info "Waiting for Qdrant..."
     elapsed=0
     while [ $elapsed -lt $timeout ]; do
-        if curl -f http://localhost:6333/health > /dev/null 2>&1; then
+        if curl -f http://localhost:6333/ > /dev/null 2>&1; then
             print_success "Qdrant is ready"
             break
         fi
+        sleep 2
+        elapsed=$((elapsed + 2))
+    done
+
+    if [ $elapsed -ge $timeout ]; then
+        print_error "Qdrant failed to start within ${timeout}s"
+        exit 1
+    fi
+
+    # Wait for ZenML
+    print_info "Waiting for ZenML..."
+    elapsed=0
+    while [ $elapsed -lt $timeout ]; do
+        if curl -f http://localhost:8237/health > /dev/null 2>&1; then
+            print_success "ZenML is ready"
+            break
+        fi
+        sleep 2
+        elapsed=$((elapsed + 2))
+    done
+
+    if [ $elapsed -ge $timeout ]; then
+        print_warning "ZenML failed to start within ${timeout}s (may still be initializing)"
+    fi
+}
         sleep 2
         elapsed=$((elapsed + 2))
     done
@@ -205,13 +255,18 @@ display_info() {
     echo "  Qdrant:      http://localhost:6333"
     echo "    Dashboard: http://localhost:6333/dashboard"
     echo ""
+    echo "  ZenML:       http://localhost:8237"
+    echo "    Dashboard: http://localhost:8237"
+    echo ""
     echo "Connection Strings:"
     echo "  PostgreSQL: postgresql://scriptguard:scriptguard@localhost:5432/scriptguard"
     echo "  Qdrant:     http://localhost:6333"
+    echo "  ZenML:      http://localhost:8237"
     echo ""
     echo "Useful Commands:"
-    echo "  Start infrastructure:  cd docker && docker-compose -f docker-compose.dev.yml up -d"
+    echo "  Start infrastructure:  cd docker && docker-compose -f docker-compose.dev.yml --profile with-zenml up -d"
     echo "  Stop infrastructure:   cd docker && docker-compose -f docker-compose.dev.yml down"
+    echo "  Clean databases:       ./dev-setup.sh --clean"
     echo "  View logs:            cd docker && docker-compose -f docker-compose.dev.yml logs -f"
     echo ""
     echo "  Activate venv:        source venv/bin/activate  (Linux/Mac)"
@@ -239,6 +294,11 @@ display_info() {
 main() {
     echo "========================================================"
     echo "  ScriptGuard Development Setup"
+    if [ $CLEAN_MODE -eq 1 ]; then
+        echo "  MODE: Clean databases and restart"
+    else
+        echo "  MODE: Normal setup"
+    fi
     echo "========================================================"
     echo ""
 
@@ -246,6 +306,12 @@ main() {
     check_docker_compose
     setup_env
     create_directories
+
+    # Clean databases if --clean flag is set
+    if [ $CLEAN_MODE -eq 1 ]; then
+        clean_databases
+    fi
+
     start_infrastructure
     wait_for_services
     init_database

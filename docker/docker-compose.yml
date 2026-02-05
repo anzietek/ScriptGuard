@@ -8,7 +8,7 @@ services:
     environment:
       POSTGRES_DB: scriptguard
       POSTGRES_USER: scriptguard
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-scriptguard_secure_password}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-scriptguard}
       PGDATA: /var/lib/postgresql/data/pgdata
     ports:
       - "${POSTGRES_PORT:-5432}:5432"
@@ -37,7 +37,7 @@ services:
       - QDRANT__SERVICE__HTTP_PORT=6333
       - QDRANT__SERVICE__GRPC_PORT=6334
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:6333/health"]
+      test: ["CMD-SHELL", "timeout 1 bash -c 'cat < /dev/null > /dev/tcp/127.0.0.1/6333' || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -58,7 +58,7 @@ services:
       - POSTGRES_PORT=5432
       - POSTGRES_DB=scriptguard
       - POSTGRES_USER=scriptguard
-      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-scriptguard_secure_password}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-scriptguard}
 
       # Qdrant
       - QDRANT_HOST=qdrant
@@ -82,7 +82,7 @@ services:
 
       # ZenML configuration
       - ZENML_STORE_TYPE=sql
-      - ZENML_STORE_URL=postgresql://scriptguard:${POSTGRES_PASSWORD:-scriptguard_secure_password}@postgres:5432/scriptguard
+      - ZENML_STORE_URL=postgresql://scriptguard:${POSTGRES_PASSWORD:-scriptguard}@postgres:5432/scriptguard
     volumes:
       - model_data:/app/models
       - training_logs:/app/logs
@@ -120,7 +120,7 @@ services:
       - POSTGRES_PORT=5432
       - POSTGRES_DB=scriptguard
       - POSTGRES_USER=scriptguard
-      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-scriptguard_secure_password}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-scriptguard}
 
       # Qdrant
       - QDRANT_HOST=qdrant
