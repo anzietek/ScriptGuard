@@ -81,12 +81,19 @@ data_sources:
 
   cve_feeds:
     enabled: true
-    days_back: 30
+    days_back: 90  # Increased from 30 to get more CVE patterns
     keywords:
       - "script"
       - "code execution"
       - "remote code execution"
       - "command injection"
+      - "injection"
+      - "arbitrary code"
+      - "code injection"
+      - "shell"
+      - "python"
+      - "vulnerability"
+      - "malicious"
 
   # Additional HuggingFace Datasets (REAL datasets that exist)
   additional_hf:
