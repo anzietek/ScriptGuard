@@ -76,7 +76,7 @@ code_embedding:
   embedding_dim: 768
   chunk_size: 512
   chunk_overlap: 64
-  max_samples_to_vectorize: 10  # MINIMAL - just 10 samples for testing
+  max_samples_to_vectorize: 1  # MINIMAL - just 10 samples for testing
 
 # Training Configuration - MINIMAL epochs for testing
 training:

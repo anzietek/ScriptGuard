@@ -3,8 +3,9 @@ from zenml import step
 from datasets import Dataset
 from scriptguard.utils.logger import logger
 from scriptguard.utils.prompts import format_training_prompt
+from scriptguard.materializers.dataset_materializer import HuggingFaceDatasetMaterializer
 
-@step
+@step(output_materializers=HuggingFaceDatasetMaterializer)
 def preprocess_data(data: List[Dict[str, Any]]) -> Dataset:
     """
     Converts raw script data into a Hugging Face Dataset format.

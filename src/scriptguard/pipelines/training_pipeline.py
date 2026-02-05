@@ -22,6 +22,7 @@ from scriptguard.steps.data_preprocessing import preprocess_data
 from scriptguard.steps.model_training import train_model as _train_model
 from scriptguard.steps.model_evaluation import evaluate_model
 from scriptguard.steps.vectorize_samples import vectorize_samples
+from scriptguard.materializers.dataset_materializer import HuggingFaceDatasetMaterializer
 
 @step
 def split_train_test(dataset: Dataset, test_size: float = 0.1) -> Tuple[Dataset, Dataset]:
@@ -38,7 +39,7 @@ def split_train_test(dataset: Dataset, test_size: float = 0.1) -> Tuple[Dataset,
     split_dict = dataset.train_test_split(test_size=test_size, seed=42)
     return split_dict['train'], split_dict['test']
 
-@step
+@step(output_materializers={"output_2": HuggingFaceDatasetMaterializer})
 def split_raw_data(
     data: List[Dict[str, Any]],
     test_size: float = 0.1
