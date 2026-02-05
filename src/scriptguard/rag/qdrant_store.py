@@ -4,6 +4,7 @@ Improved vector store for CVEs, vulnerabilities, and malware patterns.
 """
 
 import os
+import logging
 from scriptguard.utils.logger import logger
 from typing import List, Dict, Any, Optional
 from qdrant_client import QdrantClient
@@ -219,14 +220,17 @@ class QdrantStore:
                 )
             search_filter = models.Filter(must=conditions)
 
-        # Search
+        # Search using search method (compatible API)
         try:
+            from qdrant_client.models import SearchRequest
+
             search_result = self.client.search(
                 collection_name=self.collection_name,
                 query_vector=query_vector,
                 limit=limit,
                 query_filter=search_filter,
-                score_threshold=score_threshold
+                score_threshold=score_threshold,
+                with_payload=True
             )
 
             results = []
@@ -239,6 +243,30 @@ class QdrantStore:
 
             return results
 
+        except AttributeError:
+            # Try alternative method for newer Qdrant versions
+            try:
+                search_result = self.client.query_points(
+                    collection_name=self.collection_name,
+                    query=query_vector,
+                    limit=limit,
+                    query_filter=search_filter,
+                    score_threshold=score_threshold,
+                    with_payload=True
+                )
+
+                results = []
+                for hit in search_result.points:
+                    results.append({
+                        "score": hit.score,
+                        "payload": hit.payload,
+                        "id": hit.id
+                    })
+
+                return results
+            except Exception as e:
+                logger.error(f"Query points failed: {e}")
+                return []
         except Exception as e:
             logger.error(f"Search failed: {e}")
             return []

@@ -25,36 +25,89 @@ class CVEFeedSource:
         if api_key:
             self.headers["apiKey"] = api_key
 
-    def _make_request(self, params: Dict) -> Optional[Dict]:
+    def _make_request(self, params: Dict, retry_count: int = 3) -> Optional[Dict]:
         """
-        Make request to NVD API.
+        Make request to NVD API with retry logic.
 
         Args:
             params: Query parameters
+            retry_count: Number of retries on failure
 
         Returns:
             JSON response or None on error
         """
-        try:
-            response = requests.get(
-                self.NVD_API_URL,
-                params=params,
-                headers=self.headers,
-                timeout=30
-            )
+        import time
 
-            if response.status_code == 200:
-                return response.json()
-            elif response.status_code == 403:
-                logger.error("NVD API rate limit exceeded or access forbidden")
-                return None
-            else:
-                logger.error(f"NVD API error: {response.status_code}")
+        for attempt in range(retry_count):
+            try:
+                logger.debug(f"Making request to {self.NVD_API_URL} (attempt {attempt + 1}/{retry_count})")
+                logger.debug(f"Params: {params}")
+
+                # Create a new session for each request to avoid connection reuse issues
+                session = requests.Session()
+                session.headers.update(self.headers)
+
+                response = session.get(
+                    self.NVD_API_URL,
+                    params=params,
+                    timeout=30
+                )
+
+                session.close()
+
+                logger.debug(f"Response status: {response.status_code}")
+                logger.debug(f"Full URL: {response.url}")
+
+                if response.status_code == 200:
+                    try:
+                        return response.json()
+                    except ValueError as json_error:
+                        logger.error(f"Failed to parse JSON response: {json_error}")
+                        if attempt < retry_count - 1:
+                            time.sleep(2 ** attempt)  # Exponential backoff
+                            continue
+                        return None
+
+                elif response.status_code == 403:
+                    logger.error("NVD API rate limit exceeded or access forbidden")
+                    return None
+
+                elif response.status_code == 404:
+                    logger.error(f"NVD API returned 404 - invalid endpoint or parameters")
+                    logger.error(f"Full URL: {response.url}")
+                    logger.error(f"Response: {response.text[:500]}")
+
+                    # 404 might be temporary, retry with backoff
+                    if attempt < retry_count - 1:
+                        logger.info(f"Retrying after {2 ** attempt} seconds...")
+                        time.sleep(2 ** attempt)
+                        continue
+                    return None
+
+                else:
+                    logger.error(f"NVD API error: {response.status_code}")
+                    logger.error(f"Response text: {response.text[:500]}")
+
+                    if attempt < retry_count - 1:
+                        time.sleep(2 ** attempt)
+                        continue
+                    return None
+
+            except requests.exceptions.Timeout:
+                logger.error(f"Request timeout (attempt {attempt + 1}/{retry_count})")
+                if attempt < retry_count - 1:
+                    time.sleep(2 ** attempt)
+                    continue
                 return None
 
-        except requests.exceptions.RequestException as e:
-            logger.error(f"Request failed: {e}")
-            return None
+            except requests.exceptions.RequestException as e:
+                logger.error(f"Request failed: {e} (attempt {attempt + 1}/{retry_count})")
+                if attempt < retry_count - 1:
+                    time.sleep(2 ** attempt)
+                    continue
+                return None
+
+        return None
 
     def fetch_recent_cves(
         self,
@@ -85,6 +138,8 @@ class CVEFeedSource:
 
         logger.info(f"Fetching CVEs from {start_date.date()} to {end_date.date()}")
 
+        # NVD API 2.0 requires ISO 8601 format: YYYY-MM-DDTHH:MM:SS.mmm
+        # Use 00:00:00 for start and 23:59:59 for end to capture full day
         params = {
             "pubStartDate": start_date.strftime("%Y-%m-%dT00:00:00.000"),
             "pubEndDate": end_date.strftime("%Y-%m-%dT23:59:59.999"),

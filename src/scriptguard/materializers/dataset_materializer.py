@@ -3,12 +3,15 @@
 This materializer properly handles HuggingFace Dataset serialization/deserialization
 and fixes path issues on Windows.
 """
+import logging
 from pathlib import Path
 from typing import Type, Any
 
 from zenml.materializers.base_materializer import BaseMaterializer
 from zenml.enums import ArtifactType
 from datasets import Dataset, load_from_disk
+
+logger = logging.getLogger(__name__)
 
 
 class HuggingFaceDatasetMaterializer(BaseMaterializer):
@@ -30,32 +33,51 @@ class HuggingFaceDatasetMaterializer(BaseMaterializer):
         Returns:
             The loaded Dataset object.
         """
-        # Fix Windows path issues - normalize the path
-        artifact_path = str(self.uri).replace('\\\\', '\\').replace('/', '\\')
+        # Use Path to properly handle cross-platform paths
+        dataset_path = Path(self.uri)
+        logger.info(f"Loading dataset from: {dataset_path}")
 
-        # The artifact path is a directory
-        dataset_path = Path(artifact_path)
-
-        # Load using HuggingFace's native loader
+        # Try direct loading first
         try:
             dataset = load_from_disk(str(dataset_path))
+            logger.info(f"Successfully loaded dataset with {len(dataset)} samples")
             return dataset
         except Exception as e:
-            # If direct loading fails, try to find the dataset directory
+            logger.warning(f"Direct loading failed: {e}")
+
+            # If direct loading fails, search for dataset in subdirectories
             # Sometimes ZenML adds extra subdirectories
             if dataset_path.is_dir():
-                # Look for dataset_dict.json or dataset_info.json
-                for subdir in dataset_path.rglob("*"):
-                    if subdir.is_dir() and (
-                        (subdir / "dataset_dict.json").exists() or
-                        (subdir / "dataset_info.json").exists()
-                    ):
-                        dataset = load_from_disk(str(subdir))
+                # Look for dataset_dict.json or dataset_info.json in immediate subdirectories first
+                for subdir in sorted(dataset_path.iterdir()):
+                    if subdir.is_dir():
+                        if (subdir / "dataset_dict.json").exists() or (subdir / "dataset_info.json").exists():
+                            logger.info(f"Found dataset in subdirectory: {subdir}")
+                            try:
+                                dataset = load_from_disk(str(subdir))
+                                logger.info(f"Successfully loaded dataset with {len(dataset)} samples")
+                                return dataset
+                            except Exception as subdir_error:
+                                logger.warning(f"Failed to load from {subdir}: {subdir_error}")
+                                continue
+
+                # If not found in immediate subdirectories, try recursive search
+                logger.info("Searching recursively for dataset files...")
+                for subdir in dataset_path.rglob("dataset_info.json"):
+                    dataset_dir = subdir.parent
+                    logger.info(f"Found dataset in: {dataset_dir}")
+                    try:
+                        dataset = load_from_disk(str(dataset_dir))
+                        logger.info(f"Successfully loaded dataset with {len(dataset)} samples")
                         return dataset
+                    except Exception as recursive_error:
+                        logger.warning(f"Failed to load from {dataset_dir}: {recursive_error}")
+                        continue
 
             # If still fails, raise the original error
             raise RuntimeError(
-                f"Failed to load HuggingFace Dataset from {dataset_path}: {e}"
+                f"Failed to load HuggingFace Dataset from {dataset_path}. "
+                f"Original error: {e}"
             ) from e
 
     def save(self, data: Dataset) -> None:
@@ -64,17 +86,20 @@ class HuggingFaceDatasetMaterializer(BaseMaterializer):
         Args:
             data: The Dataset to save.
         """
-        # Fix Windows path issues - normalize the path
-        artifact_path = str(self.uri).replace('\\\\', '\\').replace('/', '\\')
+        # Use Path to properly handle cross-platform paths
+        dataset_path = Path(self.uri)
+        logger.info(f"Saving dataset to: {dataset_path}")
 
         # Create the directory if it doesn't exist
-        dataset_path = Path(artifact_path)
         dataset_path.mkdir(parents=True, exist_ok=True)
 
         # Save using HuggingFace's native saver
         try:
             data.save_to_disk(str(dataset_path))
+            logger.info(f"Successfully saved dataset with {len(data)} samples")
         except Exception as e:
+            logger.error(f"Failed to save dataset: {e}")
             raise RuntimeError(
-                f"Failed to save HuggingFace Dataset to {dataset_path}: {e}"
+                f"Failed to save HuggingFace Dataset to {dataset_path}. "
+                f"Error: {e}"
             ) from e
