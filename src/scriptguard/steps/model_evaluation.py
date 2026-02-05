@@ -15,7 +15,8 @@ from sklearn.metrics import (
 from scriptguard.utils.logger import logger
 from scriptguard.utils.prompts import (
     format_inference_prompt,
-    format_fewshot_prompt
+    format_fewshot_prompt,
+    parse_classification_output,
 )
 from scriptguard.rag.code_similarity_store import CodeSimilarityStore
 
@@ -143,6 +144,15 @@ def evaluate_model(
     eval_config = config.get("training", {})
     max_new_tokens = eval_config.get("eval_max_new_tokens", 20)
     temperature = eval_config.get("eval_temperature", 0.1)
+
+    # How to handle unclear / malformed model outputs (fail-open vs fail-secure)
+    # Options: "unknown" (track format error), "benign" (fail-open), "malicious" (fail-secure)
+    default_on_unclear = eval_config.get("eval_default_on_unclear", "unknown")
+    if default_on_unclear not in {"unknown", "benign", "malicious"}:
+        logger.warning(
+            f"Invalid training.eval_default_on_unclear='{default_on_unclear}', falling back to 'unknown'"
+        )
+        default_on_unclear = "unknown"
 
     # Load Few-Shot RAG configuration from config.yaml (P1.1/P1.5 fix)
     code_embedding_config = config.get("code_embedding", {})
@@ -386,31 +396,28 @@ def evaluate_model(
             logger.info(f"  Generated token(s): '{generated_text}'")
             logger.info(f"  Generated token IDs: {generated_token_ids.tolist()}")
 
-        # Parse prediction: check if generated text contains MALICIOUS or BENIGN
-        generated_upper = generated_text.upper()
-        if "MALICIOUS" in generated_upper:
-            predicted_label = 1
-        elif "BENIGN" in generated_upper:
-            predicted_label = 0
-        else:
-            # Format error detected (P1.3 fix)
+        # Parse prediction using centralized logic to keep train/eval consistent
+        parsed = parse_classification_output(generated_text, default_on_unclear=default_on_unclear)
+        if parsed == -1:
+            # Format error detected
             format_errors += 1
 
-            # Store for detailed logging
-            if len(unclear_predictions) < 10:  # Keep first 10 examples
+            if len(unclear_predictions) < 10:
                 unclear_predictions.append({
                     "sample_idx": i,
                     "generated": generated_text,
                     "true_label": true_label,
-                    "generated_token_ids": generated_token_ids.tolist()
+                    "generated_token_ids": generated_token_ids.tolist(),
                 })
 
-            # Fallback: check first character (M vs B)
-            predicted_label = 1 if generated_upper.startswith("M") else 0
+            # Conservative fallback to keep metrics computable (match previous behavior)
+            predicted_label = 1 if generated_text.upper().strip().startswith("M") else 0
             logger.warning(
                 f"[FORMAT_ERROR] Sample {i}: Unexpected output '{generated_text}', "
                 f"using fallback prediction: {'MALICIOUS' if predicted_label == 1 else 'BENIGN'}"
             )
+        else:
+            predicted_label = int(parsed)
 
         # Add to results lists (only after successful prediction)
         y_true.append(true_label)
