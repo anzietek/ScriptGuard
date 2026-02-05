@@ -16,14 +16,20 @@ from scriptguard.rag.qdrant_store import QdrantStore
 import yaml
 
 
-def fetch_cves_directly(days=30, keywords=None):
+def fetch_cves_directly(days=30, keywords=None, api_key=None):
     """Fetch CVEs directly from NVD API without using cve_feeds.py"""
     if keywords is None:
         keywords = ["script", "code execution", "remote code execution", "command injection"]
 
     url = "https://services.nvd.nist.gov/rest/json/cves/2.0"
-    end_date = datetime.now()
-    start_date = end_date - timedelta(days=days)
+
+    # CRITICAL FIX: Use today's date, not future date
+    from datetime import datetime, timedelta
+    today = datetime.now()
+
+    # NVD API rejects future dates - ensure end_date is today or earlier
+    end_date = today
+    start_date = today - timedelta(days=days)
 
     params = {
         "pubStartDate": start_date.strftime("%Y-%m-%dT00:00:00.000"),
@@ -31,12 +37,79 @@ def fetch_cves_directly(days=30, keywords=None):
         "resultsPerPage": 2000
     }
 
+    headers = {}
+    if api_key:
+        headers["apiKey"] = api_key
+        print(f"Using NVD API key: {api_key[:8]}...")
+    else:
+        print("No API key (rate limits apply)")
+
     print(f"Fetching CVEs from {start_date.date()} to {end_date.date()}")
+    print(f"Date range: {days} days")
     print(f"Keywords: {keywords}")
 
     try:
-        response = requests.get(url, params=params, timeout=30)
+        response = requests.get(url, params=params, headers=headers, timeout=30)
         print(f"Status: {response.status_code}")
+
+        if response.status_code != 200:
+            print(f"ERROR: {response.status_code}")
+            print(f"URL: {response.url}")
+            print(f"Response: {response.text[:500]}")
+            return []
+
+        data = response.json()
+        vulnerabilities = data.get("vulnerabilities", [])
+        print(f"Raw CVEs from NVD: {len(vulnerabilities)}")
+
+        # Filter by keywords
+        filtered_cves = []
+        for vuln_item in vulnerabilities:
+            cve_data = vuln_item.get("cve", {})
+            cve_id = cve_data.get("id", "")
+
+            # Get description
+            descriptions = cve_data.get("descriptions", [])
+            description = ""
+            for desc in descriptions:
+                if desc.get("lang") == "en":
+                    description = desc.get("value", "")
+                    break
+
+            # Filter by keywords
+            if keywords:
+                description_lower = description.lower()
+                if not any(kw.lower() in description_lower for kw in keywords):
+                    continue
+
+            # Get CVSS score
+            metrics = cve_data.get("metrics", {})
+            cvss_score = None
+            severity = None
+
+            if "cvssMetricV31" in metrics and metrics["cvssMetricV31"]:
+                cvss_score = metrics["cvssMetricV31"][0]["cvssData"]["baseScore"]
+                severity = metrics["cvssMetricV31"][0]["cvssData"]["baseSeverity"]
+            elif "cvssMetricV2" in metrics and metrics["cvssMetricV2"]:
+                cvss_score = metrics["cvssMetricV2"][0]["cvssData"]["baseScore"]
+                severity = metrics["cvssMetricV2"][0]["baseSeverity"]
+
+            filtered_cves.append({
+                "cve_id": cve_id,
+                "description": description,
+                "cvss_score": cvss_score,
+                "severity": severity or "UNKNOWN",
+                "published": cve_data.get("published")
+            })
+
+        print(f"Filtered CVEs (matching keywords): {len(filtered_cves)}")
+        return filtered_cves
+
+    except Exception as e:
+        print(f"Exception: {e}")
+        import traceback
+        traceback.print_exc()
+        return []
 
         if response.status_code != 200:
             print(f"ERROR: {response.status_code}")
@@ -109,6 +182,18 @@ def main():
     qdrant_config = config.get("qdrant", {})
     cve_config = config.get("data_sources", {}).get("cve_feeds", {})
 
+    # Get NVD API key from environment
+    import os
+    from dotenv import load_dotenv
+
+    # Load .env file
+    env_path = Path(__file__).parent.parent / ".env"
+    if env_path.exists():
+        load_dotenv(env_path)
+        print("Loaded .env file")
+
+    nvd_api_key = os.getenv("NVD_API_KEY")
+
     # Initialize Qdrant
     print("\n1. Connecting to Qdrant...")
     store = QdrantStore(
@@ -127,7 +212,7 @@ def main():
     days_back = cve_config.get("days_back", 30)
     keywords = cve_config.get("keywords", ["script", "code execution"])
 
-    cves = fetch_cves_directly(days=days_back, keywords=keywords)
+    cves = fetch_cves_directly(days=days_back, keywords=keywords, api_key=nvd_api_key)
 
     if not cves:
         print("   No CVEs found!")
