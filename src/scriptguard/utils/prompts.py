@@ -53,6 +53,9 @@ def format_inference_prompt(code: str, max_code_length: int = 500) -> str:
         f'"""\n'
         f"Security Analysis Report\n"
         f"------------------------\n"
+        f"RULES:\n"
+        f"1. Your response MUST be exactly one word: BENIGN or MALICIOUS.\n"
+        f"\n"
         f"Target Script:\n"
         f"{truncated_code}\n"
         f'"""\n'
@@ -60,7 +63,7 @@ def format_inference_prompt(code: str, max_code_length: int = 500) -> str:
     )
 
 
-def parse_classification_output(generated_text: str, default_on_unclear: str = "benign") -> int:
+def parse_classification_output(generated_text: str, default_on_unclear: str = "unknown") -> int:
     """
     Parse model output to extract binary classification.
     SIMPLIFIED PARSING: Extract only the first word after the prompt.
