@@ -22,46 +22,90 @@ from scriptguard.rag.code_similarity_store import CodeSimilarityStore
 
 class StrictBinaryClassificationProcessor(LogitsProcessor):
     """
-    Strict constrained generation: ONLY allow BENIGN or MALICIOUS tokens.
-    Forces the model to output exactly one of these two words by setting
-    all other token logits to -inf for the FIRST token only.
-    After the first token, allows natural completion of the word.
+    Strict constrained generation: ONLY allow BENIGN or MALICIOUS token sequences.
+    Forces the model to output exactly one of these two words by constraining
+    each position to only the valid continuation tokens.
+
+    BENIGN  = [' B', 'EN', 'IGN']   -> token IDs: [570, 737, 3494]
+    MALICIOUS = [' M', 'AL', 'IC', 'IOUS'] -> token IDs: [507, 744, 1122, 32139]
     """
-    def __init__(self, benign_token_id: int, malicious_token_id: int, prompt_length: int):
+    def __init__(self, benign_tokens: list, malicious_tokens: list, prompt_length: int, eos_token_id: int):
         """
         Args:
-            benign_token_id: Token ID for " BENIGN" first token (with leading space)
-            malicious_token_id: Token ID for " MALICIOUS" first token (with leading space)
+            benign_tokens: Full token sequence for " BENIGN" (e.g., [570, 737, 3494])
+            malicious_tokens: Full token sequence for " MALICIOUS" (e.g., [507, 744, 1122, 32139])
             prompt_length: Length of the prompt in tokens (to detect when we start generating)
+            eos_token_id: EOS token ID to stop generation after completion
         """
-        self.benign_token_id = benign_token_id
-        self.malicious_token_id = malicious_token_id
+        self.benign_tokens = benign_tokens
+        self.malicious_tokens = malicious_tokens
         self.prompt_length = prompt_length
-        self.valid_tokens = {benign_token_id, malicious_token_id}
+        self.eos_token_id = eos_token_id
+        self.max_length = max(len(benign_tokens), len(malicious_tokens))
 
     def __call__(self, input_ids: torch.LongTensor, scores: torch.FloatTensor) -> torch.FloatTensor:
         """
-        Set all token logits to -inf except for BENIGN and MALICIOUS (first token only).
+        Constrain each position to only allow tokens that match BENIGN or MALICIOUS sequences.
 
         Args:
             input_ids: Already generated token IDs
             scores: Logits for next token prediction
 
         Returns:
-            Modified scores with only valid classification tokens allowed (first token only)
+            Modified scores with only valid continuation tokens allowed
         """
-        # Only constrain the FIRST generated token
+        # Determine current generation position (0-indexed from start of generation)
         current_length = input_ids.shape[1]
-        if current_length > self.prompt_length:
-            # After first token, allow natural completion
-            return scores
+        position = current_length - self.prompt_length
 
-        # For first token: Create a mask with -inf for all tokens except valid ones
+        # If we've completed the longest possible word, stop
+        if position >= self.max_length:
+            # Force EOS token
+            mask = torch.full_like(scores, float('-inf'))
+            mask[:, self.eos_token_id] = scores[:, self.eos_token_id] + 10.0
+            return mask
+
+        # Get the generated tokens so far (after prompt)
+        generated_tokens = input_ids[0, self.prompt_length:].tolist()
+
+        # Determine which sequences are still possible
+        benign_possible = (
+            position < len(self.benign_tokens) and
+            all(generated_tokens[i] == self.benign_tokens[i] for i in range(len(generated_tokens)))
+        )
+        malicious_possible = (
+            position < len(self.malicious_tokens) and
+            all(generated_tokens[i] == self.malicious_tokens[i] for i in range(len(generated_tokens)))
+        )
+
+        # Check if we just completed a word
+        if position > 0:
+            if generated_tokens == self.benign_tokens[:position] and position == len(self.benign_tokens):
+                # Completed BENIGN - force EOS
+                mask = torch.full_like(scores, float('-inf'))
+                mask[:, self.eos_token_id] = scores[:, self.eos_token_id] + 10.0
+                return mask
+            elif generated_tokens == self.malicious_tokens[:position] and position == len(self.malicious_tokens):
+                # Completed MALICIOUS - force EOS
+                mask = torch.full_like(scores, float('-inf'))
+                mask[:, self.eos_token_id] = scores[:, self.eos_token_id] + 10.0
+                return mask
+
+        # Build mask with -inf for all tokens
         mask = torch.full_like(scores, float('-inf'))
 
-        # Set valid tokens to original scores (or boost them slightly)
-        mask[:, self.benign_token_id] = scores[:, self.benign_token_id] + 5.0
-        mask[:, self.malicious_token_id] = scores[:, self.malicious_token_id] + 5.0
+        # Allow only valid next tokens
+        valid_next_tokens = set()
+
+        if benign_possible:
+            next_token = self.benign_tokens[position]
+            valid_next_tokens.add(next_token)
+            mask[:, next_token] = scores[:, next_token] + 5.0
+
+        if malicious_possible:
+            next_token = self.malicious_tokens[position]
+            valid_next_tokens.add(next_token)
+            mask[:, next_token] = scores[:, next_token] + 5.0
 
         return mask
 
@@ -281,23 +325,19 @@ def evaluate_model(
         inputs = {k: v.to(model.device) for k, v in inputs.items()}
 
         # STRICT CONSTRAINED GENERATION: Force model to only output BENIGN or MALICIOUS
-        # Get token IDs for the two valid words (without special tokens, with leading space)
+        # Get full token sequences for both words (with leading space)
         benign_tokens = tokenizer.encode(" BENIGN", add_special_tokens=False)
         malicious_tokens = tokenizer.encode(" MALICIOUS", add_special_tokens=False)
 
         # Debug token encoding on first sample
         if i == 0:
-            logger.info(f"Token IDs for ' BENIGN': {benign_tokens}")
-            logger.info(f"Token IDs for ' MALICIOUS': {malicious_tokens}")
+            logger.info(f"Token sequence for ' BENIGN': {benign_tokens}")
+            logger.info(f"Token sequence for ' MALICIOUS': {malicious_tokens}")
             logger.info(f"Decoded ' BENIGN': {[tokenizer.decode([t]) for t in benign_tokens]}")
             logger.info(f"Decoded ' MALICIOUS': {[tokenizer.decode([t]) for t in malicious_tokens]}")
 
-        # Get first token of each word (this is what model will generate first)
-        benign_token_id = benign_tokens[0] if benign_tokens else None
-        malicious_token_id = malicious_tokens[0] if malicious_tokens else None
-
-        if benign_token_id is None or malicious_token_id is None:
-            logger.error("Failed to get token IDs for BENIGN/MALICIOUS. Using fallback generation.")
+        if not benign_tokens or not malicious_tokens:
+            logger.error("Failed to get token sequences for BENIGN/MALICIOUS. Using fallback generation.")
             # Fallback: standard generation
             with torch.no_grad():
                 outputs = model.generate(
@@ -308,23 +348,25 @@ def evaluate_model(
                     eos_token_id=tokenizer.eos_token_id,
                 )
         else:
-            # Create strict constraint processor
+            # Create strict constraint processor with full token sequences
             prompt_length_tokens = inputs['input_ids'].shape[1]
             constraint_processor = StrictBinaryClassificationProcessor(
-                benign_token_id=benign_token_id,
-                malicious_token_id=malicious_token_id,
-                prompt_length=prompt_length_tokens
+                benign_tokens=benign_tokens,
+                malicious_tokens=malicious_tokens,
+                prompt_length=prompt_length_tokens,
+                eos_token_id=tokenizer.eos_token_id
             )
 
             if i < 2:  # Debug first few samples
-                logger.debug(f"Using StrictBinaryClassificationProcessor: BENIGN={benign_token_id}, MALICIOUS={malicious_token_id}")
+                logger.debug(f"Using StrictBinaryClassificationProcessor with sequences: BENIGN={benign_tokens}, MALICIOUS={malicious_tokens}")
 
             # Generate with STRICT CONSTRAINTS using LogitsProcessor
-            # Allow up to 5 tokens to complete the full word (MALICIOUS = 4 tokens, BENIGN = 3 tokens)
+            # Set max_new_tokens to longest sequence + 1 (for EOS)
+            max_tokens_needed = max(len(benign_tokens), len(malicious_tokens)) + 1
             with torch.no_grad():
                 outputs = model.generate(
                     **inputs,
-                    max_new_tokens=5,  # Allow full word completion
+                    max_new_tokens=max_tokens_needed,
                     do_sample=False,  # Deterministic greedy decoding
                     num_beams=1,  # Greedy search
                     pad_token_id=tokenizer.pad_token_id,
