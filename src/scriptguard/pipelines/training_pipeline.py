@@ -110,7 +110,7 @@ def malware_detection_training_pipeline(
     combined_data = merge_data_sources(data_sources=[gh_data, local_data, web_data])
 
     augmented_data = synthetic_data_generation(base_data=combined_data)
-    processed_dataset = preprocess_data(data=augmented_data)
+    processed_dataset = preprocess_data(data=augmented_data, config=None)
 
     adapter_path = _train_model(dataset=processed_dataset, model_id=model_id)
     metrics = evaluate_model(adapter_path=adapter_path)
@@ -205,8 +205,8 @@ def advanced_training_pipeline(
     )
 
     # Step 9: Preprocess training and test data
-    processed_train_dataset = preprocess_data(data=train_data_list)
-    processed_test_dataset = preprocess_data(data=test_data_list)
+    processed_train_dataset = preprocess_data(data=train_data_list, config=config)
+    processed_test_dataset = preprocess_data(data=test_data_list, config=config)
 
     # Step 10: Train model with preprocessed evaluation dataset
     adapter_path = _train_model(
