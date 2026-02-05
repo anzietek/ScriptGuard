@@ -307,6 +307,12 @@ training:
   model_id: "bigcode/starcoder2-3b"
   output_dir: "./models/scriptguard-model"
 
+  # When the model output is unclear/malformed during evaluation:
+  # - "unknown": count as format error (recommended default)
+  # - "benign": fail-open
+  # - "malicious": fail-secure
+  eval_default_on_unclear: "unknown"
+
   # QLoRA Configuration
   use_qlora: true
   lora_r: 16
