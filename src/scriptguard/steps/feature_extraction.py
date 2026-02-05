@@ -5,6 +5,7 @@ AST-based features, entropy analysis, and API call pattern extraction.
 
 import ast
 import math
+import warnings
 from scriptguard.utils.logger import logger
 from typing import Dict, List, Set
 from collections import Counter
@@ -29,7 +30,10 @@ def extract_ast_features(code: str) -> Dict:
     }
 
     try:
-        tree = ast.parse(code)
+        # Suppress SyntaxWarning for invalid escape sequences in analyzed code
+        with warnings.catch_warnings():
+            warnings.filterwarnings('ignore', category=SyntaxWarning)
+            tree = ast.parse(code)
     except SyntaxError:
         return features
 

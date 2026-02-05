@@ -5,6 +5,7 @@ Enforces strict validation rules for Python files before ingestion.
 
 import os
 import ast
+import warnings
 from typing import Optional, Tuple, Dict, Any
 from pathlib import Path
 from scriptguard.utils.logger import logger
@@ -126,7 +127,10 @@ class PythonFileValidator:
             FileValidationError: If syntax is invalid
         """
         try:
-            tree = ast.parse(content)
+            # Suppress SyntaxWarning for invalid escape sequences in analyzed code
+            with warnings.catch_warnings():
+                warnings.filterwarnings('ignore', category=SyntaxWarning)
+                tree = ast.parse(content)
             return tree
         except SyntaxError as e:
             raise FileValidationError(

@@ -8,6 +8,7 @@ Implements AST-based validation, entropy filtering, and metadata enrichment.
 import ast
 import re
 import math
+import warnings
 from typing import Dict, Any, Optional, Tuple
 from collections import Counter
 from scriptguard.utils.logger import logger
@@ -244,7 +245,10 @@ class CodeSanitizer:
             Tuple of (is_valid, report_dict)
         """
         try:
-            ast.parse(code)
+            # Suppress SyntaxWarning for invalid escape sequences in analyzed code
+            with warnings.catch_warnings():
+                warnings.filterwarnings('ignore', category=SyntaxWarning)
+                ast.parse(code)
             return True, {"valid": True}
         except SyntaxError as e:
             return False, {

@@ -5,6 +5,7 @@ Code obfuscation, mutation, and polymorphic variant generation.
 
 import base64
 import random
+import warnings
 from scriptguard.utils.logger import logger
 import ast
 import re
@@ -65,7 +66,10 @@ def rename_variables(code: str) -> str:
         Code with renamed variables
     """
     try:
-        tree = ast.parse(code)
+        # Suppress SyntaxWarning for invalid escape sequences in analyzed code
+        with warnings.catch_warnings():
+            warnings.filterwarnings('ignore', category=SyntaxWarning)
+            tree = ast.parse(code)
     except SyntaxError:
         return code
 

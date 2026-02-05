@@ -4,6 +4,7 @@ Validates code syntax, filters invalid samples, and performs quality checks.
 """
 
 import ast
+import warnings
 from scriptguard.utils.logger import logger
 from scriptguard.schemas import CodeSample, validate_data_batch, ValidatedCodeSample
 from typing import Dict, List
@@ -20,7 +21,10 @@ def validate_python_syntax(code: str) -> bool:
         True if valid syntax, False otherwise
     """
     try:
-        ast.parse(code)
+        # Suppress SyntaxWarning for invalid escape sequences in analyzed code
+        with warnings.catch_warnings():
+            warnings.filterwarnings('ignore', category=SyntaxWarning)
+            ast.parse(code)
         return True
     except SyntaxError:
         return False

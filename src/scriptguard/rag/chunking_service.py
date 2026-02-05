@@ -4,6 +4,7 @@ Handles tokenization-aware chunking with overlap for better context preservation
 """
 
 import hashlib
+import warnings
 from typing import List, Dict, Any, Optional
 from transformers import AutoTokenizer
 from scriptguard.utils.logger import logger
@@ -72,7 +73,10 @@ class ChunkingService:
         import ast
 
         try:
-            tree = ast.parse(code)
+            # Suppress SyntaxWarning for invalid escape sequences in analyzed code
+            with warnings.catch_warnings():
+                warnings.filterwarnings('ignore', category=SyntaxWarning)
+                tree = ast.parse(code)
             context_parts = []
 
             # Extract module docstring
