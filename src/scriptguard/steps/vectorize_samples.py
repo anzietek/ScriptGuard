@@ -27,12 +27,22 @@ def vectorize_samples(
 
     Args:
         config: Configuration dictionary from config.yaml
-        max_samples: Optional limit on number of samples to sync (for testing)
+        max_samples: Optional limit on number of samples to sync (for testing). If 0, skip vectorization.
         clear_existing: If True, clear existing vectors before sync
 
     Returns:
         Dictionary with synchronization statistics
     """
+    # Skip vectorization if max_samples is explicitly 0
+    if max_samples is not None and max_samples == 0:
+        logger.info("Vectorization skipped (max_samples_to_vectorize=0)")
+        return {
+            "status": "skipped",
+            "samples_vectorized": 0,
+            "malicious_count": 0,
+            "benign_count": 0
+        }
+
     logger.info("=" * 60)
     logger.info("VECTORIZING CODE SAMPLES (PostgreSQL → Qdrant)")
     logger.info("=" * 60)

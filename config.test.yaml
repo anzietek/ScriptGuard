@@ -68,6 +68,7 @@ augmentation:
 qdrant:
   host: ${QDRANT_HOST:-localhost}
   port: ${QDRANT_PORT:-6333}
+  api_key: ${QDRANT_API_KEY:-}
   collection_name: ${QDRANT_COLLECTION:-malware_knowledge_test}
   cve_collection: ${QDRANT_CVE_COLLECTION:-cve_patterns_test}
 
@@ -78,6 +79,8 @@ code_embedding:
   chunk_size: ${CHUNK_SIZE:-256}
   chunk_overlap: ${CHUNK_OVERLAP:-32}
   max_samples_to_vectorize: ${MAX_SAMPLES_TO_VECTORIZE:-0}
+  enable_chunking: false  # CRITICAL: Disable chunking for speed
+  max_code_length: 512    # Single embedding per sample
 
 # Training Configuration - ULTRA-MINIMAL
 training:
