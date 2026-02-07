@@ -13,8 +13,8 @@ It stores CVE patterns, malware signatures, and vulnerability information as sem
 
 **Good news!** Qdrant is initialized automatically when you:
 
-1. **Run training**: `python src/main.py`
-2. **Start API**: `uvicorn scriptguard.api.main:app --reload`
+1. **Run training**: `uv run python src/main.py`
+2. **Start API**: `uv run uvicorn scriptguard.api.main:app --reload`
 
 The system will:
 - ✅ Check if Qdrant is running
@@ -27,7 +27,7 @@ The system will:
 ### 1. Start Qdrant Container
 
 ```bash
-docker-compose up -d
+docker-compose up -d qdrant
 ```
 
 Or manually:
@@ -54,10 +54,10 @@ The system will automatically initialize Qdrant:
 
 ```bash
 # Training automatically initializes Qdrant
-python src/main.py
+uv run python src/main.py
 
 # Or API
-uvicorn scriptguard.api.main:app --reload
+uv run uvicorn scriptguard.api.main:app --reload
 ```
 
 You should see in logs:
@@ -70,7 +70,7 @@ You should see in logs:
 If you want to manually initialize or reset Qdrant:
 
 ```bash
-python scripts/bootstrap_qdrant.py
+uv run python scripts/bootstrap_qdrant.py
 ```
 
 This script:

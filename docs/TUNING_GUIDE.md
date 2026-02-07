@@ -82,12 +82,15 @@ training:
     - "v_proj"
     - "k_proj"
     - "o_proj"
+    - "gate_proj"
+    - "up_proj"
+    - "down_proj"
 ```
 
 **Options:**
 - Query/Value only: `["q_proj", "v_proj"]` (faster)
 - All attention: `["q_proj", "v_proj", "k_proj", "o_proj"]` (recommended)
-- Full: Add `"mlp"` for MLP layers (slower, more accurate)
+- Full: Add `"mlp"` or gate/up/down projections (slower, more accurate)
 
 ## Training Hyperparameters
 
@@ -448,6 +451,7 @@ plt.show()
 3. Reduce LoRA rank: `lora_r: 8`
 4. Enable mixed precision: `bf16: true`
 5. Use Flash Attention 2
+6. **Use Unsloth** (enabled by default)
 
 ### Problem: Out of Memory
 
@@ -539,5 +543,5 @@ training:
 
 - Review [TRAINING_GUIDE.md](./TRAINING_GUIDE.md) for training instructions
 - Review [USAGE_GUIDE.md](./USAGE_GUIDE.md) for deployment
-- Monitor metrics with Comet.ml or TensorBoard
+- Monitor metrics with WandB or TensorBoard
 - Experiment with different configurations

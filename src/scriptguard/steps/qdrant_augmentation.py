@@ -127,6 +127,7 @@ def augment_with_qdrant_patterns(
                 port=qdrant_config.get("port", 6333),
                 collection_name="code_samples",  # Fixed collection name
                 enable_chunking=False,  # No chunking for augmentation
+                api_key=qdrant_config.get("api_key"),  # Pass API key
                 config_path=config_path
             )
 

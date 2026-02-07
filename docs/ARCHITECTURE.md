@@ -1,6 +1,6 @@
 # ScriptGuard Architecture Documentation
 
-Complete architectural overview of ScriptGuard v2.0 - a production-ready malware detection system for scripts.
+Complete architectural overview of ScriptGuard v2.1 - a production-ready malware detection system for scripts.
 
 ## Table of Contents
 - [System Overview](#system-overview)
@@ -19,8 +19,8 @@ Complete architectural overview of ScriptGuard v2.0 - a production-ready malware
 ScriptGuard is a microservices-based system that uses machine learning to detect malicious scripts. It combines:
 - **Multiple data sources** for comprehensive training data
 - **Advanced preprocessing** with validation and feature extraction
-- **QLoRA fine-tuning** for efficient model training
-- **RAG (Retrieval-Augmented Generation)** for contextual analysis
+- **QLoRA fine-tuning** with **Unsloth** optimization for efficient model training
+- **RAG (Retrieval-Augmented Generation)** for contextual analysis (CVE patterns & Code Similarity)
 - **Production-ready inference API** with PostgreSQL and vector storage
 
 ### High-Level Architecture
@@ -110,6 +110,7 @@ Handles validation, transformation, and augmentation.
   - String splitting
   - Code reordering
   - Polymorphic variant generation
+  - **Qdrant CVE Pattern Augmentation**
 
 #### **Feature Extraction Module** (`feature_extraction.py`)
 - **Purpose:** Extracts meaningful features for analysis
@@ -137,6 +138,7 @@ Manages persistent data storage.
 - **Purpose:** RAG knowledge base for CVEs and malware patterns
 - **Collections:**
   - `malware_knowledge` - CVE data, exploit patterns, signatures
+  - `code_samples` - Embeddings of training data for Few-Shot RAG
 - **Features:**
   - HNSW indexing for fast similarity search
   - Payload indexes (cve_id, severity, type)
@@ -149,7 +151,7 @@ Manages persistent data storage.
 
 #### **Model Training**
 - **Base Model:** `bigcode/starcoder2-3b` (or configurable)
-- **Fine-tuning Method:** QLoRA (4-bit quantization)
+- **Fine-tuning Method:** QLoRA (4-bit quantization) with **Unsloth**
 - **Architecture:**
   ```
   Base Model (Frozen)
@@ -165,21 +167,22 @@ Manages persistent data storage.
 - Rank (r): 16 (low-rank matrices)
 - Alpha: 32 (scaling factor)
 - Dropout: 0.05 (regularization)
-- Target modules: q_proj, v_proj, k_proj, o_proj
+- Target modules: q_proj, v_proj, k_proj, o_proj, gate_proj, up_proj, down_proj
 
 **Training Hyperparameters:**
 - Batch size: 4
 - Gradient accumulation: 4 (effective batch: 16)
 - Learning rate: 2e-4
 - Epochs: 3
-- Optimizer: paged_adamw_8bit
+- Optimizer: adamw_8bit
+- **Flash Attention 2**: Enabled
 
 #### **Inference Engine**
 - **Purpose:** Real-time script analysis
 - **Components:**
   1. **Preprocessor** - Tokenizes input code
   2. **Model** - Runs inference with LoRA adapters
-  3. **RAG Context** - Retrieves relevant CVE patterns
+  3. **RAG Context** - Retrieves relevant CVE patterns & similar code
   4. **Postprocessor** - Generates risk scores and explanations
 
 **Inference Flow:**
@@ -302,23 +305,6 @@ ScriptGuard uses **ZenML** for ML pipeline orchestration. The pipeline is modula
 **Input:** Configuration dictionary
 **Output:** List of unique samples
 
-**Key Code:**
-```python
-@step
-def advanced_data_ingestion(config: dict) -> List[Dict]:
-    # Initialize sources based on config
-    if config['github']['enabled']:
-        github = GitHubDataSource(token)
-        samples.extend(github.fetch_malicious_samples())
-        samples.extend(github.fetch_benign_samples())
-
-    # Deduplicate and store
-    unique_samples = deduplicate_samples(samples)
-    db_manager.add_samples_batch(unique_samples)
-
-    return unique_samples
-```
-
 ---
 
 #### **Step 2: Sample Validation** (`data_validation.py`)
@@ -334,16 +320,6 @@ def advanced_data_ingestion(config: dict) -> List[Dict]:
 
 **Input:** Raw samples
 **Output:** Validated samples
-
-**Validation Rules:**
-```python
-✓ Valid Python syntax (AST parseable)
-✓ Length: 50 ≤ chars ≤ 50,000
-✓ Encoding: UTF-8
-✓ Label: "malicious" or "benign"
-✓ Comment ratio: < 80%
-✓ Min code lines: ≥ 5
-```
 
 ---
 
@@ -409,15 +385,6 @@ def advanced_data_ingestion(config: dict) -> List[Dict]:
 **Input:** Featured samples
 **Output:** Feature analysis report
 
-**Example Output:**
-```
-Malicious avg entropy: 4.8
-Benign avg entropy: 3.2
-Malicious avg dangerous patterns: 2.1
-Benign avg dangerous patterns: 0.3
-% with suspicious combinations: 45% vs 2%
-```
-
 ---
 
 #### **Step 6: Data Augmentation** (`advanced_augmentation.py`)
@@ -433,21 +400,10 @@ Benign avg dangerous patterns: 0.3
   - Variable renaming
   - String splitting
   - Code reordering
+- **Qdrant Augmentation**: Inject known CVE patterns
 
 **Input:** Featured samples
 **Output:** Original + augmented samples
-
-**Example:**
-```python
-# Original
-import os; os.system('ls')
-
-# Base64 variant
-import base64; exec(base64.b64decode('aW1wb3J0IG9zOyBvcy5zeXN0ZW0oJ2xzJyk='))
-
-# Hex variant
-exec(bytes.fromhex('696d706f7274206f733b206f732e73797374656d28276c732729'))
-```
 
 ---
 
@@ -495,7 +451,7 @@ exec(bytes.fromhex('696d706f7274206f733b206f732e73797374656d28276c732729'))
     r=16,
     lora_alpha=32,
     lora_dropout=0.05,
-    target_modules=["q_proj", "v_proj", "k_proj", "o_proj"]
+    target_modules=["q_proj", "v_proj", "k_proj", "o_proj", "gate_proj", "up_proj", "down_proj"]
   )
   ```
 - Train with:
@@ -504,8 +460,10 @@ exec(bytes.fromhex('696d706f7274206f733b206f732e73797374656d28276c732729'))
   - Learning rate: 2e-4
   - Epochs: 3
   - BF16 precision
+  - **Unsloth Optimization**
+  - **Flash Attention 2**
 - Save LoRA adapters
-- Log to Comet.ml
+- Log to WandB / Comet.ml
 
 **Input:** Tokenized dataset
 **Output:** Trained model path
@@ -531,14 +489,6 @@ exec(bytes.fromhex('696d706f7274206f733b206f732e73797374656d28276c732729'))
 
 **Input:** Trained model path
 **Output:** Evaluation metrics
-
-**Target Metrics:**
-```
-Accuracy:  > 95%
-Precision: > 90%
-Recall:    > 95%
-F1 Score:  > 92%
-```
 
 ---
 
@@ -575,7 +525,8 @@ F1 Score:  > 92%
 |-----------|---------------|------------|
 | **QdrantStore** | Vector similarity search | Qdrant with HNSW |
 | **bootstrap_cve_data()** | Initialize CVE knowledge | Pre-loaded patterns |
-| **SentenceTransformer** | Generate embeddings | all-MiniLM-L6-v2 |
+| **CodeSimilarityStore** | Few-Shot RAG | Embeddings of code samples |
+| **SentenceTransformer** | Generate embeddings | all-MiniLM-L6-v2 / unixcoder-base |
 
 ---
 
@@ -602,7 +553,7 @@ Quality Samples
    ↓
 Featured Samples
    ↓
-[Augmentation] - Obfuscation, variants
+[Augmentation] - Obfuscation, variants, Qdrant CVEs
    ↓
 Augmented Samples
    ↓
@@ -614,7 +565,7 @@ Balanced Dataset
    ↓
 Training-ready Dataset
    ↓
-[Model Training] - QLoRA fine-tuning
+[Model Training] - QLoRA fine-tuning (Unsloth)
    ↓
 Trained Model (LoRA adapters)
    ↓
@@ -630,7 +581,7 @@ Client Request (code string)
    ↓
 [Tokenization] - Convert to model input
    ↓
-[RAG Context Retrieval] - Query Qdrant for similar patterns
+[RAG Context Retrieval] - Query Qdrant for similar patterns & code
    ↓
 [Model Inference] - Base model + LoRA adapters
    ↓
@@ -655,9 +606,9 @@ Client Response
 |-------|-----------|---------|
 | **Database** | PostgreSQL 15 | Primary data storage with JSONB |
 | **Vector DB** | Qdrant | RAG knowledge base |
-| **ML Framework** | PyTorch 2.1+ | Model training and inference |
+| **ML Framework** | PyTorch 2.6+ (CUDA 12.4) | Model training and inference |
 | **Transformers** | HuggingFace Transformers | Model loading and fine-tuning |
-| **Fine-tuning** | PEFT (QLoRA) | Parameter-efficient training |
+| **Fine-tuning** | PEFT (QLoRA) + Unsloth | Parameter-efficient training |
 | **API** | FastAPI + Uvicorn | HTTP inference service |
 | **Orchestration** | ZenML | ML pipeline management |
 | **Containerization** | Docker (multistage) | Deployment packaging |
@@ -667,14 +618,15 @@ Client Response
 
 ```python
 # Core ML
-torch>=2.1.0
-transformers>=4.35.0
-peft>=0.7.0
-bitsandbytes>=0.41.0
-accelerate>=0.24.0
+torch>=2.6.0
+transformers>=4.40.0
+peft>=0.10.0
+bitsandbytes>=0.43.0
+accelerate>=0.30.0
+unsloth[cu124-torch260]
 
 # Data
-datasets>=2.14.0
+datasets>=2.19.0
 pandas
 numpy
 
@@ -683,13 +635,13 @@ psycopg2-binary>=2.9.9
 sqlalchemy>=2.0.0
 
 # Vector DB
-qdrant-client>=1.7.0
-sentence-transformers>=2.2.0
+qdrant-client>=1.9.0
+sentence-transformers>=3.0.0
 
 # API
-fastapi>=0.104.0
-uvicorn[standard]>=0.24.0
-pydantic>=2.0.0
+fastapi>=0.111.0
+uvicorn[standard]>=0.29.0
+pydantic>=2.7.0
 
 # Utils
 pyyaml>=6.0
@@ -785,6 +737,8 @@ Internet
 | **API** | Batch inference | 5-10x throughput |
 | **Model** | 4-bit quantization | 4x memory reduction |
 | **Model** | BF16 training | Faster on modern GPUs |
+| **Training** | Unsloth | 2x faster training |
+| **Training** | Flash Attention 2 | Faster attention mechanism |
 
 ### Scalability
 
@@ -838,14 +792,14 @@ Internet
 
 ## Summary
 
-ScriptGuard v2.0 is a **modular, scalable, production-ready** malware detection system built with:
+ScriptGuard v2.1 is a **modular, scalable, production-ready** malware detection system built with:
 
 ✅ **Microservices architecture** - Independent, scalable components
 ✅ **ML pipeline orchestration** - ZenML for reproducibility
 ✅ **Multi-source data collection** - Comprehensive training data
 ✅ **Advanced preprocessing** - Validation, augmentation, features
-✅ **Efficient training** - QLoRA for fast, low-memory fine-tuning
-✅ **RAG-enhanced inference** - CVE context for better detection
+✅ **Efficient training** - QLoRA + Unsloth for fast, low-memory fine-tuning
+✅ **RAG-enhanced inference** - CVE context & Code Similarity for better detection
 ✅ **Production-grade storage** - PostgreSQL + Qdrant
 ✅ **Container-native** - Docker multistage builds
 ✅ **Monitoring-ready** - Prometheus + Grafana integration

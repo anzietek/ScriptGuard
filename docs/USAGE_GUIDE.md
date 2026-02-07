@@ -17,20 +17,19 @@ Guide for using ScriptGuard to analyze scripts and detect malware.
 ```bash
 git clone https://github.com/yourusername/ScriptGuard.git
 cd ScriptGuard
-pip install -e .
+uv sync  # Install dependencies
 ```
 
 ### Using Docker
 ```bash
-docker pull scriptguard/scriptguard:latest
-docker run -p 8000:8000 scriptguard/scriptguard
+docker-compose up -d api
 ```
 
 ## Quick Start
 
 ### 1. Start the API Server
 ```bash
-python -m scriptguard.api.main
+uv run uvicorn scriptguard.api.main:app --host 0.0.0.0 --port 8000
 ```
 
 API available at `http://localhost:8000`
@@ -61,10 +60,10 @@ print(f"Risk Score: {result['risk_score']}")
 
 ```bash
 # Analyze single file
-python -m scriptguard.cli analyze suspicious_script.py
+uv run python -m scriptguard.cli analyze suspicious_script.py
 
 # Analyze directory
-python -m scriptguard.cli analyze ./scripts/ --recursive
+uv run python -m scriptguard.cli analyze ./scripts/ --recursive
 ```
 
 ## API Server
@@ -73,11 +72,11 @@ python -m scriptguard.cli analyze ./scripts/ --recursive
 
 ```bash
 # Default configuration
-uvicorn scriptguard.api.main:app --host 0.0.0.0 --port 8000
+uv run uvicorn scriptguard.api.main:app --host 0.0.0.0 --port 8000
 
 # With custom config
 export POSTGRES_HOST=postgres
-uvicorn scriptguard.api.main:app --host 0.0.0.0 --port 8000
+uv run uvicorn scriptguard.api.main:app --host 0.0.0.0 --port 8000
 ```
 
 ### Configuration
@@ -216,7 +215,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v2
         with:
-          python-version: '3.10'
+          python-version: '3.12'
 
       - name: Install ScriptGuard
         run: pip install scriptguard
@@ -352,11 +351,11 @@ Get model information.
 **Response:**
 ```json
 {
-  "model_id": "scriptguard-v1.0",
+  "model_id": "scriptguard-v2.1",
   "base_model": "bigcode/starcoder2-3b",
-  "version": "1.0.0",
-  "trained_on": "2024-01-15",
-  "samples": 15000
+  "version": "2.1.0",
+  "trained_on": "2026-02-07",
+  "samples": 20000
 }
 ```
 

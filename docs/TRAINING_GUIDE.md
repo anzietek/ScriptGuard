@@ -15,20 +15,22 @@ Complete guide for training the ScriptGuard malware detection model from scratch
 ## Prerequisites
 
 ### System Requirements
-- **GPU**: NVIDIA GPU with at least 16GB VRAM (recommended: RTX 3090, RTX 4090, A100)
+- **GPU**: NVIDIA GPU with at least 16GB VRAM (recommended: RTX 3090, RTX 4090, A100, A6000)
 - **RAM**: Minimum 32GB system RAM
 - **Storage**: 100GB+ free space for datasets and models
-- **OS**: Linux (Ubuntu 20.04+), Windows 10/11, or macOS
+- **OS**: Linux (Ubuntu 22.04+), Windows 10/11 (WSL2 recommended), or macOS
 
 ### Software Requirements
-- Python 3.10 or higher
-- CUDA 11.8+ (for GPU training)
+- **Python 3.12**
+- **CUDA 12.4** (for GPU training)
+- **uv** package manager (recommended)
 - Docker (optional, for containerized deployment)
 
 ### API Keys (Optional but Recommended)
 - **GitHub Personal Access Token**: Increases API rate limits
 - **NVD API Key**: Faster CVE data fetching
-- **Hugging Face Token**: For private dataset access
+- **Hugging Face Token**: For private dataset access and model uploads
+- **WandB API Key**: For experiment tracking
 
 ## Setup
 
@@ -38,18 +40,18 @@ git clone https://github.com/yourusername/ScriptGuard.git
 cd ScriptGuard
 ```
 
-### 2. Create Virtual Environment
+### 2. Install Dependencies
+We recommend using `uv` for fast and reliable dependency management.
+
 ```bash
-python -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
+# Install uv if not installed
+curl -LsSf https://astral.sh/uv/install.sh | sh
+
+# Install dependencies (creates virtual environment automatically)
+uv sync
 ```
 
-### 3. Install Dependencies
-```bash
-pip install -e .
-```
-
-### 4. Configure Environment Variables
+### 3. Configure Environment Variables
 ```bash
 cp .env.example .env
 ```
@@ -59,6 +61,7 @@ Edit `.env` and add your API keys:
 GITHUB_API_TOKEN=ghp_your_token_here
 NVD_API_KEY=your_nvd_key_here
 HUGGINGFACE_TOKEN=hf_your_token_here
+WANDB_API_KEY=your_wandb_key_here
 ```
 
 ## Data Collection
@@ -69,7 +72,7 @@ ScriptGuard collects data from multiple sources:
 
 1. **GitHub** - Malicious and benign code samples
 2. **MalwareBazaar** - Fresh malware samples
-3. **Hugging Face Datasets** - Large-scale benign code
+3. **Hugging Face Datasets** - Large-scale benign code and malware collections
 4. **CVE Feeds** - Exploit patterns from NVD
 
 ### Configure Data Sources
@@ -82,74 +85,60 @@ data_sources:
     enabled: true
     fetch_malicious: true
     fetch_benign: true
-    max_samples_per_keyword: 20
-    max_files_per_repo: 50
+    max_samples_per_keyword: 200
+    max_files_per_repo: 500
 
   malwarebazaar:
     enabled: true
-    max_samples: 100
+    max_samples: 1000
 
   huggingface:
-    enabled: true
-    max_samples: 10000
+    enabled: false  # Gated dataset example
+    datasets:
+      - "codeparrot/github-code"
+    max_samples: 20000
 
   cve_feeds:
     enabled: true
-    days_back: 30
-```
-
-### Manual Data Collection
-
-You can manually collect data before training:
-
-```python
-from scriptguard.database import DatasetManager
-from scriptguard.data_sources import GitHubDataSource, MalwareBazaarDataSource
-
-# Initialize database (automatically uses config.yaml)
-db = DatasetManager()
-
-# Fetch from GitHub
-github = GitHubDataSource(api_token="your_token")
-malicious = github.fetch_malicious_samples(max_per_keyword=20)
-benign = github.fetch_benign_samples(max_files_per_repo=50)
-
-# Add to database
-db.add_samples_batch(malicious)
-db.add_samples_batch(benign)
-
-# Check statistics
-stats = db.get_dataset_stats()
-print(stats)
+    days_back: 119
 ```
 
 ## Configuration
 
 ### Training Configuration
 
-Edit `config.yaml` training section:
+Edit `config.yaml` training section. ScriptGuard uses **Unsloth** for optimized training.
 
 ```yaml
 training:
   model_id: "bigcode/starcoder2-3b"  # Base model
-  output_dir: "./models/scriptguard-model"
+  output_dir: "${MODEL_OUTPUT_DIR:-/workspace/models/scriptguard-model}"
 
   # QLoRA settings
   use_qlora: true
   lora_r: 16
   lora_alpha: 32
   lora_dropout: 0.05
+  target_modules:
+    - "q_proj"
+    - "v_proj"
+    - "k_proj"
+    - "o_proj"
+    - "gate_proj"
+    - "up_proj"
+    - "down_proj"
 
   # Hyperparameters
   batch_size: 4
   gradient_accumulation_steps: 4
   num_epochs: 3
-  learning_rate: 0.0002
-  max_seq_length: 2048
+  learning_rate: 2e-4
+  max_seq_length: 4096
 
   # Optimization
   bf16: true
-  optim: "paged_adamw_8bit"
+  optim: "adamw_8bit"
+  use_flash_attention_2: true
 ```
 
 ### Validation Settings
@@ -159,7 +148,7 @@ validation:
   validate_syntax: true
   skip_syntax_errors: true
   min_length: 50
-  max_length: 50000
+  max_length: 100000
   min_code_lines: 5
 ```
 
@@ -168,10 +157,13 @@ validation:
 ```yaml
 augmentation:
   enabled: true
-  variants_per_sample: 2
+  variants_per_sample: 3
   balance_dataset: true
   target_balance_ratio: 1.0
-  balance_method: "undersample"
+  balance_method: "oversample"
+  
+  # Qdrant CVE Pattern Augmentation
+  use_qdrant_patterns: true
 ```
 
 ## Training Pipeline
@@ -181,7 +173,7 @@ augmentation:
 Run the training pipeline with default configuration:
 
 ```bash
-python src/main.py
+uv run python src/main.py
 ```
 
 ### Step-by-Step Pipeline
@@ -189,87 +181,31 @@ python src/main.py
 The training pipeline executes the following steps:
 
 #### 1. Data Ingestion
-```python
-from scriptguard.steps.advanced_ingestion import advanced_data_ingestion
-# Fetches data from all configured sources
-# config is loaded from config.yaml
-raw_data = advanced_data_ingestion(config=config)
-```
+Fetches data from all configured sources (GitHub, MalwareBazaar, HF, CVE).
 
 #### 2. Data Validation
-```python
-from scriptguard.steps.data_validation import validate_samples
-# Validates syntax, length, encoding
-validated_data = validate_samples(data=raw_data)
-```
+Validates syntax, length, and encoding of collected samples.
 
 #### 3. Quality Filtering
-```python
-from scriptguard.steps.data_validation import filter_by_quality
-# Filters by code quality metrics
-quality_data = filter_by_quality(data=validated_data)
-```
+Filters out low-quality samples based on code/comment ratio and line counts.
 
 #### 4. Feature Extraction
-```python
-from scriptguard.steps.feature_extraction import extract_features
-# Extracts AST, entropy, API patterns
-featured_data = extract_features(data=quality_data)
-```
+Extracts AST features, entropy, and API patterns.
 
 #### 5. Data Augmentation
-```python
-from scriptguard.steps.advanced_augmentation import augment_malicious_samples
-# Generates polymorphic variants
-augmented_data = augment_malicious_samples(data=featured_data)
-```
+Generates polymorphic variants and augments with CVE patterns from Qdrant.
 
 #### 6. Dataset Balancing
-```python
-from scriptguard.steps.advanced_augmentation import balance_dataset
-# Balances malicious/benign ratio
-balanced_data = balance_dataset(data=augmented_data)
-```
+Balances the malicious/benign ratio to prevent model bias.
 
 #### 7. Preprocessing
-```python
-from scriptguard.steps.data_preprocessing import preprocess_data
-# Tokenizes and formats for training
-processed_dataset = preprocess_data(data=balanced_data)
-```
+Tokenizes and formats data for the model.
 
 #### 8. Model Training
-```python
-from scriptguard.steps.model_training import train_model
-# Trains model with QLoRA
-adapter_path = train_model(dataset=processed_dataset)
-```
+Trains the model using QLoRA with Unsloth optimizations and Flash Attention 2.
 
 #### 9. Evaluation
-```python
-from scriptguard.steps.model_evaluation import evaluate_model
-# Evaluates model performance
-metrics = evaluate_model(adapter_path=adapter_path)
-```
-
-### Custom Pipeline Execution
-
-```python
-from scriptguard.pipelines.training_pipeline import advanced_training_pipeline
-import yaml
-
-# Load config
-with open("config.yaml") as f:
-    config = yaml.safe_load(f)
-
-# Run pipeline
-metrics = advanced_training_pipeline(
-    config=config,
-    model_id="bigcode/starcoder2-3b"
-)
-
-print(f"Training completed! Metrics: {metrics}")
-```
+Evaluates model performance on a hold-out test set.
 
 ## Monitoring Training
 
@@ -277,73 +213,44 @@ print(f"Training completed! Metrics: {metrics}")
 
 Start ZenML server:
 ```bash
-zenml up
+uv run zenml up
 ```
 
-Access dashboard at `http://localhost:8080`
+Access dashboard at `http://localhost:8237` (default port).
 
-### Comet.ml Integration
+### WandB Integration
 
-Configure Comet.ml in `.env`:
+Configure WandB in `.env`:
 ```env
-COMET_API_KEY=your_comet_key
-COMET_PROJECT_NAME=scriptguard
+WANDB_API_KEY=your_wandb_key
+WANDB_PROJECT=scriptguard
 ```
 
-View experiments at [comet.ml](https://www.comet.ml)
+View experiments at [wandb.ai](https://wandb.ai).
 
 ### Training Logs
 
-Check logs:
-```bash
-tail -f logs/scriptguard.log
-```
-
-### Dataset Statistics
-
-View dataset statistics in logs:
-```
-====================================================
-DATASET STATISTICS REPORT
-====================================================
-Total Samples: 15000
-Label Distribution:
-  malicious: 7500 (50.0%)
-  benign: 7500 (50.0%)
-Source Distribution:
-  github: 5000 (33.3%)
-  malwarebazaar: 2500 (16.7%)
-  huggingface: 7500 (50.0%)
-Balance Ratio: 1.00
-Balance Quality: EXCELLENT - Well balanced
-====================================================
-```
+Check logs in the `logs/` directory or console output.
 
 ## Model Export
 
 ### Export Trained Model
 
-After training completes, the adapter is saved to the output directory specified in `config.yaml`. To use it, you can load it using `PeftModel`:
-
-```python
-from peft import PeftModel
-from transformers import AutoModelForCausalLM
-
-# Load base model
-base_model = AutoModelForCausalLM.from_pretrained("bigcode/starcoder2-3b")
-
-# Load adapter
-model = PeftModel.from_pretrained(base_model, "./model_checkpoints/final_adapter")
-```
+After training completes, the adapter is saved to the output directory. You can load it using `PeftModel` or merge it.
 
 ### Merge LoRA Adapter with Base Model
 
 ```python
 from peft import PeftModel
 from transformers import AutoModelForCausalLM, AutoTokenizer
+import torch
 
 # Load base model
-base_model = AutoModelForCausalLM.from_pretrained("bigcode/starcoder2-3b")
+base_model = AutoModelForCausalLM.from_pretrained(
+    "bigcode/starcoder2-3b",
+    torch_dtype=torch.bfloat16,
+    device_map="auto"
+)
 
 # Load adapter
 model = PeftModel.from_pretrained(base_model, "./model_checkpoints/final_adapter")
@@ -357,103 +264,49 @@ tokenizer = AutoTokenizer.from_pretrained("bigcode/starcoder2-3b")
 tokenizer.save_pretrained("./models/scriptguard-merged")
 ```
 
-### Quantize for Deployment
-
-```python
-import torch
-from transformers import AutoModelForCausalLM, BitsAndBytesConfig
-
-# 4-bit quantization
-quantization_config = BitsAndBytesConfig(
-    load_in_4bit=True,
-    bnb_4bit_compute_dtype=torch.float16
-)
-
-model = AutoModelForCausalLM.from_pretrained(
-    "./models/scriptguard-merged",
-    quantization_config=quantization_config
-)
-
-model.save_pretrained("./models/scriptguard-4bit")
-```
-
 ## Troubleshooting
 
 ### Common Issues
 
 #### Out of Memory (OOM)
-**Solution**: Reduce batch size or use gradient accumulation
+**Solution**: Reduce batch size or increase gradient accumulation.
 ```yaml
 training:
-  batch_size: 2  # Reduce from 4
-  gradient_accumulation_steps: 8  # Increase from 4
+  per_device_train_batch_size: 2
+  gradient_accumulation_steps: 8
 ```
 
-#### Slow Data Collection
-**Solution**: Reduce sample limits
-```yaml
-data_sources:
-  github:
-    max_samples_per_keyword: 10  # Reduce from 20
-  huggingface:
-    max_samples: 5000  # Reduce from 10000
+#### CUDA Version Mismatch
+**Solution**: Ensure you have CUDA 12.4 installed and `uv sync` installed the correct PyTorch version.
+```bash
+uv run python -c "import torch; print(torch.version.cuda)"
 ```
 
-#### Invalid Syntax Errors
-**Solution**: Enable syntax error skipping
-```yaml
-validation:
-  skip_syntax_errors: true
-```
-
-#### Imbalanced Dataset
-**Solution**: Adjust balancing method
-```yaml
-augmentation:
-  balance_dataset: true
-  target_balance_ratio: 1.0
-  balance_method: "oversample"  # Try oversample instead
-```
+#### Unsloth Import Error
+**Solution**: Unsloth requires specific GPU capabilities (Ampere+ recommended). If on older GPU, you might need to disable Unsloth in code or upgrade hardware.
 
 #### GitHub Rate Limit
-**Solution**: Add GitHub API token or reduce requests
-```env
-GITHUB_API_TOKEN=your_token_here
-```
+**Solution**: Add GitHub API token in `.env`.
 
 ### Performance Optimization
 
-1. **Use BF16 instead of FP16** (better for modern GPUs):
+1. **Use BF16** (requires Ampere+ GPU):
 ```yaml
 training:
   bf16: true
   fp16: false
 ```
 
-2. **Enable gradient checkpointing** (saves memory):
-```python
-# During model initialization
-model.gradient_checkpointing_enable()
+2. **Enable Flash Attention 2**:
+```yaml
+training:
+  use_flash_attention_2: true
 ```
 
-3. **Use Flash Attention 2** (faster attention):
-```python
-from transformers import AutoModelForCausalLM
-model = AutoModelForCausalLM.from_pretrained(
-    "bigcode/starcoder2-3b",
-    attn_implementation="flash_attention_2"
-)
-```
+3. **Use Unsloth**:
+ScriptGuard uses Unsloth by default for up to 2x faster training and 60% less memory usage.
 
 ### Getting Help
 
 - **GitHub Issues**: https://github.com/yourusername/ScriptGuard/issues
-- **Documentation**: https://scriptguard.readthedocs.io
-- **Community**: Discord or Slack channel
-
-## Next Steps
-
-After training:
-1. Review [USAGE_GUIDE.md](./USAGE_GUIDE.md) for deployment
-2. Review [TUNING_GUIDE.md](./TUNING_GUIDE.md) for optimization
-3. Set up inference API for production use
+- **Documentation**: [docs/](docs/)

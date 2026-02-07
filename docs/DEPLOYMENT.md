@@ -13,7 +13,7 @@ Complete guide for deploying ScriptGuard in production with Docker.
 
 ## Architecture Overview
 
-ScriptGuard v2.0 uses a microservices architecture:
+ScriptGuard v2.1 uses a microservices architecture:
 
 ```
 ┌─────────────────────────────────────────────────────────┐
@@ -62,7 +62,7 @@ docker-compose --version  # 2.20.0+
 
 # NVIDIA Container Toolkit
 nvidia-smi
-docker run --rm --gpus all nvidia/cuda:12.1.0-base-ubuntu22.04 nvidia-smi
+docker run --rm --gpus all nvidia/cuda:12.4.0-base-ubuntu22.04 nvidia-smi
 ```
 
 ### Install NVIDIA Container Toolkit
@@ -100,7 +100,7 @@ POSTGRES_PASSWORD=your_secure_password_here
 # API Keys
 GITHUB_API_TOKEN=ghp_your_token
 HUGGINGFACE_TOKEN=hf_your_token
-COMET_API_KEY=your_comet_key
+WANDB_API_KEY=your_wandb_key
 
 # Model
 BASE_MODEL_ID=bigcode/starcoder2-3b

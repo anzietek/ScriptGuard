@@ -47,8 +47,9 @@ The local development setup separates **infrastructure** (PostgreSQL, Qdrant) fr
 
 **Required:**
 - [Docker Desktop](https://www.docker.com/products/docker-desktop/) (Windows/Mac) or Docker Engine (Linux)
-- [Python 3.10+](https://www.python.org/downloads/)
+- [Python 3.12+](https://www.python.org/downloads/)
 - [Git](https://git-scm.com/downloads)
+- [uv](https://astral.sh/uv/) package manager
 
 **Optional:**
 - [CUDA Toolkit](https://developer.nvidia.com/cuda-downloads) (for GPU training)
@@ -154,28 +155,15 @@ Should show:
 ### Step 5: Setup Python Environment
 
 ```bash
-# Create virtual environment
-python -m venv venv
-
-# Activate venv
-source venv/bin/activate  # Linux/Mac
-venv\Scripts\activate     # Windows
-
-# Upgrade pip
-pip install --upgrade pip
-
-# Install ScriptGuard
-pip install -e .
+# Install dependencies with uv
+uv sync
 ```
 
 ### Step 6: Bootstrap Qdrant
 
 ```bash
-# Activate venv first
-source venv/bin/activate  # or venv\Scripts\activate on Windows
-
 # Bootstrap CVE data
-python -c "
+uv run python -c "
 from scriptguard.rag import QdrantStore, bootstrap_cve_data
 store = QdrantStore()
 bootstrap_cve_data(store)
@@ -193,30 +181,24 @@ Open http://localhost:6333/dashboard in browser
 ### Training Pipeline
 
 ```bash
-# Activate venv
-source venv/bin/activate  # or venv\Scripts\activate
-
 # Run training
-python src/main.py
+uv run python src/main.py
 ```
 
 **Custom config:**
 ```bash
 # Edit config.yaml first, then:
-python src/main.py
+uv run python src/main.py
 ```
 
 ### Inference API
 
 ```bash
-# Activate venv
-source venv/bin/activate
-
 # Run API with hot reload (development)
-uvicorn scriptguard.api.main:app --reload --host 0.0.0.0 --port 8000
+uv run uvicorn scriptguard.api.main:app --reload --host 0.0.0.0 --port 8000
 
 # Or run API without reload (production-like)
-uvicorn scriptguard.api.main:app --host 0.0.0.0 --port 8000
+uv run uvicorn scriptguard.api.main:app --host 0.0.0.0 --port 8000
 ```
 
 **Test API:**
@@ -233,8 +215,7 @@ curl -X POST http://localhost:8000/analyze \
 ### Interactive Python Shell
 
 ```bash
-source venv/bin/activate
-python
+uv run python
 ```
 
 ```python
@@ -263,19 +244,14 @@ python
    cd docker && docker-compose -f docker-compose.dev.yml up -d
    ```
 
-2. **Activate Python environment:**
-   ```bash
-   source venv/bin/activate
-   ```
+2. **Make code changes** in `src/scriptguard/`
 
-3. **Make code changes** in `src/scriptguard/`
+3. **Run/Test:**
+   - **Training:** `uv run python src/main.py`
+   - **API:** `uv run uvicorn scriptguard.api.main:app --reload`
+   - **Tests:** `uv run pytest tests/`
 
-4. **Run/Test:**
-   - **Training:** `python src/main.py`
-   - **API:** `uvicorn scriptguard.api.main:app --reload`
-   - **Tests:** `pytest tests/`
-
-5. **Check logs:**
+4. **Check logs:**
    ```bash
    # Infrastructure logs
    docker-compose -f docker/docker-compose.dev.yml logs -f
@@ -287,7 +263,7 @@ python
    docker logs -f scriptguard-qdrant-dev
    ```
 
-6. **Stop infrastructure** (when done):
+5. **Stop infrastructure** (when done):
    ```bash
    cd docker && docker-compose -f docker-compose.dev.yml down
    ```
@@ -296,17 +272,10 @@ python
 
 **API with hot reload:**
 ```bash
-uvicorn scriptguard.api.main:app --reload
+uv run uvicorn scriptguard.api.main:app --reload
 ```
 
 Changes to Python files will automatically reload the server!
-
-**Alternative with auto-reload on any file change:**
-```bash
-pip install watchdog
-watchmedo auto-restart --pattern="*.py" --recursive \
-  -- python -m uvicorn scriptguard.api.inference:app
-```
 
 ### Database Management
 
@@ -411,10 +380,9 @@ docker restart scriptguard-qdrant-dev
 
 ### Issue: "ModuleNotFoundError"
 
-**Solution:** Make sure venv is activated and package is installed
+**Solution:** Make sure dependencies are installed
 ```bash
-source venv/bin/activate  # or venv\Scripts\activate
-pip install -e .
+uv sync
 ```
 
 ### Issue: "Port already in use"
@@ -459,7 +427,7 @@ docker exec -i scriptguard-postgres-dev psql -U scriptguard scriptguard < docker
 
 **2. Select Python interpreter:**
 - `Ctrl+Shift+P` → "Python: Select Interpreter"
-- Choose `./venv/bin/python`
+- Choose `.venv/bin/python` (created by uv)
 
 **3. Create `.vscode/launch.json`:**
 ```json
@@ -496,7 +464,7 @@ docker exec -i scriptguard-postgres-dev psql -U scriptguard scriptguard < docker
 **4. Create `.vscode/settings.json`:**
 ```json
 {
-    "python.defaultInterpreterPath": "${workspaceFolder}/venv/bin/python",
+    "python.defaultInterpreterPath": "${workspaceFolder}/.venv/bin/python",
     "python.linting.enabled": true,
     "python.linting.pylintEnabled": true,
     "python.formatting.provider": "black",
@@ -510,7 +478,7 @@ docker exec -i scriptguard-postgres-dev psql -U scriptguard scriptguard < docker
 **1. Configure Python Interpreter:**
 - File → Settings → Project → Python Interpreter
 - Add → Virtualenv Environment → Existing
-- Select `./venv/bin/python`
+- Select `.venv/bin/python`
 
 **2. Configure Run Configurations:**
 
@@ -596,27 +564,23 @@ cd docker && docker-compose -f docker-compose.dev.yml logs -f postgres
 ### Python Commands
 
 ```bash
-# Activate venv
-source venv/bin/activate  # Linux/Mac
-venv\Scripts\activate     # Windows
-
 # Install dependencies
-pip install -e .
+uv sync
 
 # Run training
-python src/main.py
+uv run python src/main.py
 
 # Run API
-uvicorn scriptguard.api.inference:app --reload
+uv run uvicorn scriptguard.api.inference:app --reload
 
 # Run tests
-pytest tests/
+uv run pytest tests/
 
 # Format code
-black src/
+uv run black src/
 
 # Lint code
-flake8 src/
+uv run flake8 src/
 ```
 
 ### Database Commands

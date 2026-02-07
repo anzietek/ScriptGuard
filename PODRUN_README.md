@@ -33,9 +33,10 @@ tail -f logs/scriptguard_*.log # View logs
 ## 🔑 Required in .env
 
 ```bash
-QDRANT_URL=http://localhost:6333
+QDRANT_HOST=localhost
+QDRANT_PORT=6333
 QDRANT_API_KEY=your_key
-HF_TOKEN=your_token
+HUGGINGFACE_TOKEN=your_token
 WANDB_API_KEY=your_key  # optional
 ```
 
@@ -43,9 +44,9 @@ WANDB_API_KEY=your_key  # optional
 
 ```yaml
 training:
-  model_id: "Qwen/Qwen2.5-Coder-1.5B-Instruct"
+  model_id: "bigcode/starcoder2-3b"
   batch_size: 4  # Adjust for GPU
-  max_epochs: 3
+  num_epochs: 3
 
 augmentation:
   use_qdrant_patterns: true  # Enable RAG
