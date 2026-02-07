@@ -108,6 +108,11 @@ class StrictBinaryClassificationProcessor(LogitsProcessor):
             valid_next_tokens.add(next_token)
             mask[:, next_token] = scores[:, next_token] + 5.0
 
+        # Safety fallback: if no tokens are valid (shouldn't happen logic-wise but good for stability)
+        if not valid_next_tokens:
+             # Force EOS to prevent crash/loop
+             mask[:, self.eos_token_id] = 0.0
+
         return mask
 
 
@@ -136,6 +141,15 @@ def evaluate_model(
     - Sample predictions for inspection
     """
     logger.info(f"Evaluating model from: {adapter_path}")
+    
+    if not test_dataset or len(test_dataset) == 0:
+        logger.warning("Test dataset is empty. Skipping evaluation.")
+        return {
+            "accuracy": 0.0,
+            "test_set_size": 0,
+            "status": "skipped_empty_dataset"
+        }
+
     logger.info(f"Test set size: {len(test_dataset)}")
     logger.info(f"Few-Shot RAG: {'ENABLED' if use_fewshot_rag else 'DISABLED'}")
 

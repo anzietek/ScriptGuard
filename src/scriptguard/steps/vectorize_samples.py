@@ -1,54 +1,47 @@
 """
-Synchronization Process: PostgreSQL → Qdrant
+Synchronization Process: Training Data → Qdrant
 Vectorizes verified code samples and uploads them to Qdrant for Few-Shot RAG.
 """
 
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 from zenml import step
 
-from scriptguard.database.dataset_manager import DatasetManager
 from scriptguard.rag.code_similarity_store import CodeSimilarityStore
 from scriptguard.utils.logger import logger
 
 
 @step
 def vectorize_samples(
+    data: List[Dict[str, Any]],
     config: Dict[str, Any] = None,
-    max_samples: Optional[int] = None,
     clear_existing: bool = False
 ) -> Dict[str, Any]:
     """
-    Synchronize code samples from PostgreSQL to Qdrant vector database.
+    Synchronize provided code samples to Qdrant vector database.
 
     This step:
-    1. Retrieves all verified code samples from PostgreSQL
+    1. Takes the TRAINING dataset (list of dicts)
     2. Generates embeddings using a code-specific model
     3. Uploads vectors to Qdrant for similarity search during inference
 
     Args:
+        data: List of training samples to vectorize
         config: Configuration dictionary from config.yaml
-        max_samples: Optional limit on number of samples to sync (for testing). If 0, skip vectorization.
         clear_existing: If True, clear existing vectors before sync
 
     Returns:
         Dictionary with synchronization statistics
     """
-    # Skip vectorization if max_samples is explicitly 0
-    if max_samples is not None and max_samples == 0:
-        logger.info("Vectorization skipped (max_samples_to_vectorize=0)")
+    if not data:
+        logger.warning("No data provided for vectorization.")
         return {
             "status": "skipped",
-            "samples_vectorized": 0,
-            "malicious_count": 0,
-            "benign_count": 0
+            "samples_vectorized": 0
         }
 
     logger.info("=" * 60)
-    logger.info("VECTORIZING CODE SAMPLES (PostgreSQL → Qdrant)")
+    logger.info("VECTORIZING TRAINING SAMPLES (List → Qdrant)")
     logger.info("=" * 60)
-
-    # Initialize managers
-    db_manager = DatasetManager()
 
     # Get Qdrant config
     config = config or {}
@@ -92,47 +85,40 @@ def vectorize_samples(
     info_before = code_store.get_collection_info()
     logger.info(f"Collection before sync: {info_before.get('total_samples', 0)} samples")
 
-    # Retrieve samples from PostgreSQL
-    logger.info("Retrieving samples from PostgreSQL...")
-
-    # Get malicious samples
-    malicious_samples = db_manager.get_all_samples(
-        label="malicious",
-        limit=max_samples // 2 if max_samples else None
-    )
-
-    # Get benign samples
-    benign_samples = db_manager.get_all_samples(
-        label="benign",
-        limit=max_samples // 2 if max_samples else None
-    )
-
-    all_samples = malicious_samples + benign_samples
-
-    logger.info(f"Retrieved {len(all_samples)} samples from PostgreSQL")
-    logger.info(f"  - Malicious: {len(malicious_samples)}")
-    logger.info(f"  - Benign: {len(benign_samples)}")
-
-    if not all_samples:
-        logger.warning("No samples found in PostgreSQL. Run data ingestion first.")
-        return {
-            "status": "no_data",
-            "samples_vectorized": 0,
-            "malicious_count": 0,
-            "benign_count": 0
-        }
+    logger.info(f"Processing {len(data)} training samples...")
 
     # Prepare samples for vectorization
     samples_to_vectorize = []
-    for sample in all_samples:
+    malicious_count = 0
+    benign_count = 0
+
+    for sample in data:
+        # Ensure ID exists (if not, generate one from hash)
+        sample_id = sample.get("id")
+        if sample_id is None:
+            # Fallback for synthetic/augmented data without DB ID
+            import hashlib
+            content_hash = hashlib.md5(sample.get("content", "").encode()).hexdigest()
+            # Use first 8 bytes as int ID
+            sample_id = int(content_hash[:16], 16) % (2**63 - 1)
+
+        label = sample.get("label", "unknown")
+        if label == "malicious":
+            malicious_count += 1
+        elif label == "benign":
+            benign_count += 1
+
         samples_to_vectorize.append({
-            "id": sample["id"],
-            "content": sample["content"],
-            "label": sample["label"],
-            "source": sample["source"],
+            "id": sample_id,
+            "content": sample.get("content", ""),
+            "label": label,
+            "source": sample.get("source", "unknown"),
             "language": sample.get("metadata", {}).get("language", "python"),
             "metadata": sample.get("metadata", {})
         })
+
+    logger.info(f"  - Malicious: {malicious_count}")
+    logger.info(f"  - Benign: {benign_count}")
 
     # Vectorize and upload to Qdrant
     logger.info("Generating embeddings and uploading to Qdrant...")
@@ -159,19 +145,3 @@ def vectorize_samples(
         "embedding_dim": info_after.get('embedding_dim', 0),
         "collection_info": info_after
     }
-
-
-if __name__ == "__main__":
-    # Test vectorization
-    import os
-    import yaml
-
-    # Load config from environment variable or default
-    config_path = os.getenv("CONFIG_PATH", "config.yaml")
-    with open(config_path, "r") as f:
-        config = yaml.safe_load(f)
-
-    # Run vectorization (limit to 100 samples for testing)
-    result = vectorize_samples(config=config, max_samples=100, clear_existing=True)
-
-    print(f"\nVectorization result: {result}")

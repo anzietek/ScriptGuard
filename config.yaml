@@ -401,7 +401,7 @@ training:
   learning_rate: 2e-4
   weight_decay: 0.01
   warmup_steps: 100
-  lr_scheduler_type: "cosine"
+  lr_scheduler_type: "cosine_with_restarts" # Optimized for better convergence
 
   # Context Length (Quality Boost)
   max_seq_length: 4096

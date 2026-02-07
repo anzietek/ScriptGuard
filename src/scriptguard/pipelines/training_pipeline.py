@@ -125,6 +125,7 @@ def advanced_training_pipeline(
 ):
     """
     Advanced ZenML pipeline using new data sources and processing steps.
+    Corrected to prevent Data Leakage by splitting BEFORE augmentation.
 
     Args:
         config: Configuration dictionary from config.yaml
@@ -148,64 +149,66 @@ def advanced_training_pipeline(
         max_comment_ratio=config.get("validation", {}).get("max_comment_ratio", 0.5)
     )
 
-    # Step 4: Extract features
+    # Step 4: Extract features (useful for analysis, but also for filtering)
     featured_data = extract_features(data=quality_data)
 
-    # Step 5: Analyze feature importance
+    # Step 5: Analyze feature importance (informational)
     feature_analysis = analyze_feature_importance(data=featured_data)
+
+    # === CRITICAL FIX: SPLIT DATA BEFORE AUGMENTATION ===
+    # This prevents data leakage where augmented versions of test samples
+    # end up in the training set.
+    test_size = config.get("training", {}).get("test_split_size", 0.1)
+    train_data_list, test_data_list, raw_test_data = split_raw_data(
+        data=featured_data,
+        test_size=test_size
+    )
+
+    # === AUGMENTATION (ONLY ON TRAIN DATA) ===
 
     # Step 6: Augment malicious samples
     if config.get("augmentation", {}).get("enabled", True):
-        augmented_data = _augment_malicious_samples(
-            data=featured_data,
+        augmented_train_data = _augment_malicious_samples(
+            data=train_data_list,
             variants_per_sample=config.get("augmentation", {}).get("variants_per_sample", 2)
         )
     else:
-        augmented_data = featured_data
+        augmented_train_data = train_data_list
 
     # Step 7: Balance dataset
     if config.get("augmentation", {}).get("balance_dataset", True):
-        balanced_data = balance_dataset(
-            data=augmented_data,
+        balanced_train_data = balance_dataset(
+            data=augmented_train_data,
             target_ratio=config.get("augmentation", {}).get("target_balance_ratio", 1.0),
             method=config.get("augmentation", {}).get("balance_method", "undersample")
         )
     else:
-        balanced_data = augmented_data
+        balanced_train_data = augmented_train_data
 
     # Step 7.5: Augment with Qdrant CVE patterns (if enabled)
     if config.get("augmentation", {}).get("use_qdrant_patterns", False):
-        qdrant_augmented_data = augment_with_qdrant_patterns(
-            data=balanced_data,
+        qdrant_augmented_train_data = augment_with_qdrant_patterns(
+            data=balanced_train_data,
             config=config
         )
 
         # Validate augmentation
         augmentation_stats = validate_qdrant_augmentation(
-            data=qdrant_augmented_data
+            data=qdrant_augmented_train_data
         )
     else:
-        qdrant_augmented_data = balanced_data
+        qdrant_augmented_train_data = balanced_train_data
 
     # Step 7.6: Vectorize samples to Qdrant for Few-Shot RAG
-    # This step synchronizes code samples to vector DB BEFORE splitting
-    # so that evaluation can retrieve similar examples
-    max_vectorize = config.get("code_embedding", {}).get("max_samples_to_vectorize", None)
+    # CRITICAL: Only vectorize TRAINING data to avoid RAG leakage
     vectorization_result = vectorize_samples(
+        data=qdrant_augmented_train_data,
         config=config,
-        clear_existing=True,  # Clear old vectors
-        max_samples=max_vectorize  # Limit samples for testing
-    )
-
-    # Step 8: Split data BEFORE preprocessing (using dedicated step)
-    test_size = config.get("training", {}).get("test_split_size", 0.1)
-    train_data_list, test_data_list, raw_test_data = split_raw_data(
-        data=qdrant_augmented_data,
-        test_size=test_size
+        clear_existing=True  # Clear old vectors to ensure no test data remains
     )
 
     # Step 9: Preprocess training and test data
-    processed_train_dataset = preprocess_data(data=train_data_list, config=config)
+    processed_train_dataset = preprocess_data(data=qdrant_augmented_train_data, config=config)
     processed_test_dataset = preprocess_data(data=test_data_list, config=config)
 
     # Step 10: Train model with preprocessed evaluation dataset
