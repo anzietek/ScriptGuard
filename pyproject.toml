@@ -3,7 +3,7 @@ name = "scriptguard"
 version = "0.1.0"
 description = "ML-based Malicious Script Detection Pipeline"
 readme = "README.md"
-requires-python = "==3.12.*"
+requires-python = ">=3.10,<3.13"
 
 dependencies = [
     # --- Core ML (CUDA 12.4) - Direct URLs to CUDA wheels ---
@@ -24,6 +24,8 @@ dependencies = [
     # --- TRITON FIX (Windows Support) ---
     "triton>=3.0.0; sys_platform == 'linux'",
     "triton @ https://github.com/woct0rdho/triton-windows/releases/download/v3.1.0-windows.post5/triton-3.1.0-cp312-cp312-win_amd64.whl ; sys_platform == 'win32'",
+    # --- Flash Attention 2 (REQUIRED for config_runpod.yaml) ---
+    "flash-attn>=2.7.0; sys_platform == 'linux'",
     # --- MLOps & Data ---
     "zenml[server]>=0.63.0",
     "mlflow>=2.15.0",

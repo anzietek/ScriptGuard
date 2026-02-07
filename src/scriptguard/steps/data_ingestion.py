@@ -1,4 +1,5 @@
 import os
+import json
 import requests
 import glob
 from typing import List, Dict, Any, Optional
@@ -168,4 +169,15 @@ def synthetic_data_generation(base_data: List[Dict[str, Any]], num_samples: int 
             "source": "synthetic_generator"
         })
     
-    return base_data + synthetic_scripts
+    combined_data = base_data + synthetic_scripts
+    unique_data = []
+    seen = set()
+    
+    for item in combined_data:
+        # Serialize dictionary to JSON string for hashing
+        item_str = json.dumps(item, sort_keys=True)
+        if item_str not in seen:
+            seen.add(item_str)
+            unique_data.append(item)
+            
+    return unique_data
