@@ -246,7 +246,7 @@ def evaluate_model(
             logger.info(f"Attempting to load model on GPU with {eval_dtype}...")
             base_model = AutoModelForCausalLM.from_pretrained(
                 base_model_id,
-                torch_dtype=eval_dtype,
+                dtype=eval_dtype,  # Use 'dtype' instead of deprecated 'torch_dtype'
                 low_cpu_mem_usage=True,
                 # NO device_map="auto" - causes issues with PEFT adapter loading
             )
@@ -260,7 +260,7 @@ def evaluate_model(
         # Final fallback: Load on CPU
         base_model = AutoModelForCausalLM.from_pretrained(
             base_model_id,
-            torch_dtype=torch.float32,
+            dtype=torch.float32,  # Use 'dtype' instead of deprecated 'torch_dtype'
             low_cpu_mem_usage=True
         )
         base_model = base_model.to("cpu")
