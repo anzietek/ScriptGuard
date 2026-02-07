@@ -2606,8 +2606,8 @@ dependencies = [
     { name = "transformers" },
     { name = "tree-sitter" },
     { name = "tree-sitter-python" },
-    { name = "triton", version = "3.1.0", source = { url = "https://github.com/woct0rdho/triton-windows/releases/download/v3.1.0-windows.post5/triton-3.1.0-cp312-cp312-win_amd64.whl" }, marker = "sys_platform == 'win32'" },
     { name = "triton", version = "3.2.0", source = { registry = "https://pypi.org/simple" }, marker = "sys_platform == 'linux'" },
+    { name = "triton", version = "3.2.0", source = { url = "https://github.com/woct0rdho/triton-windows/releases/download/v3.2.0-windows.post9/triton-3.2.0-cp312-cp312-win_amd64.whl" }, marker = "sys_platform == 'win32'" },
     { name = "unsloth", extra = ["cu124-torch251"] },
     { name = "unsloth-zoo" },
     { name = "wandb" },
@@ -2668,7 +2668,7 @@ requires-dist = [
     { name = "tree-sitter", specifier = ">=0.22.0" },
     { name = "tree-sitter-python", specifier = ">=0.21.0" },
     { name = "triton", marker = "sys_platform == 'linux'", specifier = ">=3.0.0" },
-    { name = "triton", marker = "sys_platform == 'win32'", url = "https://github.com/woct0rdho/triton-windows/releases/download/v3.1.0-windows.post5/triton-3.1.0-cp312-cp312-win_amd64.whl" },
+    { name = "triton", marker = "sys_platform == 'win32'", url = "https://github.com/woct0rdho/triton-windows/releases/download/v3.2.0-windows.post9/triton-3.2.0-cp312-cp312-win_amd64.whl" },
     { name = "unsloth", extras = ["cu124-torch251"], git = "https://github.com/unslothai/unsloth.git" },
     { name = "unsloth-zoo", git = "https://github.com/unslothai/unsloth-zoo.git" },
     { name = "wandb", specifier = ">=0.24.1" },
@@ -3274,23 +3274,30 @@ dependencies = [
 
 [[package]]
 name = "triton"
-version = "3.1.0"
-source = { url = "https://github.com/woct0rdho/triton-windows/releases/download/v3.1.0-windows.post5/triton-3.1.0-cp312-cp312-win_amd64.whl" }
+version = "3.2.0"
+source = { registry = "https://pypi.org/simple" }
+resolution-markers = [
+    "sys_platform == 'linux'",
+]
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/06/00/59500052cb1cf8cf5316be93598946bc451f14072c6ff256904428eaf03c/triton-3.2.0-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:8d9b215efc1c26fa7eefb9a157915c92d52e000d2bf83e5f69704047e63f125c", size = 253159365, upload-time = "2025-01-22T19:13:24.648Z" },
+]
+
+[[package]]
+name = "triton"
+version = "3.2.0"
+source = { url = "https://github.com/woct0rdho/triton-windows/releases/download/v3.2.0-windows.post9/triton-3.2.0-cp312-cp312-win_amd64.whl" }
 resolution-markers = [
     "sys_platform == 'win32'",
 ]
-dependencies = [
-    { name = "filelock", marker = "sys_platform == 'win32'" },
-]
 wheels = [
-    { url = "https://github.com/woct0rdho/triton-windows/releases/download/v3.1.0-windows.post5/triton-3.1.0-cp312-cp312-win_amd64.whl", hash = "sha256:89597e7f635b1826098693785d2328bc1587d4cb6a74352437d2c6018c5da40d" },
+    { url = "https://github.com/woct0rdho/triton-windows/releases/download/v3.2.0-windows.post9/triton-3.2.0-cp312-cp312-win_amd64.whl", hash = "sha256:6ff60823ee220b582d9e2d47e5f7e33dd1c8fb5f0b2c1e478575536659c69f1f" },
 ]
 
 [package.metadata]
 requires-dist = [
     { name = "autopep8", marker = "extra == 'tests'" },
     { name = "cmake", marker = "extra == 'build'", specifier = ">=3.20" },
-    { name = "filelock" },
     { name = "flake8", marker = "extra == 'tests'" },
     { name = "isort", marker = "extra == 'tests'" },
     { name = "lit", marker = "extra == 'build'" },
@@ -3303,17 +3310,6 @@ requires-dist = [
     { name = "tabulate", marker = "extra == 'tutorials'" },
 ]
 provides-extras = ["build", "tests", "tutorials"]
-
-[[package]]
-name = "triton"
-version = "3.2.0"
-source = { registry = "https://pypi.org/simple" }
-resolution-markers = [
-    "sys_platform == 'linux'",
-]
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/06/00/59500052cb1cf8cf5316be93598946bc451f14072c6ff256904428eaf03c/triton-3.2.0-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:8d9b215efc1c26fa7eefb9a157915c92d52e000d2bf83e5f69704047e63f125c", size = 253159365, upload-time = "2025-01-22T19:13:24.648Z" },
-]
 
 [[package]]
 name = "triton-windows"
@@ -3419,8 +3415,8 @@ cu124-torch251 = [
     { name = "tqdm" },
     { name = "transformers" },
     { name = "triton", version = "3.1.0", source = { registry = "https://pypi.org/simple" }, marker = "sys_platform != 'linux' and sys_platform != 'win32' and 'linux' in sys_platform" },
-    { name = "triton", version = "3.1.0", source = { url = "https://github.com/woct0rdho/triton-windows/releases/download/v3.1.0-windows.post5/triton-3.1.0-cp312-cp312-win_amd64.whl" }, marker = "sys_platform == 'win32' and 'linux' in sys_platform" },
     { name = "triton", version = "3.2.0", source = { registry = "https://pypi.org/simple" }, marker = "sys_platform == 'linux' and 'linux' in sys_platform" },
+    { name = "triton", version = "3.2.0", source = { url = "https://github.com/woct0rdho/triton-windows/releases/download/v3.2.0-windows.post9/triton-3.2.0-cp312-cp312-win_amd64.whl" }, marker = "sys_platform == 'win32' and 'linux' in sys_platform" },
     { name = "triton-windows", marker = "(platform_machine == 'AMD64' and sys_platform == 'win32') or (platform_machine == 'x86_64' and sys_platform == 'win32')" },
     { name = "trl" },
     { name = "tyro" },
@@ -3457,8 +3453,8 @@ dependencies = [
     { name = "tqdm" },
     { name = "transformers" },
     { name = "triton", version = "3.1.0", source = { registry = "https://pypi.org/simple" }, marker = "sys_platform != 'linux' and sys_platform != 'win32' and 'linux' in sys_platform" },
-    { name = "triton", version = "3.1.0", source = { url = "https://github.com/woct0rdho/triton-windows/releases/download/v3.1.0-windows.post5/triton-3.1.0-cp312-cp312-win_amd64.whl" }, marker = "sys_platform == 'win32' and 'linux' in sys_platform" },
     { name = "triton", version = "3.2.0", source = { registry = "https://pypi.org/simple" }, marker = "sys_platform == 'linux' and 'linux' in sys_platform" },
+    { name = "triton", version = "3.2.0", source = { url = "https://github.com/woct0rdho/triton-windows/releases/download/v3.2.0-windows.post9/triton-3.2.0-cp312-cp312-win_amd64.whl" }, marker = "sys_platform == 'win32' and 'linux' in sys_platform" },
     { name = "triton-windows", marker = "(platform_machine == 'AMD64' and sys_platform == 'win32') or (platform_machine == 'x86_64' and sys_platform == 'win32')" },
     { name = "trl" },
     { name = "typing-extensions" },

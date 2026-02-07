@@ -1,8 +1,27 @@
+import os
+import platform
+
+# Force disable torch.compile on Windows at module import time
+if platform.system() == "Windows":
+    os.environ["TORCH_COMPILE_DISABLE"] = "1"
+    os.environ["TORCHDYNAMO_DISABLE"] = "1"
+    os.environ["PYTORCH_ENABLE_MPS_FALLBACK"] = "1"
+
 from unsloth import FastLanguageModel, UnslothTrainer
 import torch
 from transformers import TrainingArguments
 from datasets import Dataset
 from scriptguard.utils.logger import logger
+
+# Configure torch._dynamo on Windows
+if platform.system() == "Windows":
+    try:
+        torch._dynamo.config.suppress_errors = True  # type: ignore
+        torch._dynamo.config.disable = True  # type: ignore
+        logger.info("Windows detected - torch.compile disabled in qlora_finetuner")
+    except (AttributeError, ImportError):
+        logger.warning("Could not disable torch._dynamo in qlora_finetuner")
+        pass
 
 class QLoRAFineTuner:
     def __init__(self, model_id: str = "bigcode/starcoder2-3b", config: dict = None):
@@ -21,12 +40,23 @@ class QLoRAFineTuner:
 
         logger.info("Loading model with unsloth optimization...")
 
-        # Check if Flash Attention 2 is enabled
+        # Unsloth may use flash attention by default (even if not explicitly enabled)
+        # Flash Attention requires dropout=0.0, so we disable it unconditionally on Windows
+        import platform
+        is_windows = platform.system() == "Windows"
+
         use_flash_attn = training_config.get("use_flash_attention_2", False)
 
-        # Prepare model config overrides to disable dropout with Flash Attention 2
+        # Prepare model config overrides
         model_kwargs = {}
-        if use_flash_attn:
+
+        # On Windows, always disable dropout (Unsloth may use flash attention internally)
+        if is_windows:
+            logger.info("Windows detected - disabling all dropout layers (required for Unsloth)")
+            model_kwargs["attention_dropout"] = 0.0
+            model_kwargs["residual_dropout"] = 0.0
+            model_kwargs["embedding_dropout"] = 0.0
+        elif use_flash_attn:
             logger.info("Flash Attention 2 enabled - disabling all dropout layers")
             model_kwargs["attention_dropout"] = 0.0
             model_kwargs["residual_dropout"] = 0.0

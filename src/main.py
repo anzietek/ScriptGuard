@@ -1,13 +1,25 @@
 import os
 import sys
+
+# CRITICAL: Import Windows Triton fix FIRST - before any other imports
+# This monkey-patches torch.compile to prevent Triton CUDA version errors
+if sys.platform == "win32":
+    from scriptguard.utils.windows_triton_fix import *  # noqa: F401, F403
+
 import signal
 import yaml
-from dotenv import load_dotenv, find_dotenv
 from scriptguard.utils.logger import logger
 
-# Disable transformers lazy loading (fixes Python 3.13 Ctrl+C issues)
-os.environ["TRANSFORMERS_NO_ADVISORY_WARNINGS"] = "1"
-os.environ["TOKENIZERS_PARALLELISM"] = "false"
+# Disable torch.compile on Windows FIRST - before ANY imports or .env loading
+# This prevents Triton CUDA version detection issues
+if sys.platform == "win32":
+    os.environ["TORCH_COMPILE_DISABLE"] = "1"
+    os.environ["TORCHDYNAMO_DISABLE"] = "1"
+    os.environ["PYTORCH_ENABLE_MPS_FALLBACK"] = "1"
+    logger.info("Windows detected - torch.compile will be disabled")
+
+# Now load .env files
+from dotenv import load_dotenv, find_dotenv
 
 # Load .env - find_dotenv() automatically searches parent directories
 load_dotenv(find_dotenv(usecwd=True))
@@ -16,6 +28,21 @@ load_dotenv(find_dotenv(usecwd=True))
 env_dev = find_dotenv(".env.dev", usecwd=True)
 if env_dev:
     load_dotenv(env_dev, override=True)
+    logger.info(f"Loaded .env.dev from {env_dev}")
+
+# Disable transformers lazy loading (fixes Python 3.13 Ctrl+C issues)
+os.environ["TRANSFORMERS_NO_ADVISORY_WARNINGS"] = "1"
+os.environ["TOKENIZERS_PARALLELISM"] = "false"
+
+# Configure torch._dynamo AFTER env is loaded but BEFORE importing torch libraries
+if sys.platform == "win32":
+    import torch
+    try:
+        torch._dynamo.config.suppress_errors = True  # type: ignore
+        torch._dynamo.config.disable = True  # type: ignore
+        logger.info("torch._dynamo disabled successfully")
+    except (AttributeError, ImportError):
+        logger.warning("Could not disable torch._dynamo - may not be available")
 
 # Fix ZenML Windows path handling (monkey-patch)
 if sys.platform == "win32":

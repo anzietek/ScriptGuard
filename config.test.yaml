@@ -102,9 +102,10 @@ training:
   max_steps: ${MAX_STEPS:-10}
 
   # Flash Attention 2 Configuration
-  use_flash_attention_2: true  # 2x faster, 50% less memory
-  attn_implementation: "flash_attention_2"
-  # Note: attention_dropout is automatically set to 0.0 in qlora_finetuner.py
+  # DISABLED on Windows - flash-attn package requires Linux for compilation
+  # Enable on RunPod/Linux for 2x faster training and 50% less memory
+  use_flash_attention_2: false
+  # attn_implementation: "flash_attention_2"  # Uncomment on Linux only
 
   # LoRA Configuration - Minimal
   lora_r: ${LORA_R:-8}
