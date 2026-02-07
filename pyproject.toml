@@ -6,37 +6,34 @@ readme = "README.md"
 requires-python = "==3.12.*"
 
 dependencies = [
-    # --- Core ML (CUDA 12.4) ---
-    "torch==2.5.1",
-    "torchvision==0.20.1",
-    "torchaudio==2.5.1",
-
+    # --- Core ML (CUDA 12.4) - Direct URLs to CUDA wheels ---
+    "torch @ https://download.pytorch.org/whl/cu124/torch-2.5.1%2Bcu124-cp312-cp312-win_amd64.whl ; sys_platform == 'win32'",
+    "torch @ https://download.pytorch.org/whl/cu124/torch-2.5.1%2Bcu124-cp312-cp312-linux_x86_64.whl ; sys_platform == 'linux'",
+    "torchvision @ https://download.pytorch.org/whl/cu124/torchvision-0.20.1%2Bcu124-cp312-cp312-win_amd64.whl ; sys_platform == 'win32'",
+    "torchvision @ https://download.pytorch.org/whl/cu124/torchvision-0.20.1%2Bcu124-cp312-cp312-linux_x86_64.whl ; sys_platform == 'linux'",
+    "torchaudio @ https://download.pytorch.org/whl/cu124/torchaudio-2.5.1%2Bcu124-cp312-cp312-win_amd64.whl ; sys_platform == 'win32'",
+    "torchaudio @ https://download.pytorch.org/whl/cu124/torchaudio-2.5.1%2Bcu124-cp312-cp312-linux_x86_64.whl ; sys_platform == 'linux'",
     # --- LLM & Optimization ---
-    "transformers>=4.51.0",
+    "transformers>=4.51.3,<4.58.0",
     "accelerate>=0.34.0",
     "peft>=0.7.1",
     "bitsandbytes>=0.44.1",
-
     # --- UNSLOTH ---
     "unsloth[cu124-torch251] @ git+https://github.com/unslothai/unsloth.git",
     "unsloth-zoo @ git+https://github.com/unslothai/unsloth-zoo.git",
-
     # --- TRITON FIX (Windows Support) ---
     "triton>=3.0.0; sys_platform == 'linux'",
     "triton @ https://github.com/woct0rdho/triton-windows/releases/download/v3.1.0-windows.post5/triton-3.1.0-cp312-cp312-win_amd64.whl ; sys_platform == 'win32'",
-
     # --- MLOps & Data ---
     "zenml[server]>=0.63.0",
     "mlflow>=2.15.0",
     "datasets>=2.20.0",
-    "sentence-transformers>=3.0.0",
-
+    "sentence-transformers>=3.3.0",
     # --- Database & Vector Store ---
     "psycopg2-binary>=2.9.9",
     "qdrant-client>=1.11.0",
     "sqlalchemy>=2.0.32",
     "alembic>=1.13.2",
-
     # --- Utils ---
     "pandas>=2.2.0",
     "numpy>=1.26.0",
@@ -46,7 +43,8 @@ dependencies = [
     "loguru>=0.7.2",
     "requests>=2.32.0",
     "huggingface-hub>=0.24.0",
-
+    "py7zr>=1.1.0",
+    "pyzipper>=0.3.6",
     # --- Code Analysis ---
     "tree-sitter>=0.22.0",
     "tree-sitter-python>=0.21.0",
@@ -75,6 +73,7 @@ packages = ["src"]
 [tool.uv]
 index-url = "https://download.pytorch.org/whl/cu124"
 extra-index-url = ["https://pypi.org/simple"]
+index-strategy = "unsafe-first-match"
 
 # Override conflicting xformers dependencies from unsloth with pre-built wheels
 override-dependencies = [
