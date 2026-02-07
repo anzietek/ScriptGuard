@@ -7,12 +7,16 @@ graceful fallback, and reranking.
 
 import os
 import yaml
+import hashlib
 import numpy as np
 from typing import List, Dict, Any, Optional
+from dotenv import load_dotenv, find_dotenv
 from qdrant_client import QdrantClient
 from qdrant_client.http import models
 from qdrant_client.http.exceptions import UnexpectedResponse
-import hashlib
+
+# Load environment variables - find_dotenv() searches parent dirs automatically
+load_dotenv(find_dotenv(usecwd=True))
 
 from scriptguard.utils.logger import logger
 from .embedding_service import EmbeddingService
@@ -68,13 +72,22 @@ class CodeSimilarityStore:
         self.enable_chunking = enable_chunking
         self.embedding_model = embedding_model
 
-        # Get API key from parameter or environment variable
-        self.api_key = api_key or os.getenv("QDRANT_API_KEY")
+        # Get API key - prioritize parameter, fallback to env var, normalize empty strings to None
+        self._api_key = api_key if api_key else os.getenv("QDRANT_API_KEY")
+        if not self._api_key:  # Handles None, empty string, whitespace
+            self._api_key = None
 
-        logger.info(f"Initializing Code Similarity Store: {self.host}:{self.port}")
+        logger.info(f"Initializing Code Similarity Store:")
+        logger.info(f"  Host: {self.host}")
+        logger.info(f"  Port: {self.port}")
+        logger.info(f"  Collection: {self.collection_name}")
         logger.info(f"  Chunking: {'enabled' if enable_chunking else 'disabled'}")
-        if self.api_key:
-            logger.info("  Using API key authentication")
+        if self._api_key:
+            logger.info(f"  API Key: ***{self._api_key[-8:]}")
+            logger.info("  Auth: Enabled")
+        else:
+            logger.warning("  Auth: Disabled (no API key)")
+            logger.warning("  Set QDRANT_API_KEY in .env if authentication is required")
 
         # Load configuration
         self.config = self._load_config(config_path)
@@ -98,10 +111,10 @@ class CodeSimilarityStore:
             logger.info(f"    - Min per label: {self.min_per_label}")
 
         # Initialize Qdrant client
-        if self.api_key:
+        if self._api_key:
             self.client = QdrantClient(
                 url=f"{'https' if use_https else 'http'}://{self.host}:{self.port}",
-                api_key=self.api_key
+                api_key=self._api_key
             )
         else:
             self.client = QdrantClient(host=self.host, port=self.port)
@@ -155,6 +168,11 @@ class CodeSimilarityStore:
 
         # Ensure collection exists
         self._ensure_collection()
+
+    @property
+    def api_key(self) -> Optional[str]:
+        """Get API key (for backward compatibility)."""
+        return self._api_key
 
     def _load_config(self, config_path: str) -> Dict[str, Any]:
         """

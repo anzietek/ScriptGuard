@@ -5,13 +5,18 @@ Improved vector store for CVEs, vulnerabilities, and malware patterns.
 
 import os
 import logging
-from scriptguard.utils.logger import logger
+import hashlib
 from typing import List, Dict, Any, Optional
+from dotenv import load_dotenv, find_dotenv
 from qdrant_client import QdrantClient
 from qdrant_client.http import models
 from qdrant_client.http.exceptions import UnexpectedResponse
 from sentence_transformers import SentenceTransformer
-import hashlib
+
+from scriptguard.utils.logger import logger
+
+# Load environment variables - find_dotenv() searches parent dirs automatically
+load_dotenv(find_dotenv(usecwd=True))
 
 class QdrantStore:
     """Enhanced Qdrant store for RAG (Retrieval-Augmented Generation)."""
@@ -41,18 +46,27 @@ class QdrantStore:
         self.collection_name = collection_name
         self.embedding_model_name = embedding_model
 
-        # Get API key from parameter or environment variable
-        self.api_key = api_key or os.getenv("QDRANT_API_KEY")
+        # Get API key - prioritize parameter, fallback to env var, normalize empty strings to None
+        self._api_key = api_key if api_key else os.getenv("QDRANT_API_KEY")
+        if not self._api_key:  # Handles None, empty string, whitespace
+            self._api_key = None
 
-        logger.info(f"Initializing Qdrant client: {self.host}:{self.port}")
-        if self.api_key:
-            logger.info("Using API key authentication")
+        logger.info(f"Initializing Qdrant client:")
+        logger.info(f"  Host: {self.host}")
+        logger.info(f"  Port: {self.port}")
+        logger.info(f"  Collection: {self.collection_name}")
+        if self._api_key:
+            logger.info(f"  API Key: ***{self._api_key[-8:]}")
+            logger.info("  Auth: Enabled")
+        else:
+            logger.warning("  Auth: Disabled (no API key)")
+            logger.warning("  Set QDRANT_API_KEY in .env if authentication is required")
 
         # Initialize client
-        if self.api_key:
+        if self._api_key:
             self.client = QdrantClient(
                 url=f"{'https' if use_https else 'http'}://{self.host}:{self.port}",
-                api_key=self.api_key
+                api_key=self._api_key
             )
         else:
             self.client = QdrantClient(host=self.host, port=self.port)
@@ -64,6 +78,11 @@ class QdrantStore:
 
         # Ensure collection exists
         self._ensure_collection()
+
+    @property
+    def api_key(self) -> Optional[str]:
+        """Get API key (for backward compatibility)."""
+        return self._api_key
 
     def _ensure_collection(self):
         """Ensure collection exists with proper configuration."""

@@ -55,7 +55,7 @@ def augment_with_qdrant_patterns(
                 port=qdrant_config.get("port", 6333),
                 collection_name=qdrant_config.get("collection_name", "malware_knowledge"),
                 embedding_model=qdrant_config.get("embedding_model", "all-MiniLM-L6-v2"),
-                api_key=qdrant_config.get("api_key") if qdrant_config.get("api_key") else None,
+                api_key=qdrant_config.get("api_key"),  # Pass directly, QdrantStore will handle env vars
                 use_https=qdrant_config.get("use_https", False)
             )
 

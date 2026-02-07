@@ -2,17 +2,20 @@ import os
 import sys
 import signal
 import yaml
-from dotenv import load_dotenv
+from dotenv import load_dotenv, find_dotenv
 from scriptguard.utils.logger import logger
 
 # Disable transformers lazy loading (fixes Python 3.13 Ctrl+C issues)
 os.environ["TRANSFORMERS_NO_ADVISORY_WARNINGS"] = "1"
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
-load_dotenv()  # Load default .env
+# Load .env - find_dotenv() automatically searches parent directories
+load_dotenv(find_dotenv(usecwd=True))
+
 # Also load .env.dev if it exists (for development with more keys)
-if os.path.exists(".env.dev"):
-    load_dotenv(".env.dev", override=True)
+env_dev = find_dotenv(".env.dev", usecwd=True)
+if env_dev:
+    load_dotenv(env_dev, override=True)
 
 # Fix ZenML Windows path handling (monkey-patch)
 if sys.platform == "win32":
@@ -119,7 +122,7 @@ def initialize_qdrant(config: dict) -> bool:
             port=qdrant_config.get("port", 6333),
             collection_name=qdrant_config.get("collection_name", "malware_knowledge"),
             embedding_model=qdrant_config.get("embedding_model", "all-MiniLM-L6-v2"),
-            api_key=qdrant_config.get("api_key") if qdrant_config.get("api_key") else None,
+            api_key=qdrant_config.get("api_key"),  # Pass directly, QdrantStore will handle env vars
             use_https=qdrant_config.get("use_https", False)
         )
 
