@@ -3,10 +3,11 @@
 # Install with: pip install -r requirements.txt
 
 # Core ML/AI
-torch>=2.5.0
-torchvision>=0.20.0
-torchaudio>=2.5.0
-transformers>=4.36.0
+torch==2.5.1
+torchvision==0.20.1
+torchaudio==2.5.1
+triton==3.1.0
+transformers>=4.54.1
 sentence-transformers>=2.2.0
 datasets>=2.14.0
 peft>=0.7.0
