@@ -346,34 +346,37 @@ training:
   max_memory_mb: 22000
   gradient_checkpointing: true
 
-  # Flash Attention 2 (2x faster, 50% less memory on Ampere/Ada)
-  # Note: attention_dropout is automatically disabled when using Flash Attention 2
-  # to avoid "flex_attention does not support dropout" error
+  # Flash Attention 2
   use_flash_attention_2: true
   attn_implementation: "flash_attention_2"
 
-  # Disk Space Management (Critical for RunPod)
+  # SPEED & PADDING OPTIMIZATION
+  # Sorts samples by length to minimize padding overhead
+  group_by_length: true
+
+  # Disk Space Management (RunPod Safe)
   save_total_limit: 2
   cleanup_old_checkpoints: true
 
-  # RunPod Preemption Safety
-  save_steps: 50
+  # Checkpoints
+  save_steps: 100                 # Increased to save I/O
   save_on_each_node: true
   resume_from_checkpoint: ${RESUME_CHECKPOINT:-latest}
   load_best_model_at_end: true
 
-  # Auto Batch Size Detection
-  auto_find_batch_size: true
-  per_device_train_batch_size: ${BATCH_SIZE:-16}
-  per_device_eval_batch_size: ${EVAL_BATCH_SIZE:-8}
+  # BATCHING STRATEGY (Fixed for stability)
+  auto_find_batch_size: false     # Disabled to ensure accumulation works as intended
+  per_device_train_batch_size: 8  # Reduced to fit 4096 context
+  per_device_eval_batch_size: 8
+  gradient_accumulation_steps: 4  # 8 * 4 = 32 Effective Batch Size
 
   # Default on unclear prediction
   eval_default_on_unclear: "unknown"
 
   # QLoRA Configuration
   use_qlora: true
-  lora_r: 32
-  lora_alpha: 64
+  lora_r: 16      # Optimized for 3B
+  lora_alpha: 32  # Standard 2x ratio
   lora_dropout: 0.05
   target_modules:
     - "q_proj"
@@ -384,14 +387,10 @@ training:
     - "up_proj"
     - "down_proj"
 
-  # Training Hyperparameters
-  batch_size: 16
-  gradient_accumulation_steps: 2
-
   # Dataloader Configuration
-  dataloader_num_workers: 4
+  dataloader_num_workers: 2       # Safe for RunPod vCPU
   dataloader_pin_memory: true
-  dataloader_prefetch_factor: 2
+  dataloader_prefetch_factor: 4
   dataloader_persistent_workers: true
 
   # Training Duration
@@ -404,8 +403,8 @@ training:
   warmup_steps: 100
   lr_scheduler_type: "cosine"
 
-  # Context Length
-  max_seq_length: 2048
+  # Context Length (Quality Boost)
+  max_seq_length: 4096
 
   # Mixed Precision Training
   fp16: false
@@ -416,13 +415,13 @@ training:
   optim: "adamw_8bit"
 
   # Tokenization
-  tokenizer_max_length: 2048
-  tokenizer_padding: "max_length"
+  tokenizer_max_length: 4096
+  tokenizer_padding: "longest"    # Dynamic padding (faster)
   tokenizer_truncation: true
 
   # Evaluation Strategy
   evaluation_strategy: "steps"
-  eval_steps: 50
+  eval_steps: 100
   logging_steps: 10
   logging_first_step: true
   test_split_size: 0.1
@@ -435,8 +434,8 @@ training:
   greater_is_better: false
 
   # Model Evaluation
-  eval_max_new_tokens: 3
-  eval_temperature: 0.0
+  eval_max_new_tokens: 32
+  eval_temperature: 0.2
   eval_batch_size: 8
   eval_max_code_length: 500
 
@@ -446,11 +445,11 @@ training:
   # Seed for reproducibility
   seed: 42
 
-  # Report to wandb (Replaces Monitoring section)
+  # Report to wandb
   report_to: ["wandb"]
   run_name: ${WANDB_RUN_NAME:-scriptguard-training}
 
-  # Disable tqdm if running in non-interactive mode
+  # Disable tqdm
   disable_tqdm: false
 
 # ============================================================================
