@@ -3,7 +3,7 @@ name = "scriptguard"
 version = "0.1.0"
 description = "ML-based Malicious Script Detection Pipeline"
 readme = "README.md"
-requires-python = ">=3.10,<3.13"
+requires-python = "==3.12.*"
 
 dependencies = [
     # --- Core ML (CUDA 12.4) - Direct URLs to CUDA wheels ---
@@ -47,6 +47,7 @@ dependencies = [
     "huggingface-hub>=0.24.0",
     "py7zr>=1.1.0",
     "pyzipper>=0.3.6",
+    "wandb>=0.24.1",
     # --- Code Analysis ---
     "tree-sitter>=0.22.0",
     "tree-sitter-python>=0.21.0",

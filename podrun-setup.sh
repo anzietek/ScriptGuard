@@ -1,15 +1,15 @@
 #!/bin/bash
-"""
-ScriptGuard Podrun Setup Script
-This script prepares the environment for running training pipelines on Podrun with ZenML.
-It assumes Postgres and Qdrant are external services.
-It sets up a local ZenML server for orchestration/dashboard.
-
-Usage:
-  ./podrun-setup.sh         - Setup and ask to run training
-  ./podrun-setup.sh -y      - Setup and auto-start training (non-interactive)
-  ./podrun-setup.sh --check - Check environment only
-"""
+#
+# ScriptGuard Podrun Setup Script
+# This script prepares the environment for running training pipelines on Podrun with ZenML.
+# It assumes Postgres and Qdrant are external services.
+# It sets up a local ZenML server for orchestration/dashboard.
+#
+# Usage:
+#   ./podrun-setup.sh         - Setup and ask to run training
+#   ./podrun-setup.sh -y      - Setup and auto-start training (non-interactive)
+#   ./podrun-setup.sh --check - Check environment only
+#
 
 set -e  # Exit on error
 
@@ -54,20 +54,30 @@ print_error() {
     echo -e "${RED}[ERROR]${NC} $1"
 }
 
+# Load environment variables from .env safely
+load_env() {
+    if [ -f .env ]; then
+        set -a
+        source .env
+        set +a
+    fi
+}
+
 # Check Python version
 check_python() {
     print_info "Checking Python version..."
     if ! command -v python3 &> /dev/null; then
-        print_error "Python3 is not installed. Please install Python 3.12 or 3.13."
+        print_error "Python3 is not installed. Please install Python 3.10-3.12."
         exit 1
     fi
 
     PYTHON_VERSION=$(python3 --version | cut -d' ' -f2)
     print_success "Python ${PYTHON_VERSION} found"
 
-    # Check if version is compatible (3.12 or 3.13)
-    if [[ ! $PYTHON_VERSION =~ ^3\.(10|11|12|13) ]]; then
-        print_warning "Python version ${PYTHON_VERSION} detected. Recommended: 3.10+"
+    # Must match pyproject.toml: requires-python = ">=3.10,<3.13"
+    if [[ ! $PYTHON_VERSION =~ ^3\.(10|11|12)\. ]]; then
+        print_error "Python ${PYTHON_VERSION} is not compatible. Required: >=3.10,<3.13 (per pyproject.toml)"
+        exit 1
     fi
 }
 
@@ -75,6 +85,10 @@ check_python() {
 check_uv() {
     print_info "Checking for uv package installer..."
     if ! command -v uv &> /dev/null; then
+        if [ $CHECK_ONLY -eq 1 ]; then
+            print_error "uv is not installed."
+            exit 1
+        fi
         print_warning "uv is not installed. Installing uv..."
         curl -LsSf https://astral.sh/uv/install.sh | sh
         export PATH="$HOME/.cargo/bin:$PATH"
@@ -100,6 +114,10 @@ setup_env() {
     print_info "Setting up environment configuration..."
 
     if [ ! -f .env ]; then
+        if [ $CHECK_ONLY -eq 1 ]; then
+            print_error ".env file not found!"
+            exit 1
+        fi
         if [ -f .env.example ]; then
             print_info "Creating .env from .env.example..."
             cp .env.example .env
@@ -118,31 +136,45 @@ setup_env() {
 install_dependencies() {
     print_info "Installing dependencies with uv..."
 
-    # Sync dependencies from pyproject.toml
+    # uv sync installs everything from pyproject.toml including
+    # the correct PyTorch version (2.6.0+cu124) with platform-specific wheels
     uv sync
-
-    # Install PyTorch with CUDA support if available
-    if command -v nvidia-smi &> /dev/null; then
-        print_info "Installing PyTorch with CUDA 12.4 support..."
-        uv pip install torch==2.5.0 torchvision==0.20.0 torchaudio==2.5.0 --index-url https://download.pytorch.org/whl/cu124
-    else
-        print_info "Installing PyTorch (CPU version)..."
-        uv pip install torch==2.5.0 torchvision==0.20.0 torchaudio==2.5.0
-    fi
 
     print_success "Dependencies installed successfully"
 }
 
-# Verify ZenML installation
-verify_zenml() {
-    print_info "Verifying ZenML installation..."
+# Verify critical dependencies
+verify_dependencies() {
+    print_info "Verifying critical dependencies..."
 
+    # Verify ZenML
     if uv run zenml version &> /dev/null; then
         ZENML_VERSION=$(uv run zenml version)
         print_success "ZenML installed: ${ZENML_VERSION}"
     else
         print_error "ZenML installation failed!"
         exit 1
+    fi
+
+    # Verify unsloth (required by src/main.py)
+    if uv run python -c "import unsloth; print(unsloth.__version__)" &> /dev/null; then
+        UNSLOTH_VERSION=$(uv run python -c "import unsloth; print(unsloth.__version__)")
+        print_success "Unsloth installed: ${UNSLOTH_VERSION}"
+    else
+        print_warning "Unsloth import failed. Training may not work with optimizations."
+    fi
+
+    # Verify PyTorch and CUDA
+    TORCH_INFO=$(uv run python -c "import torch; print(f'{torch.__version__} (CUDA: {torch.cuda.is_available()})')" 2>/dev/null || echo "not available")
+    print_info "PyTorch: ${TORCH_INFO}"
+
+    # Verify flash-attn on Linux (required by config.yaml: use_flash_attention_2: true)
+    if [ "$(uname)" = "Linux" ]; then
+        if uv run python -c "import flash_attn" &> /dev/null; then
+            print_success "Flash Attention 2 available"
+        else
+            print_warning "Flash Attention 2 not available. Config has use_flash_attention_2: true - training may fall back to standard attention."
+        fi
     fi
 }
 
@@ -159,19 +191,21 @@ init_zenml() {
     fi
 
     # Start ZenML Server locally (background)
-    # We bind to 0.0.0.0 to allow external access via RunPod proxy
+    # Bind to 127.0.0.1 by default; use RunPod port forwarding for external access
     print_info "Starting local ZenML Server..."
 
-    if pgrep -f "zenml.services.zen_server" > /dev/null; then
+    if pgrep -f "zenml" > /dev/null 2>&1; then
         print_warning "ZenML Server is already running."
     else
-        # Using nohup or background flag if supported, here we use zenml up non-blocking
-        # Note: --blocking=False might not be supported in all versions, falling back to background process
-        nohup uv run zenml up --host 0.0.0.0 --port 8237 > logs/zenml_server.log 2>&1 &
+        nohup uv run zenml up --port 8237 > logs/zenml_server.log 2>&1 &
 
         # Give it a moment to start
         sleep 5
-        print_success "ZenML Server started on port 8237 (check logs/zenml_server.log)"
+        if pgrep -f "zenml" > /dev/null 2>&1; then
+            print_success "ZenML Server started on port 8237 (check logs/zenml_server.log)"
+        else
+            print_warning "ZenML Server may have failed to start. Check logs/zenml_server.log"
+        fi
     fi
 }
 
@@ -179,30 +213,32 @@ init_zenml() {
 check_services() {
     print_info "Checking configuration for external services..."
 
-    # Load environment variables just for this check
-    if [ -f .env ]; then
-        # Export vars ignoring comments
-        export $(grep -v '^#' .env | xargs)
+    load_env
+
+    # Check Qdrant using QDRANT_HOST/QDRANT_PORT (matching .env.example)
+    QDRANT_HOST="${QDRANT_HOST:-localhost}"
+    QDRANT_PORT="${QDRANT_PORT:-6333}"
+    QDRANT_ENDPOINT="http://${QDRANT_HOST}:${QDRANT_PORT}"
+
+    print_info "Checking Qdrant at ${QDRANT_ENDPOINT}..."
+    if curl --max-time 5 -s "${QDRANT_ENDPOINT}/healthz" > /dev/null 2>&1; then
+        print_success "Qdrant is reachable at ${QDRANT_ENDPOINT}"
+    else
+        print_warning "Could not reach Qdrant at ${QDRANT_ENDPOINT}. Check that Qdrant is running."
     fi
 
-    # Check Qdrant URL
-    if [ -n "$QDRANT_URL" ]; then
-        print_info "External Qdrant URL found: ${QDRANT_URL}"
-        # Simple connectivity check
-        if curl --max-time 5 -s "${QDRANT_URL}/health" > /dev/null || curl --max-time 5 -s "${QDRANT_URL}" > /dev/null; then
-             print_success "Qdrant endpoint is reachable."
-        else
-             print_warning "Could not reach Qdrant at ${QDRANT_URL}. Check your VPN/Firewall settings."
-        fi
+    # Check PostgreSQL
+    if [ -n "$POSTGRES_HOST" ]; then
+        print_success "PostgreSQL configured: ${POSTGRES_HOST}:${POSTGRES_PORT:-5432}/${POSTGRES_DB:-scriptguard}"
     else
-        print_warning "QDRANT_URL is not set in .env"
+        print_warning "POSTGRES_HOST is not set in .env"
     fi
 
-    # Check Database URL
-    if [ -n "$DATABASE_URL" ]; then
-        print_success "PostgreSQL DATABASE_URL is configured."
+    # Check WandB (config.yaml reports to wandb)
+    if [ -n "$WANDB_API_KEY" ]; then
+        print_success "WandB API key configured (project: ${WANDB_PROJECT:-scriptguard})"
     else
-        print_warning "DATABASE_URL is not set in .env"
+        print_warning "WANDB_API_KEY is not set in .env. config.yaml has report_to: [wandb] - training will fail without it."
     fi
 }
 
@@ -233,6 +269,11 @@ verify_config() {
 
 # Display environment info
 display_info() {
+    load_env
+
+    QDRANT_HOST="${QDRANT_HOST:-localhost}"
+    QDRANT_PORT="${QDRANT_PORT:-6333}"
+
     echo ""
     echo "========================================================"
     echo "  ScriptGuard Podrun Environment Ready!"
@@ -241,15 +282,18 @@ display_info() {
     echo "Environment:"
     echo "  Python:      $(python3 --version)"
     echo "  uv:          $(uv --version)"
-    echo "  ZenML:       $(uv run zenml version)"
+    echo "  ZenML:       $(uv run zenml version 2>/dev/null || echo 'N/A')"
     echo ""
     echo "Services:"
-    echo "  ZenML Server: http://localhost:8237 (Exposed via RunPod port 8237)"
-    echo "  Qdrant (Ext): ${QDRANT_URL:-Not Set}"
-    echo "  Postgres:     ${DATABASE_URL:-Not Set}"
+    echo "  ZenML Server: http://localhost:8237"
+    echo "  Qdrant:       http://${QDRANT_HOST}:${QDRANT_PORT}"
+    echo "  Postgres:     ${POSTGRES_HOST:-Not Set}:${POSTGRES_PORT:-5432}"
+    echo "  WandB:        ${WANDB_PROJECT:-Not Set}"
     echo ""
     echo "Logs:"
     echo "  ZenML Logs:   logs/zenml_server.log"
+    echo ""
+    echo "Run training:   uv run python src/main.py"
     echo ""
     echo "========================================================"
     echo ""
@@ -259,13 +303,9 @@ display_info() {
 run_training() {
     print_info "Starting training pipeline..."
 
-    # Load environment variables
-    if [ -f .env ]; then
-        export $(grep -v '^#' .env | xargs)
-    fi
+    load_env
 
     print_info "Running training with ZenML..."
-    # Assuming src/main.py is the entrypoint
     uv run python src/main.py
 
     print_success "Training pipeline completed!"
@@ -283,6 +323,7 @@ main() {
     echo "========================================================"
     echo ""
 
+    # Phase 1: Checks (always run)
     check_python
     check_uv
     check_cuda
@@ -290,19 +331,22 @@ main() {
     create_directories
     verify_config
 
-    install_dependencies
-    verify_zenml
-    check_services
-    init_zenml # Starts local ZenML server
-
-    display_info
-
-    if [ $CHECK_ONLY -eq 1 ]; then
+    # Phase 2: Installation (skip in check mode)
+    if [ $CHECK_ONLY -eq 0 ]; then
+        install_dependencies
+        verify_dependencies
+        check_services
+        init_zenml
+    else
+        # In check mode, only verify services connectivity
+        check_services
         print_success "Environment check complete!"
         exit 0
     fi
 
-    # Handle automatic approval for RunPod non-interactive execution
+    display_info
+
+    # Phase 3: Training
     if [ $AUTO_APPROVE -eq 1 ]; then
         print_info "Auto-approve flag detected (-y). Starting training..."
         run_training
