@@ -3,7 +3,7 @@ import os
 
 os.environ['POSTGRES_PASSWORD'] = 'scriptguard_secure_password'
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'src'))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../../src'))
 
 from scriptguard.database import DatasetManager
 

@@ -5,7 +5,7 @@ This test demonstrates the full flow without requiring actual Qdrant instance.
 
 import sys
 import os
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../../..', 'src'))
 
 import tempfile
 from scriptguard.utils.file_validator import validate_python_file

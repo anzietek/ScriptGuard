@@ -125,7 +125,7 @@ def test_constrained_generation():
     if not os.path.exists(adapter_path):
         # Try to find latest checkpoint
         from pathlib import Path
-        checkpoints_dir = Path("models/scriptguard-model")
+        checkpoints_dir = Path("../../models/scriptguard-model")
         checkpoints = list(checkpoints_dir.glob("checkpoint-*"))
         if checkpoints:
             adapter_path = str(max(checkpoints, key=lambda p: int(p.name.split("-")[1])))

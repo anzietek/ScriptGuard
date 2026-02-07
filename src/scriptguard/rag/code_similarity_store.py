@@ -68,8 +68,13 @@ class CodeSimilarityStore:
         self.enable_chunking = enable_chunking
         self.embedding_model = embedding_model
 
+        # Get API key from parameter or environment variable
+        self.api_key = api_key or os.getenv("QDRANT_API_KEY")
+
         logger.info(f"Initializing Code Similarity Store: {self.host}:{self.port}")
         logger.info(f"  Chunking: {'enabled' if enable_chunking else 'disabled'}")
+        if self.api_key:
+            logger.info("  Using API key authentication")
 
         # Load configuration
         self.config = self._load_config(config_path)
@@ -93,10 +98,10 @@ class CodeSimilarityStore:
             logger.info(f"    - Min per label: {self.min_per_label}")
 
         # Initialize Qdrant client
-        if api_key:
+        if self.api_key:
             self.client = QdrantClient(
                 url=f"{'https' if use_https else 'http'}://{self.host}:{self.port}",
-                api_key=api_key
+                api_key=self.api_key
             )
         else:
             self.client = QdrantClient(host=self.host, port=self.port)
@@ -152,13 +157,36 @@ class CodeSimilarityStore:
         self._ensure_collection()
 
     def _load_config(self, config_path: str) -> Dict[str, Any]:
-        """Load configuration from YAML file."""
+        """
+        Load configuration from YAML file and substitute environment variables.
+
+        Supports syntax: ${ENV_VAR:-default_value} or ${ENV_VAR}
+        """
         try:
             if os.path.exists(config_path):
                 with open(config_path, 'r') as f:
                     config = yaml.safe_load(f)
-                    logger.debug(f"Configuration loaded from {config_path}")
-                    return config
+
+                def substitute_env_vars(obj):
+                    """Recursively substitute environment variables in config."""
+                    if isinstance(obj, dict):
+                        return {k: substitute_env_vars(v) for k, v in obj.items()}
+                    elif isinstance(obj, list):
+                        return [substitute_env_vars(item) for item in obj]
+                    elif isinstance(obj, str) and obj.startswith("${") and obj.endswith("}"):
+                        env_expr = obj[2:-1]
+                        if ":-" in env_expr:
+                            env_var, default = env_expr.split(":-", 1)
+                            return os.getenv(env_var, default)
+                        else:
+                            env_var = env_expr
+                            return os.getenv(env_var, "")
+                    else:
+                        return obj
+
+                config = substitute_env_vars(config)
+                logger.debug(f"Configuration loaded from {config_path}")
+                return config
             else:
                 logger.warning(f"Config file not found: {config_path}. Using defaults.")
                 return {}

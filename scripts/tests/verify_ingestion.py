@@ -5,7 +5,7 @@ Tests actual data collection from all sources with NO MOCKS.
 
 import sys
 import os
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'src'))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../../src'))
 
 
 from scriptguard.data_sources.malwarebazaar_api import MalwareBazaarDataSource

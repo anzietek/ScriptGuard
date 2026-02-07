@@ -41,13 +41,18 @@ class QdrantStore:
         self.collection_name = collection_name
         self.embedding_model_name = embedding_model
 
+        # Get API key from parameter or environment variable
+        self.api_key = api_key or os.getenv("QDRANT_API_KEY")
+
         logger.info(f"Initializing Qdrant client: {self.host}:{self.port}")
+        if self.api_key:
+            logger.info("Using API key authentication")
 
         # Initialize client
-        if api_key:
+        if self.api_key:
             self.client = QdrantClient(
                 url=f"{'https' if use_https else 'http'}://{self.host}:{self.port}",
-                api_key=api_key
+                api_key=self.api_key
             )
         else:
             self.client = QdrantClient(host=self.host, port=self.port)

@@ -141,12 +141,12 @@ database:
 
 # Qdrant Configuration
 qdrant:
-  host: "localhost"  # or use environment variable QDRANT_HOST
-  port: 6333  # or use environment variable QDRANT_PORT
+  host: ${QDRANT_HOST:-localhost}  # Use QDRANT_HOST env variable, default: localhost
+  port: ${QDRANT_PORT:-6333}  # Use QDRANT_PORT env variable, default: 6333
   collection_name: "malware_knowledge"
   embedding_model: "all-MiniLM-L6-v2"
-  api_key: ""  # or use environment variable QDRANT_API_KEY
-  use_https: false
+  api_key: ${QDRANT_API_KEY:-}  # Use QDRANT_API_KEY env variable (empty if not set)
+  use_https: false  # Set to true for Qdrant Cloud or HTTPS connections
 
 # Code Embedding Configuration (for Few-Shot RAG)
 code_embedding:

@@ -27,14 +27,38 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 # NOW import scriptguard modules
 from scriptguard.data_sources.cve_feeds import CVEFeedSource
 from scriptguard.rag.qdrant_store import QdrantStore
+import os
 import yaml
 
 
 def load_config():
-    """Load configuration from config.yaml"""
+    """
+    Load configuration from config.yaml and substitute environment variables.
+
+    Supports syntax: ${ENV_VAR:-default_value} or ${ENV_VAR}
+    """
     config_path = Path(__file__).parent.parent / "config.yaml"
     with open(config_path) as f:
-        return yaml.safe_load(f)
+        config = yaml.safe_load(f)
+
+    def substitute_env_vars(obj):
+        """Recursively substitute environment variables in config."""
+        if isinstance(obj, dict):
+            return {k: substitute_env_vars(v) for k, v in obj.items()}
+        elif isinstance(obj, list):
+            return [substitute_env_vars(item) for item in obj]
+        elif isinstance(obj, str) and obj.startswith("${") and obj.endswith("}"):
+            env_expr = obj[2:-1]
+            if ":-" in env_expr:
+                env_var, default = env_expr.split(":-", 1)
+                return os.getenv(env_var, default)
+            else:
+                env_var = env_expr
+                return os.getenv(env_var, "")
+        else:
+            return obj
+
+    return substitute_env_vars(config)
 
 
 def main():

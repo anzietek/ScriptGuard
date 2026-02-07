@@ -42,16 +42,33 @@ from scriptguard.pipelines.training_pipeline import (
 
 
 def load_config(config_path: str = "config.yaml") -> dict:
-    """Load configuration from YAML file."""
+    """
+    Load configuration from YAML file and substitute environment variables.
+
+    Supports syntax: ${ENV_VAR:-default_value} or ${ENV_VAR}
+    """
     with open(config_path, 'r') as f:
         config = yaml.safe_load(f)
 
-    # Substitute environment variables
-    for key, value in config.get("api_keys", {}).items():
-        if isinstance(value, str) and value.startswith("${") and value.endswith("}"):
-            env_var = value[2:-1]
-            config["api_keys"][key] = os.getenv(env_var)
+    def substitute_env_vars(obj):
+        """Recursively substitute environment variables in config."""
+        if isinstance(obj, dict):
+            return {k: substitute_env_vars(v) for k, v in obj.items()}
+        elif isinstance(obj, list):
+            return [substitute_env_vars(item) for item in obj]
+        elif isinstance(obj, str) and obj.startswith("${") and obj.endswith("}"):
+            # Parse ${ENV_VAR:-default}
+            env_expr = obj[2:-1]
+            if ":-" in env_expr:
+                env_var, default = env_expr.split(":-", 1)
+                return os.getenv(env_var, default)
+            else:
+                env_var = env_expr
+                return os.getenv(env_var, "")
+        else:
+            return obj
 
+    config = substitute_env_vars(config)
     return config
 
 

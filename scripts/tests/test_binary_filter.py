@@ -1,6 +1,6 @@
 import sys
 import os
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'src'))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../../src'))
 
 from scriptguard.utils.archive_extractor import is_binary_content, BINARY_EXTENSIONS, SCRIPT_EXTENSIONS
 
