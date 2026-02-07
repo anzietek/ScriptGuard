@@ -347,7 +347,9 @@ def evaluate_model(
 
         # Tokenize
         inputs = tokenizer(prompt, return_tensors="pt", truncation=True, max_length=512)
-        inputs = {k: v.to(model.device) for k, v in inputs.items()}
+        # CRITICAL: Convert to model's device AND dtype to prevent dtype mismatch
+        inputs = {k: v.to(device=model.device, dtype=model.dtype if v.dtype.is_floating_point else v.dtype)
+                  for k, v in inputs.items()}
 
         # STRICT CONSTRAINED GENERATION: Force model to only output BENIGN or MALICIOUS
         # Get full token sequences for both words (with leading space)
