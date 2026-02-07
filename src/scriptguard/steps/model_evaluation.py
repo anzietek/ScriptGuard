@@ -270,6 +270,13 @@ def evaluate_model(
     # Load LoRA adapter - must be after base model is loaded and placed on device
     logger.info(f"Loading PEFT adapter from {adapter_path}")
     model = PeftModel.from_pretrained(base_model, adapter_path)
+
+    # CRITICAL: Force entire model (base + adapter) to use consistent dtype
+    # This prevents "query.dtype: float key.dtype: BFloat16" errors
+    if eval_dtype != torch.float32:
+        logger.info(f"Converting entire model (including PEFT adapter) to {eval_dtype}")
+        model = model.to(dtype=eval_dtype)
+
     model.eval()
 
     # Prepare predictions
