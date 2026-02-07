@@ -117,12 +117,17 @@ def augment_with_qdrant_patterns(
             from scriptguard.rag.code_similarity_store import CodeSimilarityStore
             from scriptguard.database.dataset_manager import DatasetManager
 
+            # Get config path from environment or use passed config value
+            import os
+            default_config_path = os.getenv("CONFIG_PATH", "config.yaml")
+            config_path = config.get("config_path", default_config_path)
+
             code_store = CodeSimilarityStore(
                 host=qdrant_config.get("host", "localhost"),
                 port=qdrant_config.get("port", 6333),
                 collection_name="code_samples",  # Fixed collection name
                 enable_chunking=False,  # No chunking for augmentation
-                config_path=config.get("config_path", "config.yaml")
+                config_path=config_path
             )
 
             # Get collection info

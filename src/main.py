@@ -151,12 +151,15 @@ def initialize_qdrant(config: dict) -> bool:
 
 def main():
     """Advanced training pipeline with config.yaml."""
-    # Load configuration
+    # Load configuration from environment variable or default
+    config_path = os.getenv("CONFIG_PATH", "config.yaml")
+    zenml_config_path = os.getenv("ZENML_CONFIG_PATH", "zenml_config.yaml")
+
     try:
-        config = load_config("config.yaml")
-        logger.info("Configuration loaded successfully")
+        config = load_config(config_path)
+        logger.info(f"Configuration loaded successfully from: {config_path}")
     except FileNotFoundError:
-        logger.error("config.yaml not found. Please create it from config.yaml.example")
+        logger.error(f"{config_path} not found. Please create it or set CONFIG_PATH environment variable")
         return
     except Exception as e:
         logger.error(f"Failed to load configuration: {e}")
@@ -178,7 +181,7 @@ def main():
     # Run advanced pipeline with ZenML config for caching control
     try:
         run = advanced_training_pipeline.with_options(
-            config_path="zenml_config.yaml"  # Load cache settings from file
+            config_path=zenml_config_path  # Load cache settings from env or default
         )(
             config=config,
             model_id=model_id

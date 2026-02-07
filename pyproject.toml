@@ -84,3 +84,8 @@ override-dependencies = [
     "xformers @ https://download.pytorch.org/whl/cu124/xformers-0.0.29.post3-cp312-cp312-manylinux_2_28_x86_64.whl ; sys_platform == 'linux'",
     "torchao==0.13.0"
 ]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.0.2",
+]

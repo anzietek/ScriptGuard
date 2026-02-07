@@ -1,14 +1,14 @@
-# ScriptGuard TEST Configuration - MINIMAL DATA for quick testing
-# Configuration for data sources, training, and database
+# ScriptGuard FAST TEST Configuration - ULTRA-MINIMAL for rapid pipeline verification
+# Optimized for fastest possible execution to verify pipeline functionality
 
 # Pipeline Configuration
 pipeline:
-  enable_cache: false  # Set to true to use cached results from previous runs
-  cache_steps:         # Individual step cache control (overrides enable_cache if specified)
-    advanced_data_ingestion: false  # Always fetch fresh data
-    validate_samples: true           # Can cache validation
-    augment_malicious_samples: true  # Can cache augmentation
-    train_model: false               # Always train fresh model
+  enable_cache: false  # Disabled - always run fresh
+  cache_steps:
+    advanced_data_ingestion: false
+    validate_samples: false
+    augment_malicious_samples: false
+    train_model: false
 
 # API Keys (loaded from environment variables)
 api_keys:
@@ -17,109 +17,111 @@ api_keys:
   malwarebazaar_api_key: ${MALWAREBAZAAR_API_KEY}
   huggingface_token: ${HUGGINGFACE_TOKEN}
 
-# Data Sources Configuration - MINIMAL for testing
+# Data Sources Configuration - ULTRA-MINIMAL
 data_sources:
   github:
     enabled: true
     fetch_malicious: true
     fetch_benign: true
     malicious_keywords:
-      - "reverse-shell python"  # Only 1 keyword
+      - ${MALICIOUS_KEYWORD:-reverse-shell python}
     benign_repos:
-      - "pallets/flask"  # Only 1 repo
-    max_samples_per_keyword: 5  # MINIMAL - just 5 samples
-    max_files_per_repo: 5       # MINIMAL - just 5 files
+      - ${BENIGN_REPO:-pallets/flask}
+    max_samples_per_keyword: ${MAX_SAMPLES_PER_KEYWORD:-2}
+    max_files_per_repo: ${MAX_FILES_PER_REPO:-2}
 
   malwarebazaar:
-    enabled: false  # DISABLED for quick test
-    tags:
-      - "python"
-    max_samples: 10
+    enabled: false
+    tags: []
+    max_samples: 0
 
   huggingface:
-    enabled: false  # DISABLED
+    enabled: false
+    datasets: []
 
   cve_feeds:
-    enabled: false  # DISABLED for quick test
+    enabled: false
+    feeds: []
 
-  # Additional HuggingFace Datasets
   additional_hf:
-    enabled: false  # DISABLED for quick test
+    enabled: false
+    datasets: []
 
-# Validation Configuration
+# Validation Configuration - Relaxed for speed
 validation:
-  validate_syntax: true
-  min_length: 20          # Reduced from 50
-  max_length: 50000
-  min_code_lines: 3       # Reduced from 5
-  max_comment_ratio: 0.7
+  validate_syntax: false
+  min_length: ${MIN_LENGTH:-10}
+  max_length: ${MAX_LENGTH:-100000}
+  min_code_lines: ${MIN_CODE_LINES:-1}
+  max_comment_ratio: ${MAX_COMMENT_RATIO:-0.95}
 
-# Augmentation Configuration
+# Augmentation Configuration - MINIMAL
 augmentation:
-  enabled: true
-  variants_per_sample: 1  # Reduced from 2
-  balance_dataset: true
-  target_balance_ratio: 1.0
-  balance_method: "undersample"
-  use_qdrant_patterns: false  # DISABLED for quick test
+  enabled: false
+  variants_per_sample: ${VARIANTS_PER_SAMPLE:-0}
+  balance_dataset: false
+  target_balance_ratio: ${TARGET_BALANCE_RATIO:-1.0}
+  balance_method: ${BALANCE_METHOD:-undersample}
+  use_qdrant_patterns: false
 
 # Qdrant Configuration
 qdrant:
-  host: "localhost"
-  port: 6333
-  collection_name: "malware_knowledge"
-  cve_collection: "cve_patterns"
+  host: ${QDRANT_HOST:-localhost}
+  port: ${QDRANT_PORT:-6333}
+  collection_name: ${QDRANT_COLLECTION:-malware_knowledge_test}
+  cve_collection: ${QDRANT_CVE_COLLECTION:-cve_patterns_test}
 
-# Code Embedding Configuration (for Few-Shot RAG)
+# Code Embedding Configuration - MINIMAL
 code_embedding:
-  model: "microsoft/unixcoder-base"
-  embedding_dim: 768
-  chunk_size: 512
-  chunk_overlap: 64
-  max_samples_to_vectorize: 1  # MINIMAL - just 10 samples for testing
+  model: ${EMBEDDING_MODEL:-microsoft/unixcoder-base}
+  embedding_dim: ${EMBEDDING_DIM:-768}
+  chunk_size: ${CHUNK_SIZE:-256}
+  chunk_overlap: ${CHUNK_OVERLAP:-32}
+  max_samples_to_vectorize: ${MAX_SAMPLES_TO_VECTORIZE:-0}
 
-# Training Configuration - MINIMAL epochs for testing
+# Training Configuration - ULTRA-MINIMAL
 training:
-  model_id: "bigcode/starcoder2-3b"
-  output_dir: "./model_checkpoints_test"  # SEPARATE DIR - won't overwrite trained model
-  num_epochs: 1  # MINIMAL - just 1 epoch for testing
-  batch_size: 1
-  gradient_accumulation_steps: 4
-  learning_rate: 0.0002
-  max_seq_length: 512
-  warmup_steps: 10  # Reduced
-  logging_steps: 10
-  save_steps: 100
-  eval_steps: 100
-  save_total_limit: 2
+  model_id: ${MODEL_ID:-bigcode/starcoder2-3b}
+  output_dir: ${OUTPUT_DIR:-./model_checkpoints_test}
+  num_epochs: ${NUM_EPOCHS:-1}
+  batch_size: ${BATCH_SIZE:-1}
+  gradient_accumulation_steps: ${GRAD_ACCUM_STEPS:-1}
+  learning_rate: ${LEARNING_RATE:-0.0002}
+  max_seq_length: ${MAX_SEQ_LENGTH:-256}
+  warmup_steps: ${WARMUP_STEPS:-1}
+  logging_steps: ${LOGGING_STEPS:-5}
+  save_steps: ${SAVE_STEPS:-500}
+  eval_steps: ${EVAL_STEPS:-500}
+  save_total_limit: ${SAVE_TOTAL_LIMIT:-1}
   fp16: false
   bf16: false
-  test_split_size: 0.2  # 20% for test
+  test_split_size: ${TEST_SPLIT_SIZE:-0.5}
+  max_steps: ${MAX_STEPS:-10}
 
-  # LoRA Configuration
-  lora_r: 16
-  lora_alpha: 32
-  lora_dropout: 0.05
+  # LoRA Configuration - Minimal
+  lora_r: ${LORA_R:-8}
+  lora_alpha: ${LORA_ALPHA:-16}
+  lora_dropout: ${LORA_DROPOUT:-0.05}
   target_modules:
     - "q_proj"
     - "v_proj"
 
-  # Evaluation settings
-  eval_max_new_tokens: 20
-  eval_temperature: 0.1
-  eval_max_code_length: 500
+  # Evaluation settings - Minimal
+  eval_max_new_tokens: ${EVAL_MAX_NEW_TOKENS:-10}
+  eval_temperature: ${EVAL_TEMPERATURE:-0.1}
+  eval_max_code_length: ${EVAL_MAX_CODE_LENGTH:-200}
 
 # W&B Configuration
 wandb:
-  enabled: false  # DISABLED for quick test
-  project: "scriptguard"
-  entity: "your-wandb-entity"
+  enabled: false
+  project: ${WANDB_PROJECT:-scriptguard-test}
+  entity: ${WANDB_ENTITY:-your-wandb-entity}
 
-# Database Configuration (PostgreSQL)
+# Database Configuration
 database:
   enabled: false
-  host: "localhost"
-  port: 5432
-  name: "scriptguard"
-  user: "scriptguard"
-  password: "your-secure-password"
+  host: ${DB_HOST:-localhost}
+  port: ${DB_PORT:-5432}
+  name: ${DB_NAME:-scriptguard_test}
+  user: ${DB_USER:-scriptguard}
+  password: ${DB_PASSWORD:-your-secure-password}

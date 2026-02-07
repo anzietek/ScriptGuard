@@ -44,7 +44,7 @@ class CodeSimilarityStore:
         chunk_overlap: int = 64,
         api_key: Optional[str] = None,
         use_https: bool = False,
-        config_path: str = "config.yaml"
+        config_path: Optional[str] = None
     ):
         """
         Initialize Code Similarity Store with enhanced embedding, chunking, and reranking.
@@ -89,7 +89,9 @@ class CodeSimilarityStore:
             logger.warning("  Auth: Disabled (no API key)")
             logger.warning("  Set QDRANT_API_KEY in .env if authentication is required")
 
-        # Load configuration
+        # Load configuration from environment variable or default
+        if config_path is None:
+            config_path = os.getenv("CONFIG_PATH", "config.yaml")
         self.config = self._load_config(config_path)
 
         # Extract configuration parameters

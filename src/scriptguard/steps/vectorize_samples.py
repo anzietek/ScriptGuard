@@ -153,10 +153,12 @@ def vectorize_samples(
 
 if __name__ == "__main__":
     # Test vectorization
+    import os
     import yaml
 
-    # Load config
-    with open("config.yaml", "r") as f:
+    # Load config from environment variable or default
+    config_path = os.getenv("CONFIG_PATH", "config.yaml")
+    with open(config_path, "r") as f:
         config = yaml.safe_load(f)
 
     # Run vectorization (limit to 100 samples for testing)
