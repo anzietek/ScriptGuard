@@ -1,5 +1,5 @@
 # ScriptGuard Configuration — RunPod Optimized (RTX 3090/4090/A5000 24GB VRAM)
-# Enhanced with stability and preemption protection
+# Final Production Version with WandB Integration
 
 # ============================================================================
 # PIPELINE CONFIGURATION
@@ -336,7 +336,7 @@ features:
 training:
   model_id: "bigcode/starcoder2-3b"
 
-  # Paths with environment variable support
+  # Paths with environment variable support (Persistent Storage)
   output_dir: ${MODEL_OUTPUT_DIR:-/workspace/models/scriptguard-model}
   cache_dir: ${HF_CACHE_DIR:-/workspace/cache}
   logging_dir: ${TENSORBOARD_DIR:-/workspace/logs/tensorboard}
@@ -350,7 +350,7 @@ training:
   use_flash_attention_2: true
   attn_implementation: "flash_attention_2"
 
-  # Disk Space Management
+  # Disk Space Management (Critical for RunPod)
   save_total_limit: 2
   cleanup_old_checkpoints: true
 
@@ -386,7 +386,7 @@ training:
   batch_size: 16
   gradient_accumulation_steps: 2
 
-  # Dataloader Configuration (reduced for stability)
+  # Dataloader Configuration
   dataloader_num_workers: 4
   dataloader_pin_memory: true
   dataloader_prefetch_factor: 2
@@ -444,7 +444,7 @@ training:
   # Seed for reproducibility
   seed: 42
 
-  # Report to wandb
+  # Report to wandb (Replaces Monitoring section)
   report_to: ["wandb"]
   run_name: ${WANDB_RUN_NAME:-scriptguard-training}
 
