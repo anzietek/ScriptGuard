@@ -7,12 +7,12 @@ requires-python = "==3.12.*"
 
 dependencies = [
     # --- Core ML (CUDA 12.4) - Direct URLs to CUDA wheels ---
-    "torch @ https://download.pytorch.org/whl/cu124/torch-2.5.1%2Bcu124-cp312-cp312-win_amd64.whl ; sys_platform == 'win32'",
-    "torch @ https://download.pytorch.org/whl/cu124/torch-2.5.1%2Bcu124-cp312-cp312-linux_x86_64.whl ; sys_platform == 'linux'",
-    "torchvision @ https://download.pytorch.org/whl/cu124/torchvision-0.20.1%2Bcu124-cp312-cp312-win_amd64.whl ; sys_platform == 'win32'",
-    "torchvision @ https://download.pytorch.org/whl/cu124/torchvision-0.20.1%2Bcu124-cp312-cp312-linux_x86_64.whl ; sys_platform == 'linux'",
-    "torchaudio @ https://download.pytorch.org/whl/cu124/torchaudio-2.5.1%2Bcu124-cp312-cp312-win_amd64.whl ; sys_platform == 'win32'",
-    "torchaudio @ https://download.pytorch.org/whl/cu124/torchaudio-2.5.1%2Bcu124-cp312-cp312-linux_x86_64.whl ; sys_platform == 'linux'",
+    "torch @ https://download.pytorch.org/whl/cu124/torch-2.6.0%2Bcu124-cp312-cp312-win_amd64.whl ; sys_platform == 'win32'",
+    "torch @ https://download.pytorch.org/whl/cu124/torch-2.6.0%2Bcu124-cp312-cp312-linux_x86_64.whl ; sys_platform == 'linux'",
+    "torchvision @ https://download.pytorch.org/whl/cu124/torchvision-0.21.0%2Bcu124-cp312-cp312-win_amd64.whl ; sys_platform == 'win32'",
+    "torchvision @ https://download.pytorch.org/whl/cu124/torchvision-0.21.0%2Bcu124-cp312-cp312-linux_x86_64.whl ; sys_platform == 'linux'",
+    "torchaudio @ https://download.pytorch.org/whl/cu124/torchaudio-2.6.0%2Bcu124-cp312-cp312-win_amd64.whl ; sys_platform == 'win32'",
+    "torchaudio @ https://download.pytorch.org/whl/cu124/torchaudio-2.6.0%2Bcu124-cp312-cp312-linux_x86_64.whl ; sys_platform == 'linux'",
     # --- LLM & Optimization ---
     "transformers>=4.51.3,<4.58.0",
     "accelerate>=0.34.0",
@@ -28,7 +28,7 @@ dependencies = [
     "zenml[server]>=0.63.0",
     "mlflow>=2.15.0",
     "datasets>=2.20.0",
-    "sentence-transformers>=3.3.0",
+    "sentence-transformers>=3.3.0,<4.0.0",
     # --- Database & Vector Store ---
     "psycopg2-binary>=2.9.9",
     "qdrant-client>=1.11.0",
@@ -77,6 +77,7 @@ index-strategy = "unsafe-first-match"
 
 # Override conflicting xformers dependencies from unsloth with pre-built wheels
 override-dependencies = [
-    "xformers @ https://download.pytorch.org/whl/cu124/xformers-0.0.29.post1-cp312-cp312-win_amd64.whl ; sys_platform == 'win32'",
-    "xformers @ https://download.pytorch.org/whl/cu124/xformers-0.0.29.post1-cp312-cp312-manylinux_2_28_x86_64.whl ; sys_platform == 'linux'"
+    "xformers @ https://download.pytorch.org/whl/cu124/xformers-0.0.29.post3-cp312-cp312-win_amd64.whl ; sys_platform == 'win32'",
+    "xformers @ https://download.pytorch.org/whl/cu124/xformers-0.0.29.post3-cp312-cp312-manylinux_2_28_x86_64.whl ; sys_platform == 'linux'",
+    "torchao==0.13.0"
 ]

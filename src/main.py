@@ -37,6 +37,9 @@ def signal_handler(sig, frame):
 
 signal.signal(signal.SIGINT, signal_handler)
 
+# Import unsloth FIRST - must precede transformers/peft for optimizations
+import unsloth  # noqa: F401
+
 # Import heavy dependencies after signal handler setup
 from scriptguard.pipelines.training_pipeline import (
     malware_detection_training_pipeline,
