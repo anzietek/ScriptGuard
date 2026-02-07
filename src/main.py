@@ -56,6 +56,30 @@ def load_config(config_path: str = "config.yaml") -> dict:
     with open(config_path, 'r') as f:
         config = yaml.safe_load(f)
 
+    def convert_type(value: str):
+        """Convert string value to appropriate type (int, float, bool, or str)."""
+        if not isinstance(value, str):
+            return value
+
+        # Try to convert to boolean
+        if value.lower() in ('true', 'false'):
+            return value.lower() == 'true'
+
+        # Try to convert to int
+        try:
+            return int(value)
+        except ValueError:
+            pass
+
+        # Try to convert to float
+        try:
+            return float(value)
+        except ValueError:
+            pass
+
+        # Return as string
+        return value
+
     def substitute_env_vars(obj):
         """Recursively substitute environment variables in config."""
         if isinstance(obj, dict):
@@ -67,10 +91,11 @@ def load_config(config_path: str = "config.yaml") -> dict:
             env_expr = obj[2:-1]
             if ":-" in env_expr:
                 env_var, default = env_expr.split(":-", 1)
-                return os.getenv(env_var, default)
+                result = os.getenv(env_var, default)
             else:
                 env_var = env_expr
-                return os.getenv(env_var, "")
+                result = os.getenv(env_var, "")
+            return convert_type(result)
         else:
             return obj
 
@@ -153,7 +178,7 @@ def main():
     """Advanced training pipeline with config.yaml."""
     # Load configuration from environment variable or default
     config_path = os.getenv("CONFIG_PATH", "config.yaml")
-    zenml_config_path = os.getenv("ZENML_CONFIG_PATH", "zenml_config.yaml")
+    zenml_config_path = os.getenv("SCRIPTGUARD_ZENML_CONFIG", "zenml_config.yaml")
 
     try:
         config = load_config(config_path)

@@ -24,11 +24,11 @@ data_sources:
     fetch_malicious: true
     fetch_benign: true
     malicious_keywords:
-      - ${MALICIOUS_KEYWORD:-reverse-shell python}
+      - "reverse-shell python"
     benign_repos:
-      - ${BENIGN_REPO:-pallets/flask}
-    max_samples_per_keyword: ${MAX_SAMPLES_PER_KEYWORD:-2}
-    max_files_per_repo: ${MAX_FILES_PER_REPO:-2}
+      - "pallets/flask"
+    max_samples_per_keyword: 2  # Can override with MAX_SAMPLES_PER_KEYWORD env var in config.yaml
+    max_files_per_repo: 2       # Can override with MAX_FILES_PER_REPO env var in config.yaml
 
   malwarebazaar:
     enabled: false
