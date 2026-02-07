@@ -78,7 +78,7 @@ code_embedding:
   embedding_dim: ${EMBEDDING_DIM:-768}
   chunk_size: ${CHUNK_SIZE:-256}
   chunk_overlap: ${CHUNK_OVERLAP:-32}
-  max_samples_to_vectorize: ${MAX_SAMPLES_TO_VECTORIZE:-0}
+  max_samples_to_vectorize: ${MAX_SAMPLES_TO_VECTORIZE:-1}  # Vectorize minimal samples for RAG testing
   enable_chunking: false  # CRITICAL: Disable chunking for speed
   max_code_length: 512    # Single embedding per sample
 
