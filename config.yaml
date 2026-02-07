@@ -347,6 +347,8 @@ training:
   gradient_checkpointing: true
 
   # Flash Attention 2 (2x faster, 50% less memory on Ampere/Ada)
+  # Note: attention_dropout is automatically disabled when using Flash Attention 2
+  # to avoid "flex_attention does not support dropout" error
   use_flash_attention_2: true
   attn_implementation: "flash_attention_2"
 

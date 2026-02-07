@@ -97,9 +97,14 @@ training:
   eval_steps: ${EVAL_STEPS:-500}
   save_total_limit: ${SAVE_TOTAL_LIMIT:-1}
   fp16: false
-  bf16: false
+  bf16: true  # Enable BF16 for faster training on modern GPUs
   test_split_size: ${TEST_SPLIT_SIZE:-0.5}
   max_steps: ${MAX_STEPS:-10}
+
+  # Flash Attention 2 Configuration
+  use_flash_attention_2: true  # 2x faster, 50% less memory
+  attn_implementation: "flash_attention_2"
+  # Note: attention_dropout is automatically set to 0.0 in qlora_finetuner.py
 
   # LoRA Configuration - Minimal
   lora_r: ${LORA_R:-8}

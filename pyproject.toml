@@ -51,7 +51,8 @@ dependencies = [
     # --- Code Analysis ---
     "tree-sitter>=0.22.0",
     "tree-sitter-python>=0.21.0",
-    "bandit>=1.7.9"
+    "bandit>=1.7.9",
+    "weave>=0.52.26",
 ]
 
 [project.optional-dependencies]

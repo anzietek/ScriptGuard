@@ -20,11 +20,25 @@ class QLoRAFineTuner:
         max_length = training_config.get("tokenizer_max_length", 512)
 
         logger.info("Loading model with unsloth optimization...")
+
+        # Check if Flash Attention 2 is enabled
+        use_flash_attn = training_config.get("use_flash_attention_2", False)
+
+        # Prepare model config overrides to disable dropout with Flash Attention 2
+        model_kwargs = {}
+        if use_flash_attn:
+            logger.info("Flash Attention 2 enabled - disabling all dropout layers")
+            model_kwargs["attention_dropout"] = 0.0
+            model_kwargs["residual_dropout"] = 0.0
+            model_kwargs["embedding_dropout"] = 0.0
+            model_kwargs["attn_implementation"] = "flash_attention_2"
+
         self.model, self.tokenizer = FastLanguageModel.from_pretrained(
             model_name=self.model_id,
             max_seq_length=max_length,
             dtype=None,
             load_in_4bit=True,
+            **model_kwargs
         )
 
         logger.info("Adding LoRA adapters with unsloth...")
