@@ -98,8 +98,12 @@ training:
   save_total_limit: ${SAVE_TOTAL_LIMIT:-1}
   fp16: false
   bf16: true  # Enable BF16 for faster training on modern GPUs
+  bf16_full_eval: true  # CRITICAL: Use BF16 during evaluation too (prevents dtype mismatch)
   test_split_size: ${TEST_SPLIT_SIZE:-0.5}
   max_steps: ${MAX_STEPS:-10}
+
+  # Optimizer
+  optim: "adamw_8bit"  # Memory efficient optimizer
 
   # Flash Attention 2 Configuration
   # DISABLED on Windows - flash-attn package requires Linux for compilation

@@ -409,6 +409,7 @@ training:
   # Mixed Precision Training
   fp16: false
   bf16: true
+  bf16_full_eval: true  # CRITICAL: Use BF16 during evaluation to match training dtype
   tf32: true
 
   # Optimizer

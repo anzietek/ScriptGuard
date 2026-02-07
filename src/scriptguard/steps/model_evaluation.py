@@ -225,18 +225,33 @@ def evaluate_model(
     # Load base model with proper configuration for evaluation
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
+    # Determine dtype from training config (P1.4 fix)
+    training_config = config.get("training", {})
+    use_bf16 = training_config.get("bf16", False) or training_config.get("bf16_full_eval", False)
+    use_fp16 = training_config.get("fp16", False)
+
+    if use_bf16 and torch.cuda.is_bf16_supported():
+        eval_dtype = torch.bfloat16
+        logger.info("Using BF16 for evaluation (matches training)")
+    elif use_fp16:
+        eval_dtype = torch.float16
+        logger.info("Using FP16 for evaluation (matches training)")
+    else:
+        eval_dtype = torch.float32
+        logger.info("Using FP32 for evaluation")
+
     try:
         if device == "cuda":
-            # Load model on GPU without device_map to avoid PEFT adapter issues
-            logger.info("Attempting to load model on GPU with float16...")
+            # Load model on GPU with dtype matching training
+            logger.info(f"Attempting to load model on GPU with {eval_dtype}...")
             base_model = AutoModelForCausalLM.from_pretrained(
                 base_model_id,
-                torch_dtype=torch.float16,
+                torch_dtype=eval_dtype,
                 low_cpu_mem_usage=True,
                 # NO device_map="auto" - causes issues with PEFT adapter loading
             )
             base_model = base_model.to(device)
-            logger.info("✓ Model loaded on GPU with float16")
+            logger.info(f"✓ Model loaded on GPU with {eval_dtype}")
         else:
             raise RuntimeError("CUDA not available")
     except Exception as e:
