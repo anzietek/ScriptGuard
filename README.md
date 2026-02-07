@@ -196,6 +196,35 @@ training:
   num_epochs: 3
 ```
 
+### Running on Podrun
+
+For running training pipelines on Podrun with ZenML, use the automated setup scripts:
+
+**Linux/macOS:**
+```bash
+chmod +x podrun-setup.sh
+./podrun-setup.sh
+```
+
+**Windows (PowerShell):**
+```powershell
+.\podrun-setup.ps1
+```
+
+**Check environment only:**
+```bash
+# Linux/macOS
+./podrun-setup.sh --check
+
+# Windows
+.\podrun-setup.ps1 -Check
+
+# Python check script
+python check_podrun_env.py
+```
+
+See [docs/PODRUN_SETUP.md](docs/PODRUN_SETUP.md) for detailed Podrun deployment guide.
+
 ### Training
 
 ```bash
@@ -266,6 +295,11 @@ Response:
 - **[USAGE_GUIDE.md](docs/USAGE_GUIDE.md)** - API usage and integration
 - **[TUNING_GUIDE.md](docs/TUNING_GUIDE.md)** - Hyperparameter tuning
 - **[DEPLOYMENT.md](docs/DEPLOYMENT.md)** - Production deployment guide
+
+### Podrun Deployment (NEW - 2026-02-07) 🚀
+- **[PODRUN_QUICKSTART.md](docs/PODRUN_QUICKSTART.md)** - ⚡ Quick start guide for Podrun
+- **[PODRUN_SETUP.md](docs/PODRUN_SETUP.md)** - 📖 Complete Podrun deployment guide
+- **[PODRUN_SCRIPTS.md](PODRUN_SCRIPTS.md)** - 🛠️ Setup scripts reference
 
 ### RAG & Few-Shot Documentation (NEW - 2026-02-02)
 - **[RAG_IMPROVEMENTS_IMPLEMENTATION.md](docs/RAG_IMPROVEMENTS_IMPLEMENTATION.md)** - ✨ Latest improvements guide

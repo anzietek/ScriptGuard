@@ -1,0 +1,48 @@
+# ScriptGuard Requirements
+# This file contains all dependencies for running on Podrun.
+# Install with: pip install -r requirements.txt
+
+# Core ML/AI
+torch>=2.5.0
+torchvision>=0.20.0
+torchaudio>=2.5.0
+transformers>=4.36.0
+sentence-transformers>=2.2.0
+datasets>=2.14.0
+peft>=0.7.0
+bitsandbytes>=0.41.0
+accelerate>=0.24.0
+scikit-learn>=1.3.0
+
+# ZenML and MLOps
+zenml[server]>=0.50.0
+
+# Vector Database
+qdrant-client>=1.7.0
+
+# API and Web
+fastapi>=0.104.0
+uvicorn[standard]>=0.24.0
+pydantic>=2.0.0
+
+# Data Processing
+pyyaml>=6.0
+requests>=2.31.0
+tqdm>=4.66.0
+python-dotenv>=1.0.0
+
+# Database
+psycopg2-binary>=2.9.9
+sqlalchemy>=2.0.0
+
+# Monitoring and Logging
+wandb>=0.24.1
+comet-ml
+loguru>=0.7.0
+
+# Utilities
+py7zr>=1.1.0
+pyzipper>=0.3.6
+
+# Testing
+pytest>=9.0.2
