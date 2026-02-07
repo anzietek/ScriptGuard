@@ -1,19 +1,34 @@
 #!/bin/bash
 """
 ScriptGuard Podrun Setup Script
-This script prepares the environment for running training pipelines on Podrun with ZenML
+This script prepares the environment for running training pipelines on Podrun with ZenML.
+It assumes Postgres and Qdrant are external services.
+It sets up a local ZenML server for orchestration/dashboard.
+
 Usage:
-  ./podrun-setup.sh         - Setup and run training
+  ./podrun-setup.sh         - Setup and ask to run training
+  ./podrun-setup.sh -y      - Setup and auto-start training (non-interactive)
   ./podrun-setup.sh --check - Check environment only
 """
 
 set -e  # Exit on error
 
-# Check for --check argument
+# Arguments parsing
 CHECK_ONLY=0
-if [ "$1" == "--check" ]; then
-    CHECK_ONLY=1
-fi
+AUTO_APPROVE=0
+
+for arg in "$@"; do
+  case $arg in
+    --check)
+      CHECK_ONLY=1
+      shift
+      ;;
+    -y|--yes)
+      AUTO_APPROVE=1
+      shift
+      ;;
+  esac
+done
 
 # Colors for output
 RED='\033[0;31m'
@@ -51,8 +66,8 @@ check_python() {
     print_success "Python ${PYTHON_VERSION} found"
 
     # Check if version is compatible (3.12 or 3.13)
-    if [[ ! $PYTHON_VERSION =~ ^3\.(12|13) ]]; then
-        print_warning "Python version ${PYTHON_VERSION} detected. Recommended: 3.12 or 3.13"
+    if [[ ! $PYTHON_VERSION =~ ^3\.(10|11|12|13) ]]; then
+        print_warning "Python version ${PYTHON_VERSION} detected. Recommended: 3.10+"
     fi
 }
 
@@ -89,7 +104,7 @@ setup_env() {
             print_info "Creating .env from .env.example..."
             cp .env.example .env
             print_success ".env file created"
-            print_warning "Please edit .env file with your credentials!"
+            print_warning "Action Required: Please edit .env file with your external Qdrant/Postgres credentials!"
         else
             print_error ".env.example not found!"
             exit 1
@@ -131,11 +146,11 @@ verify_zenml() {
     fi
 }
 
-# Initialize ZenML
+# Initialize and Start ZenML Server (Local on Pod)
 init_zenml() {
     print_info "Initializing ZenML..."
 
-    # Check if ZenML is already initialized
+    # Initialize repo if needed
     if [ -d ".zen" ]; then
         print_warning "ZenML already initialized in this directory"
     else
@@ -143,36 +158,51 @@ init_zenml() {
         print_success "ZenML initialized"
     fi
 
-    # Connect to ZenML server if configured
-    if [ -n "$ZENML_SERVER_URL" ]; then
-        print_info "Connecting to ZenML server at ${ZENML_SERVER_URL}..."
-        uv run zenml connect --url "$ZENML_SERVER_URL"
-        print_success "Connected to ZenML server"
+    # Start ZenML Server locally (background)
+    # We bind to 0.0.0.0 to allow external access via RunPod proxy
+    print_info "Starting local ZenML Server..."
+
+    if pgrep -f "zenml.services.zen_server" > /dev/null; then
+        print_warning "ZenML Server is already running."
     else
-        print_info "No ZenML server configured (using local ZenML)"
+        # Using nohup or background flag if supported, here we use zenml up non-blocking
+        # Note: --blocking=False might not be supported in all versions, falling back to background process
+        nohup uv run zenml up --host 0.0.0.0 --port 8237 > logs/zenml_server.log 2>&1 &
+
+        # Give it a moment to start
+        sleep 5
+        print_success "ZenML Server started on port 8237 (check logs/zenml_server.log)"
     fi
 }
 
-# Check required services
+# Check external services (Qdrant & Postgres)
 check_services() {
-    print_info "Checking required services..."
+    print_info "Checking configuration for external services..."
 
-    # Check Qdrant
-    QDRANT_URL="${QDRANT_URL:-http://localhost:6333}"
-    print_info "Checking Qdrant at ${QDRANT_URL}..."
-    if curl -f "${QDRANT_URL}/health" &> /dev/null; then
-        print_success "Qdrant is accessible"
-    else
-        print_error "Qdrant is not accessible at ${QDRANT_URL}"
-        print_info "Please start Qdrant or update QDRANT_URL in .env"
-        exit 1
+    # Load environment variables just for this check
+    if [ -f .env ]; then
+        # Export vars ignoring comments
+        export $(grep -v '^#' .env | xargs)
     fi
 
-    # Check PostgreSQL (optional)
-    if [ -n "$DATABASE_URL" ]; then
-        print_info "PostgreSQL configured: ${DATABASE_URL}"
+    # Check Qdrant URL
+    if [ -n "$QDRANT_URL" ]; then
+        print_info "External Qdrant URL found: ${QDRANT_URL}"
+        # Simple connectivity check
+        if curl --max-time 5 -s "${QDRANT_URL}/health" > /dev/null || curl --max-time 5 -s "${QDRANT_URL}" > /dev/null; then
+             print_success "Qdrant endpoint is reachable."
+        else
+             print_warning "Could not reach Qdrant at ${QDRANT_URL}. Check your VPN/Firewall settings."
+        fi
     else
-        print_warning "No PostgreSQL configured (optional)"
+        print_warning "QDRANT_URL is not set in .env"
+    fi
+
+    # Check Database URL
+    if [ -n "$DATABASE_URL" ]; then
+        print_success "PostgreSQL DATABASE_URL is configured."
+    else
+        print_warning "DATABASE_URL is not set in .env"
     fi
 }
 
@@ -198,10 +228,6 @@ verify_config() {
         exit 1
     fi
 
-    if [ ! -f "zenml_config.yaml" ]; then
-        print_warning "zenml_config.yaml not found (optional)"
-    fi
-
     print_success "Configuration files verified"
 }
 
@@ -215,29 +241,15 @@ display_info() {
     echo "Environment:"
     echo "  Python:      $(python3 --version)"
     echo "  uv:          $(uv --version)"
-    echo "  ZenML:       $(uv run zenml version 2>/dev/null || echo 'Not available')"
-    echo ""
-    echo "Configuration:"
-    echo "  Config file: config.yaml"
-    echo "  Env file:    .env"
+    echo "  ZenML:       $(uv run zenml version)"
     echo ""
     echo "Services:"
-    echo "  Qdrant:      ${QDRANT_URL:-http://localhost:6333}"
-    if [ -n "$DATABASE_URL" ]; then
-        echo "  PostgreSQL:  ${DATABASE_URL}"
-    fi
-    if [ -n "$ZENML_SERVER_URL" ]; then
-        echo "  ZenML Server: ${ZENML_SERVER_URL}"
-    fi
+    echo "  ZenML Server: http://localhost:8237 (Exposed via RunPod port 8237)"
+    echo "  Qdrant (Ext): ${QDRANT_URL:-Not Set}"
+    echo "  Postgres:     ${DATABASE_URL:-Not Set}"
     echo ""
-    echo "Useful Commands:"
-    echo "  Run training:        uv run python src/main.py"
-    echo "  ZenML status:        uv run zenml status"
-    echo "  ZenML pipelines:     uv run zenml pipeline list"
-    echo "  ZenML runs:          uv run zenml pipeline runs list"
-    echo ""
-    echo "  Interactive shell:   uv run python"
-    echo "  Test environment:    uv run pytest tests/"
+    echo "Logs:"
+    echo "  ZenML Logs:   logs/zenml_server.log"
     echo ""
     echo "========================================================"
     echo ""
@@ -249,10 +261,11 @@ run_training() {
 
     # Load environment variables
     if [ -f .env ]; then
-        export $(cat .env | grep -v '^#' | xargs)
+        export $(grep -v '^#' .env | xargs)
     fi
 
     print_info "Running training with ZenML..."
+    # Assuming src/main.py is the entrypoint
     uv run python src/main.py
 
     print_success "Training pipeline completed!"
@@ -279,8 +292,8 @@ main() {
 
     install_dependencies
     verify_zenml
-    init_zenml
     check_services
+    init_zenml # Starts local ZenML server
 
     display_info
 
@@ -289,16 +302,22 @@ main() {
         exit 0
     fi
 
-    # Ask if user wants to start training
-    read -p "Start training pipeline now? (y/n) " -n 1 -r
-    echo
-    if [[ $REPLY =~ ^[Yy]$ ]]; then
+    # Handle automatic approval for RunPod non-interactive execution
+    if [ $AUTO_APPROVE -eq 1 ]; then
+        print_info "Auto-approve flag detected (-y). Starting training..."
         run_training
     else
-        print_info "Training skipped. Run manually with: uv run python src/main.py"
+        # Interactive mode
+        read -p "Start training pipeline now? (y/n) " -n 1 -r
+        echo
+        if [[ $REPLY =~ ^[Yy]$ ]]; then
+            run_training
+        else
+            print_info "Training skipped. Run manually with: uv run python src/main.py"
+        fi
     fi
 
-    print_success "Setup complete!"
+    print_success "Setup script finished!"
 }
 
 # Run main function

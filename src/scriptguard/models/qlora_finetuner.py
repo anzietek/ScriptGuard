@@ -1,18 +1,6 @@
+from unsloth import FastLanguageModel, UnslothTrainer
 import torch
-from transformers import (
-    AutoTokenizer, 
-    AutoModelForCausalLM, 
-    BitsAndBytesConfig, 
-    TrainingArguments,
-    Trainer,
-    DataCollatorForLanguageModeling
-)
-from peft import (
-    LoraConfig, 
-    get_peft_model, 
-    prepare_model_for_kbit_training,
-    TaskType
-)
+from transformers import TrainingArguments
 from datasets import Dataset
 from scriptguard.utils.logger import logger
 
@@ -20,59 +8,58 @@ class QLoRAFineTuner:
     def __init__(self, model_id: str = "bigcode/starcoder2-3b", config: dict = None):
         self.model_id = model_id
         self.config = config or {}
-        self.tokenizer = AutoTokenizer.from_pretrained(model_id)
-        if self.tokenizer.pad_token is None:
-            self.tokenizer.pad_token = self.tokenizer.eos_token
+        self.model = None
+        self.tokenizer = None
 
     def train(self, dataset: Dataset, eval_dataset: Dataset = None, output_dir: str = "./results"):
         logger.info(f"Tokenizing dataset with {len(dataset)} samples...")
         if eval_dataset:
             logger.info(f"Evaluation dataset with {len(eval_dataset)} samples will be used during training")
 
-        # Get config values with defaults
         training_config = self.config.get("training", {})
         max_length = training_config.get("tokenizer_max_length", 512)
-        padding = training_config.get("tokenizer_padding", "max_length")
-        truncation = training_config.get("tokenizer_truncation", True)
 
-        # Determine if using dynamic padding
-        use_dynamic_padding = padding == "dynamic"
+        logger.info("Loading model with unsloth optimization...")
+        self.model, self.tokenizer = FastLanguageModel.from_pretrained(
+            model_name=self.model_id,
+            max_seq_length=max_length,
+            dtype=None,
+            load_in_4bit=True,
+        )
 
-        # Tokenize the dataset
+        logger.info("Adding LoRA adapters with unsloth...")
+        self.model = FastLanguageModel.get_peft_model(
+            self.model,
+            r=training_config.get("lora_r", 16),
+            target_modules=training_config.get("target_modules", ["q_proj", "v_proj", "k_proj", "o_proj"]),
+            lora_alpha=training_config.get("lora_alpha", 32),
+            lora_dropout=training_config.get("lora_dropout", 0.05),
+            bias="none",
+            use_gradient_checkpointing="unsloth",
+            random_state=3407,
+            use_rslora=False,
+            loftq_config=None,
+        )
+
         def tokenize_function(examples):
-            # For dynamic padding, don't pad during tokenization
-            # DataCollator will handle it during batching
-            if use_dynamic_padding:
-                result = self.tokenizer(
-                    examples["text"],
-                    truncation=truncation,
-                    max_length=max_length,
-                    padding=False,  # No padding here - collator does it
-                )
-            else:
-                # Static padding during tokenization
-                result = self.tokenizer(
-                    examples["text"],
-                    truncation=truncation,
-                    max_length=max_length,
-                    padding=padding,
-                )
-            # For causal LM, labels are the same as input_ids
+            result = self.tokenizer(
+                examples["text"],
+                truncation=True,
+                max_length=max_length,
+                padding="max_length",
+            )
             result["labels"] = result["input_ids"].copy()
             return result
 
         tokenized_dataset = dataset.map(
             tokenize_function,
             batched=True,
-            remove_columns=dataset.column_names,  # Remove original columns
+            remove_columns=dataset.column_names,
             desc="Tokenizing training dataset"
         )
 
         logger.info(f"Training tokenization complete. Sample count: {len(tokenized_dataset)}")
-        logger.info(f"Dataset columns: {tokenized_dataset.column_names}")
-        logger.info(f"Padding strategy: {'Dynamic (batch-level)' if use_dynamic_padding else 'Static (max_length)'}")
 
-        # Tokenize eval dataset if provided
         tokenized_eval_dataset = None
         if eval_dataset:
             tokenized_eval_dataset = eval_dataset.map(
@@ -83,47 +70,16 @@ class QLoRAFineTuner:
             )
             logger.info(f"Evaluation tokenization complete. Sample count: {len(tokenized_eval_dataset)}")
 
-        bnb_config = BitsAndBytesConfig(
-            load_in_4bit=True,
-            bnb_4bit_use_double_quant=True,
-            bnb_4bit_quant_type="nf4",
-            bnb_4bit_compute_dtype=torch.bfloat16
-        )
-
-        logger.info("Loading model with 4-bit quantization...")
-        model = AutoModelForCausalLM.from_pretrained(
-            self.model_id,
-            quantization_config=bnb_config,
-            device_map="auto"
-        )
-
-        model = prepare_model_for_kbit_training(model, use_gradient_checkpointing=True)
-
-        # Get LoRA config from config.yaml
-        lora_config = LoraConfig(
-            r=training_config.get("lora_r", 16),
-            lora_alpha=training_config.get("lora_alpha", 32),
-            target_modules=training_config.get("target_modules", ["q_proj", "v_proj"]),
-            lora_dropout=training_config.get("lora_dropout", 0.05),
-            bias="none",
-            task_type=TaskType.CAUSAL_LM
-        )
-
-        model = get_peft_model(model, lora_config)
-        logger.info(f"LoRA config applied. Trainable parameters: {model.print_trainable_parameters()}")
-
-        # Detect hardware capabilities
         has_cuda = torch.cuda.is_available()
         has_bf16 = has_cuda and torch.cuda.is_bf16_supported()
 
-        # Determine precision settings with automatic fallback
         use_fp16 = training_config.get("fp16", False)
         use_bf16 = training_config.get("bf16", True)
 
         if use_bf16 and not has_bf16:
             logger.warning("BF16 requested but not supported. Falling back to FP16.")
             use_bf16 = False
-            use_fp16 = has_cuda  # Use FP16 if GPU available
+            use_fp16 = has_cuda
 
         if not has_cuda:
             logger.warning("CUDA not available. Training on CPU (this will be very slow).")
@@ -132,7 +88,6 @@ class QLoRAFineTuner:
 
         logger.info(f"Training precision: BF16={use_bf16}, FP16={use_fp16}, Device={'cuda' if has_cuda else 'cpu'}")
 
-        # Determine evaluation strategy based on eval_dataset availability
         eval_strategy = training_config.get("evaluation_strategy", "no")
         if eval_strategy != "no" and tokenized_eval_dataset is None:
             logger.warning("evaluation_strategy is set but no eval_dataset provided. Setting to 'no'.")
@@ -141,7 +96,6 @@ class QLoRAFineTuner:
             logger.info("eval_dataset provided. Enabling evaluation strategy 'steps'.")
             eval_strategy = "steps"
 
-        # Get training hyperparameters from config
         training_args = TrainingArguments(
             output_dir=output_dir,
             per_device_train_batch_size=training_config.get("batch_size", 4),
@@ -149,46 +103,33 @@ class QLoRAFineTuner:
             learning_rate=training_config.get("learning_rate", 2e-4),
             weight_decay=training_config.get("weight_decay", 0.01),
             warmup_steps=training_config.get("warmup_steps", 100),
-            lr_scheduler_type=training_config.get("lr_scheduler_type", "linear"),  # NEW: support for different schedulers
+            lr_scheduler_type=training_config.get("lr_scheduler_type", "linear"),
             num_train_epochs=training_config.get("num_epochs", 3),
             fp16=use_fp16,
             bf16=use_bf16,
-            optim=training_config.get("optim", "paged_adamw_8bit"),
+            optim=training_config.get("optim", "adamw_8bit"),
             logging_steps=training_config.get("logging_steps", 10),
             eval_strategy=eval_strategy,
             eval_steps=training_config.get("eval_steps", 100) if eval_strategy != "no" else None,
             save_strategy="steps",
             save_steps=training_config.get("save_steps", 500),
-            load_best_model_at_end=True if eval_strategy != "no" else False,  # NEW: load best model
-            metric_for_best_model="eval_loss" if eval_strategy != "no" else None,  # NEW: metric for best model
+            load_best_model_at_end=True if eval_strategy != "no" else False,
+            metric_for_best_model="eval_loss" if eval_strategy != "no" else None,
             report_to="wandb",
             push_to_hub=False,
         )
 
-        # Create data collator - handles dynamic padding if enabled
-        data_collator = DataCollatorForLanguageModeling(
-            tokenizer=self.tokenizer,
-            mlm=False,  # Causal LM, not masked LM
-            pad_to_multiple_of=8 if use_dynamic_padding else None  # Efficient for GPU
-        )
 
-        trainer = Trainer(
-            model=model,
+        trainer = UnslothTrainer(
+            model=self.model,
             args=training_args,
             train_dataset=tokenized_dataset,
-            eval_dataset=tokenized_eval_dataset,  # Pass eval dataset if provided
-            data_collator=data_collator,
+            eval_dataset=tokenized_eval_dataset,
         )
 
-        model.config.use_cache = False
-
-        # Enable gradient checkpointing with explicit use_reentrant=False for PyTorch 2.9+
-        if hasattr(model, 'gradient_checkpointing_enable'):
-            model.gradient_checkpointing_enable(gradient_checkpointing_kwargs={"use_reentrant": False})
-
-        logger.info("Starting training...")
+        logger.info("Starting training with unsloth optimization...")
         trainer.train()
         
-        # Save the adapter
-        model.save_pretrained(f"{output_dir}/final_adapter")
+        self.model.save_pretrained(f"{output_dir}/final_adapter")
+        self.tokenizer.save_pretrained(f"{output_dir}/final_adapter")
         logger.info(f"Training completed. Adapter saved to {output_dir}/final_adapter")
