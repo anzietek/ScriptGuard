@@ -1,8 +1,9 @@
 #!/bin/bash
 #
-# ScriptGuard RunPod Setup Script (Fixed Paths + Clean Install)
+# ScriptGuard RunPod Setup Script (Fixed: Auto-install lsof + dependencies)
 #
 # Features:
+# - Auto-installs 'lsof', 'ssh', 'git', 'curl' if missing
 # - Auto-installs 'uv' and Python 3.12
 # - Sets up ZenML Server accessible via RunPod Proxy/TCP
 # - Checks for Persistent Volume (/workspace)
@@ -58,7 +59,7 @@ print_success() { echo -e "${GREEN}[SUCCESS]${NC} $1"; }
 print_warning() { echo -e "${YELLOW}[WARNING]${NC} $1"; }
 print_error() { echo -e "${RED}[ERROR]${NC} $1"; }
 
-# --- Core Checks ---
+# --- Core Checks & System Setup ---
 
 check_workspace() {
     print_info "Checking filesystem location..."
@@ -73,6 +74,34 @@ check_workspace() {
         fi
     else
         print_success "Running safely inside persistent volume."
+    fi
+}
+
+check_system_tools() {
+    print_info "Checking system dependencies..."
+    local MISSING_PKGS=""
+
+    # Check for essential tools
+    if ! command -v lsof &> /dev/null; then MISSING_PKGS="$MISSING_PKGS lsof"; fi
+    if ! command -v ssh &> /dev/null; then MISSING_PKGS="$MISSING_PKGS openssh-client"; fi
+    if ! command -v curl &> /dev/null; then MISSING_PKGS="$MISSING_PKGS curl"; fi
+    if ! command -v git &> /dev/null; then MISSING_PKGS="$MISSING_PKGS git"; fi
+    # procps is needed for 'ps' command, often missing in minimal containers
+    if ! command -v ps &> /dev/null; then MISSING_PKGS="$MISSING_PKGS procps"; fi
+
+    if [ ! -z "$MISSING_PKGS" ]; then
+        print_warning "Missing system tools found: $MISSING_PKGS"
+        print_info "Installing missing packages via apt-get..."
+
+        # Ensure non-interactive installation
+        export DEBIAN_FRONTEND=noninteractive
+
+        # Run update and install in one go to be efficient
+        apt-get update && apt-get install -y $MISSING_PKGS
+
+        print_success "System tools installed successfully."
+    else
+        print_success "All system tools (lsof, ssh, git, curl) are present."
     fi
 }
 
@@ -104,18 +133,15 @@ check_python_system() {
 setup_tunnel() {
     print_info "Setting up Secure SSH Tunnel to $REMOTE_IP..."
 
-    # 1. Install SSH Client if missing
-    if ! command -v ssh &> /dev/null; then
-        apt-get update && apt-get install -y openssh-client
-    fi
+    # (Note: SSH client installation is now handled in check_system_tools)
 
-    # 2. Check if tunnel is already running
+    # 1. Check if tunnel is already running
     if pgrep -f "ssh.*$REMOTE_IP" > /dev/null; then
         print_success "Tunnel is already active."
         return
     fi
 
-    # 3. Request Key (Since we delete it, we must ask every time if tunnel is down)
+    # 2. Request Key (Since we delete it, we must ask every time if tunnel is down)
     echo "--------------------------------------------------------"
     echo -e "${YELLOW}SECURITY CHECK: SSH Tunnel is required.${NC}"
     echo "Please paste your Private Key content (id_ed25519) below."
@@ -132,12 +158,12 @@ setup_tunnel() {
         return
     fi
 
-    # 4. Set Permissions (Critical)
+    # 3. Set Permissions (Critical)
     chmod 600 "$KEY_TEMP_PATH"
 
     print_info "Establishing tunnel..."
 
-    # 5. Start SSH in background
+    # 4. Start SSH in background
     ssh -4 -f -N \
         -o StrictHostKeyChecking=no \
         -o ConnectTimeout=10 \
@@ -150,11 +176,11 @@ setup_tunnel() {
     # Wait for connection
     sleep 5
 
-    # 6. SECURITY WIPE - Delete key from disk
+    # 5. SECURITY WIPE - Delete key from disk
     rm -f "$KEY_TEMP_PATH"
     print_warning "Private key file has been deleted from disk for security."
 
-    # 7. Verify
+    # 6. Verify
     if pgrep -f "ssh.*$REMOTE_IP" > /dev/null; then
         print_success "Tunnel ESTABLISHED."
         echo "   - Postgres: localhost:5432 -> Remote:5432"
@@ -198,10 +224,13 @@ init_zenml() {
     print_info "Initializing ZenML..."
     [ ! -d ".zen" ] && uv run zenml init
 
+    # FIXED: This check now relies on 'lsof' which is guaranteed to be installed
     if ! lsof -Pi :8237 -sTCP:LISTEN -t >/dev/null ; then
         nohup uv run zenml up --host 0.0.0.0 --port 8237 > logs/zenml_server.log 2>&1 &
         sleep 5
         print_success "ZenML Server running on port 8237 (Use TCP Port Mapping)"
+    else
+        print_success "ZenML Server is already running."
     fi
 }
 
@@ -224,10 +253,11 @@ create_directories() {
 
 main() {
     echo "========================================================"
-    echo "   ScriptGuard RunPod Setup (Secure Tunnel - Fixed)"
+    echo "   ScriptGuard RunPod Setup (Secure Tunnel + Auto-Fix)"
     echo "========================================================"
 
     check_workspace
+    check_system_tools   # <--- ADDED: Installs lsof, ssh, etc.
     check_python_system
     check_uv
     create_directories

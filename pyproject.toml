@@ -98,7 +98,8 @@ override-dependencies = [
     # FIXED: Downgraded xformers to 0.0.28 to match Torch 2.5.1
     "xformers @ https://download.pytorch.org/whl/cu124/xformers-0.0.28.post3-cp312-cp312-win_amd64.whl ; sys_platform == 'win32'",
     "xformers @ https://download.pytorch.org/whl/cu124/xformers-0.0.28.post3-cp312-cp312-manylinux_2_28_x86_64.whl ; sys_platform == 'linux'",
-    "torchao==0.13.0"
+    # FIXED: Downgrade torchao to avoid 'int1' attribute error with Torch 2.5.1
+    "torchao==0.6.1"
 ]
 
 # CRITICAL FIX: Inject torch into the isolated build environment for flash-attn
