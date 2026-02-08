@@ -246,18 +246,35 @@ async def analyze_script(
         # We need the token IDs for these words
         # Note: We might need to handle spacing (e.g., " BENIGN" vs "BENIGN") depending on tokenizer
         # For StarCoder2/GPT2 style tokenizers, usually there is a space prefix
-        benign_token_id = app_state.tokenizer.encode(" BENIGN", add_special_tokens=False)[0]
-        malicious_token_id = app_state.tokenizer.encode(" MALICIOUS", add_special_tokens=False)[0]
         
-        # Fallback if space prefix is not correct for the tokenizer
-        if benign_token_id is None:
-             benign_token_id = app_state.tokenizer.encode("BENIGN", add_special_tokens=False)[0]
-        if malicious_token_id is None:
-             malicious_token_id = app_state.tokenizer.encode("MALICIOUS", add_special_tokens=False)[0]
+        try:
+            benign_tokens = app_state.tokenizer.encode(" BENIGN", add_special_tokens=False)
+            malicious_tokens = app_state.tokenizer.encode(" MALICIOUS", add_special_tokens=False)
+            
+            # Fallback if space prefix is not correct for the tokenizer
+            if not benign_tokens:
+                 benign_tokens = app_state.tokenizer.encode("BENIGN", add_special_tokens=False)
+            if not malicious_tokens:
+                 malicious_tokens = app_state.tokenizer.encode("MALICIOUS", add_special_tokens=False)
+                 
+            if benign_tokens and malicious_tokens:
+                benign_token_id = benign_tokens[0]
+                malicious_token_id = malicious_tokens[0]
+            else:
+                # Should not happen with standard tokenizers, but safe fallback
+                raise ValueError("Could not encode target labels")
+                
+        except Exception as e:
+            logger.error(f"Tokenization error for constrained decoding: {e}")
+            # Fallback to unconstrained generation if tokenization fails
+            benign_token_id = None
+            malicious_token_id = None
 
-        logits_processor = LogitsProcessorList([
-            BinaryClassificationLogitsProcessor(benign_token_id, malicious_token_id)
-        ])
+        logits_processor = LogitsProcessorList()
+        if benign_token_id is not None and malicious_token_id is not None:
+            logits_processor.append(
+                BinaryClassificationLogitsProcessor(benign_token_id, malicious_token_id)
+            )
         
         with torch.no_grad():
             outputs = app_state.model.generate(
@@ -293,9 +310,16 @@ async def analyze_script(
                 first_token_log_prob = transition_scores[0][0].item()
                 confidence = float(torch.exp(torch.tensor(first_token_log_prob)))
                 
-                # Since we forced constrained decoding, the confidence is now P(Selected_Token)
-                # normalized against ONLY (BENIGN, MALICIOUS).
-                # This is exactly what we want for a binary classifier.
+                # If the model is very confident about a wrong format, confidence might be high but result unknown
+                # If result is unknown (-1), we degrade confidence
+                if classification_result == -1:
+                    confidence = 0.0
+                
+                # Refined confidence calculation:
+                # If we could force constrained decoding, we would compare P(MALICIOUS) vs P(BENIGN)
+                # Here we rely on the model naturally generating one of them.
+                # If it generated "MALICIOUS", confidence is P(MALICIOUS).
+                # If it generated "BENIGN", confidence is P(BENIGN).
                     
         except Exception as e:
             logger.warning(f"Failed to compute confidence scores: {e}")
