@@ -215,6 +215,10 @@ install_dependencies() {
 
     print_info "Syncing dependencies with uv..."
     uv sync
+
+    # Install the project itself in editable mode
+    print_info "Installing scriptguard package in editable mode..."
+    uv pip install -e .
 }
 
 # --- Services ---
