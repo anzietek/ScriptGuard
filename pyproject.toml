@@ -23,16 +23,14 @@ dependencies = [
     "bitsandbytes>=0.44.1",
 
     # --- UNSLOTH ---
-    # Specifies the variant compatible with CUDA 12.4 and PyTorch 2.5.1
     "unsloth[cu124-torch251] @ git+https://github.com/unslothai/unsloth.git",
     "unsloth-zoo @ git+https://github.com/unslothai/unsloth-zoo.git",
 
-    # --- TRITON FIX (Windows Support) ---
+    # --- TRITON FIX ---
     "triton>=3.0.0; sys_platform == 'linux'",
     "triton @ https://github.com/woct0rdho/triton-windows/releases/download/v3.2.0-windows.post9/triton-3.2.0-cp312-cp312-win_amd64.whl ; sys_platform == 'win32'",
 
     # --- Flash Attention 2 ---
-    # Will be built from source using [tool.uv.extra-build-dependencies] below
     "flash-attn>=2.7.0; sys_platform == 'linux'",
 
     # --- MLOps & Data ---
@@ -93,14 +91,14 @@ index-url = "https://download.pytorch.org/whl/cu124"
 extra-index-url = ["https://pypi.org/simple"]
 index-strategy = "unsafe-first-match"
 
-# Override conflicting xformers dependencies with versions compatible with Torch 2.5.1
-# REMOVED torchao to avoid import errors in transformers
+# Override conflicting xformers dependencies
+# WAŻNE: Wersja 0.0.28 jest kompatybilna z Torch 2.5.1
 override-dependencies = [
     "xformers @ https://download.pytorch.org/whl/cu124/xformers-0.0.28.post3-cp312-cp312-win_amd64.whl ; sys_platform == 'win32'",
     "xformers @ https://download.pytorch.org/whl/cu124/xformers-0.0.28.post3-cp312-cp312-manylinux_2_28_x86_64.whl ; sys_platform == 'linux'",
 ]
 
-# CRITICAL FIX: Inject torch into the isolated build environment for flash-attn
+# Build dependencies for flash-attn compilation
 [tool.uv.extra-build-dependencies]
 flash-attn = [
     "torch==2.5.1",
