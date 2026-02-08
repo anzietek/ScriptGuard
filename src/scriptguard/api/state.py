@@ -5,7 +5,6 @@ Handles lifecycle of global resources like models and database connections.
 
 import os
 import torch
-import hashlib
 from typing import Optional, Dict, Any
 from transformers import AutoTokenizer, AutoModelForCausalLM
 from peft import PeftModel
@@ -111,6 +110,10 @@ class AppState:
 
             # Check if bootstrapping is allowed via env var (default: False for API)
             bootstrap_enabled = os.getenv("BOOTSTRAP_QDRANT", "false").lower() == "true"
+            
+            # Also check config override
+            if self.config.qdrant.bootstrap_on_startup:
+                bootstrap_enabled = True
 
             if bootstrap_enabled:
                 info = self.rag_store.get_collection_info()

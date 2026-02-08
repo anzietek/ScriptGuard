@@ -5,7 +5,6 @@ import hashlib
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, Request, Depends, Header, status, BackgroundTasks
 from fastapi.responses import JSONResponse
-from fastapi.exception_handlers import http_exception_handler
 from scriptguard.api.schemas import (
     ScriptAnalysisRequest, 
     ScriptAnalysisResponse, 
@@ -217,28 +216,52 @@ async def analyze_script(
         
         # Get generation config from app_state.config if available
         max_new_tokens = 20 
-        temperature = 0.1
-        if app_state.config:
-            temperature = app_state.config.inference.temperature
-
+        
         with torch.no_grad():
             outputs = app_state.model.generate(
                 **inputs,
                 max_new_tokens=max_new_tokens,
                 do_sample=False, # Deterministic
-                # temperature is ignored when do_sample=False, removing to avoid warnings
                 pad_token_id=app_state.tokenizer.pad_token_id,
-                eos_token_id=app_state.tokenizer.eos_token_id
+                eos_token_id=app_state.tokenizer.eos_token_id,
+                return_dict_in_generate=True,
+                output_scores=True
             )
 
-        response_text = app_state.tokenizer.decode(outputs[0], skip_special_tokens=True)
+        # Decode generated text
+        generated_sequence = outputs.sequences[0]
+        response_text = app_state.tokenizer.decode(generated_sequence, skip_special_tokens=True)
         
         # Post-processing / Parsing using centralized utility
         classification_result = parse_classification_output(response_text)
-        
         is_malicious = classification_result == 1
-        confidence = 0.95 if classification_result != -1 else 0.5
         
+        # Calculate Confidence using Transition Scores (Logits)
+        # We look at the first generated token's probability
+        confidence = 0.5 # Default fallback
+        
+        try:
+            # Get transition scores (log probabilities of generated tokens)
+            transition_scores = app_state.model.compute_transition_scores(
+                outputs.sequences, outputs.scores, normalize_logits=True
+            )
+            
+            # The first token generated after the prompt is the most critical for classification
+            # (It should be "BENIGN" or "MALICIOUS")
+            # transition_scores[0] contains log_probs for the first generated sequence
+            # We take the first token's log_prob and convert to probability
+            if len(transition_scores[0]) > 0:
+                first_token_log_prob = transition_scores[0][0].item()
+                confidence = float(torch.exp(torch.tensor(first_token_log_prob)))
+                
+                # If the model is very confident about a wrong format, confidence might be high but result unknown
+                # If result is unknown (-1), we degrade confidence
+                if classification_result == -1:
+                    confidence = 0.0
+                    
+        except Exception as e:
+            logger.warning(f"Failed to compute confidence scores: {e}")
+
         # Extract reasoning
         reasoning = response_text.split("# Analysis: The script above is classified as:")[-1].strip()
         
