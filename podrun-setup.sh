@@ -17,7 +17,7 @@ set -e  # Exit on error
 # --- Global Configuration ---
 # Fix for UV path: Add both .local/bin and .cargo/bin just in case
 export PATH="$HOME/.local/bin:$HOME/.cargo/bin:$PATH"
-
+export UV_LINK_MODE=copy
 # Tunnel Configuration
 REMOTE_IP="62.171.130.236"
 REMOTE_USER="deployer"
