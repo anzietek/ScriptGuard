@@ -24,13 +24,14 @@ import signal
 import yaml
 from scriptguard.utils.logger import logger
 
-# Disable torch.compile on Windows FIRST - before ANY imports or .env loading
-# This prevents Triton CUDA version detection issues
+# Disable torch.compile FIRST - before ANY imports or .env loading
+# CRITICAL: PyTorch 2.5.1 + unsloth_zoo tries to use triton options not available in this version
+# This prevents RuntimeError: Unexpected optimization option triton.enable_persistent_tma_matmul
+os.environ["TORCH_COMPILE_DISABLE"] = "1"
+os.environ["TORCHDYNAMO_DISABLE"] = "1"
 if sys.platform == "win32":
-    os.environ["TORCH_COMPILE_DISABLE"] = "1"
-    os.environ["TORCHDYNAMO_DISABLE"] = "1"
     os.environ["PYTORCH_ENABLE_MPS_FALLBACK"] = "1"
-    logger.info("Windows detected - torch.compile will be disabled")
+logger.info("torch.compile disabled (PyTorch 2.5.1 compatibility)")
 
 # Now load .env files
 from dotenv import load_dotenv, find_dotenv
