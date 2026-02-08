@@ -52,6 +52,7 @@ wandb/
 model_checkpoints/
 model_checkpoints_test/
 models/
+!src/scriptguard/models/  # Exception: keep Python code in src
 unsloth_compiled_cache/
 
 # ZenML / MLOps local state
