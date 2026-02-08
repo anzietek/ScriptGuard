@@ -6,8 +6,8 @@ readme = "README.md"
 requires-python = "==3.12.*"
 
 dependencies = [
-    # --- Core ML (CUDA 12.4) - Downgraded to 2.5.1 for Unsloth Compatibility ---
-    # Using version 2.5.1 to avoid the need for flash-attn compilation and Unsloth issues
+    # --- Core ML (CUDA 12.4) - Pinned to 2.5.1 for Unsloth Compatibility ---
+    # We use 2.5.1 because Unsloth/xformers support for 2.6.0 is strictly pinned in dependencies
     "torch @ https://download.pytorch.org/whl/cu124/torch-2.5.1%2Bcu124-cp312-cp312-win_amd64.whl ; sys_platform == 'win32'",
     "torch @ https://download.pytorch.org/whl/cu124/torch-2.5.1%2Bcu124-cp312-cp312-linux_x86_64.whl ; sys_platform == 'linux'",
 
@@ -24,7 +24,7 @@ dependencies = [
     "bitsandbytes>=0.44.1",
 
     # --- UNSLOTH ---
-    # This version requires Torch 2.5.1 (hence the downgrade above)
+    # Specifies the variant compatible with CUDA 12.4 and PyTorch 2.5.1
     "unsloth[cu124-torch251] @ git+https://github.com/unslothai/unsloth.git",
     "unsloth-zoo @ git+https://github.com/unslothai/unsloth-zoo.git",
 
@@ -93,11 +93,11 @@ index-url = "https://download.pytorch.org/whl/cu124"
 extra-index-url = ["https://pypi.org/simple"]
 index-strategy = "unsafe-first-match"
 
-# Override conflicting xformers dependencies from unsloth with pre-built wheels
+# FORCE xformers 0.0.28.post3 which is compatible with Torch 2.5.1
+# (0.0.29.post3 requires Torch 2.6.0 which causes the conflict)
 override-dependencies = [
-    "xformers @ https://download.pytorch.org/whl/cu124/xformers-0.0.29.post3-cp312-cp312-win_amd64.whl ; sys_platform == 'win32'",
-    "xformers @ https://download.pytorch.org/whl/cu124/xformers-0.0.29.post3-cp312-cp312-manylinux_2_28_x86_64.whl ; sys_platform == 'linux'",
-    "torchao==0.13.0"
+    "xformers @ https://download.pytorch.org/whl/cu124/xformers-0.0.28.post3-cp312-cp312-win_amd64.whl ; sys_platform == 'win32'",
+    "xformers @ https://download.pytorch.org/whl/cu124/xformers-0.0.28.post3-cp312-cp312-manylinux_2_28_x86_64.whl ; sys_platform == 'linux'",
 ]
 
 [dependency-groups]
