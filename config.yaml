@@ -405,8 +405,8 @@ training:
   warmup_steps: 100
   lr_scheduler_type: "cosine_with_restarts" # Optimized for better convergence
 
-  # Context Length (Quality Boost)
-  max_seq_length: 4096
+  # Context Length (Memory optimized for 24GB GPU)
+  max_seq_length: 2048
 
   # Mixed Precision Training
   fp16: false
@@ -418,7 +418,7 @@ training:
   optim: "adamw_8bit"
 
   # Tokenization
-  tokenizer_max_length: 4096
+  tokenizer_max_length: 2048  # Match max_seq_length
   tokenizer_padding: "longest"    # Dynamic padding (faster)
   tokenizer_truncation: true
 
