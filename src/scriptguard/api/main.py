@@ -17,6 +17,31 @@ from scriptguard.api.state import app_state
 from scriptguard.utils.logger import logger
 from scriptguard.utils.prompts import format_inference_prompt, parse_classification_output, format_fewshot_prompt
 import torch
+from transformers import LogitsProcessorList, LogitsProcessor
+
+# --- Custom Logits Processor for Constrained Decoding ---
+
+class BinaryClassificationLogitsProcessor(LogitsProcessor):
+    """
+    Forces the model to choose between two specific tokens (e.g., BENIGN or MALICIOUS)
+    at the first generation step.
+    """
+    def __init__(self, benign_id: int, malicious_id: int):
+        self.benign_id = benign_id
+        self.malicious_id = malicious_id
+        self.first_token_generated = False
+
+    def __call__(self, input_ids: torch.LongTensor, scores: torch.FloatTensor) -> torch.FloatTensor:
+        # Only constrain the first token generated
+        if not self.first_token_generated:
+            # Create a mask of -inf
+            mask = torch.full_like(scores, float("-inf"))
+            # Allow only benign and malicious tokens
+            mask[:, self.benign_id] = scores[:, self.benign_id]
+            mask[:, self.malicious_id] = scores[:, self.malicious_id]
+            self.first_token_generated = True
+            return mask
+        return scores
 
 # --- Lifecycle Events ---
 
@@ -217,6 +242,23 @@ async def analyze_script(
         # Get generation config from app_state.config if available
         max_new_tokens = 20 
         
+        # Constrained Decoding: Force model to choose between BENIGN and MALICIOUS
+        # We need the token IDs for these words
+        # Note: We might need to handle spacing (e.g., " BENIGN" vs "BENIGN") depending on tokenizer
+        # For StarCoder2/GPT2 style tokenizers, usually there is a space prefix
+        benign_token_id = app_state.tokenizer.encode(" BENIGN", add_special_tokens=False)[0]
+        malicious_token_id = app_state.tokenizer.encode(" MALICIOUS", add_special_tokens=False)[0]
+        
+        # Fallback if space prefix is not correct for the tokenizer
+        if benign_token_id is None:
+             benign_token_id = app_state.tokenizer.encode("BENIGN", add_special_tokens=False)[0]
+        if malicious_token_id is None:
+             malicious_token_id = app_state.tokenizer.encode("MALICIOUS", add_special_tokens=False)[0]
+
+        logits_processor = LogitsProcessorList([
+            BinaryClassificationLogitsProcessor(benign_token_id, malicious_token_id)
+        ])
+        
         with torch.no_grad():
             outputs = app_state.model.generate(
                 **inputs,
@@ -225,7 +267,8 @@ async def analyze_script(
                 pad_token_id=app_state.tokenizer.pad_token_id,
                 eos_token_id=app_state.tokenizer.eos_token_id,
                 return_dict_in_generate=True,
-                output_scores=True
+                output_scores=True,
+                logits_processor=logits_processor # Apply constrained decoding
             )
 
         # Decode generated text
@@ -237,7 +280,6 @@ async def analyze_script(
         is_malicious = classification_result == 1
         
         # Calculate Confidence using Transition Scores (Logits)
-        # We look at the first generated token's probability
         confidence = 0.5 # Default fallback
         
         try:
@@ -247,17 +289,13 @@ async def analyze_script(
             )
             
             # The first token generated after the prompt is the most critical for classification
-            # (It should be "BENIGN" or "MALICIOUS")
-            # transition_scores[0] contains log_probs for the first generated sequence
-            # We take the first token's log_prob and convert to probability
             if len(transition_scores[0]) > 0:
                 first_token_log_prob = transition_scores[0][0].item()
                 confidence = float(torch.exp(torch.tensor(first_token_log_prob)))
                 
-                # If the model is very confident about a wrong format, confidence might be high but result unknown
-                # If result is unknown (-1), we degrade confidence
-                if classification_result == -1:
-                    confidence = 0.0
+                # Since we forced constrained decoding, the confidence is now P(Selected_Token)
+                # normalized against ONLY (BENIGN, MALICIOUS).
+                # This is exactly what we want for a binary classifier.
                     
         except Exception as e:
             logger.warning(f"Failed to compute confidence scores: {e}")
