@@ -95,13 +95,28 @@ signal.signal(signal.SIGINT, signal_handler)
 # because of a dataclasses issue with AttrsDescriptor.
 if sys.platform == "win32":
     import types
-    if "torch._inductor.runtime.hints" not in sys.modules:
-        mock_hints = types.ModuleType("torch._inductor.runtime.hints")
-        class DeviceProperties:
-            pass
-        mock_hints.DeviceProperties = DeviceProperties
-        sys.modules["torch._inductor.runtime.hints"] = mock_hints
-        logger.info("Mocked torch._inductor.runtime.hints to bypass Windows compatibility issue")
+    # Create mock module
+    mock_hints = types.ModuleType("torch._inductor.runtime.hints")
+    class DeviceProperties:
+        pass
+    mock_hints.DeviceProperties = DeviceProperties
+    
+    # Inject into sys.modules - FORCE overwrite
+    sys.modules["torch._inductor.runtime.hints"] = mock_hints
+    
+    # Ensure hierarchy exists to satisfy imports that traverse the package
+    if "torch._inductor" not in sys.modules:
+        sys.modules["torch._inductor"] = types.ModuleType("torch._inductor")
+    
+    if "torch._inductor.runtime" not in sys.modules:
+        sys.modules["torch._inductor.runtime"] = types.ModuleType("torch._inductor.runtime")
+        # Link to parent
+        sys.modules["torch._inductor"].runtime = sys.modules["torch._inductor.runtime"]
+        
+    # Link hints to runtime
+    sys.modules["torch._inductor.runtime"].hints = mock_hints
+    
+    print("DEBUG: Force-mocked torch._inductor.runtime.hints to bypass Windows compatibility issue", file=sys.stderr)
 
 # Import unsloth FIRST - must precede transformers/peft for optimizations
 import unsloth  # noqa: F401
