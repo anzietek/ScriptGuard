@@ -21,7 +21,16 @@ if not hasattr(torch, 'int1'):
 try:
     torch._dynamo.config.suppress_errors = True  # type: ignore
     torch._dynamo.config.disable = True  # type: ignore
-    print("DEBUG: torch._dynamo disabled immediately", file=sys.stderr)
+    
+    # Monkeypatch torch.compile to be a no-op
+    # unsloth uses @torch.compile with options invalid for PyTorch 2.5.1
+    def no_op_compile(*args, **kwargs):
+        def decorator(func):
+            return func
+        return decorator
+    torch.compile = no_op_compile
+    
+    print("DEBUG: torch._dynamo disabled and torch.compile monkey-patched", file=sys.stderr)
 except (AttributeError, ImportError):
     pass
 
