@@ -179,7 +179,6 @@ def advanced_data_ingestion(config: dict) -> List[Dict]:
 
         try:
             # Get NVD API key from env or config
-            import os
             nvd_api_key = os.getenv("NVD_API_KEY") or config.get("api_keys", {}).get("nvd_api_key")
 
             cve_source = CVEFeedSource(api_key=nvd_api_key)
