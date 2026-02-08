@@ -3,45 +3,96 @@ import uuid
 import os
 import hashlib
 from contextlib import asynccontextmanager
+from typing import Optional, Sequence, Tuple, cast
+
 from fastapi import FastAPI, HTTPException, Request, Depends, Header, status, BackgroundTasks
 from fastapi.responses import JSONResponse
+
 from scriptguard.api.schemas import (
-    ScriptAnalysisRequest, 
-    ScriptAnalysisResponse, 
+    ScriptAnalysisRequest,
+    ScriptAnalysisResponse,
     VulnerabilityInfo,
     HealthResponse,
     ReadinessResponse,
-    ErrorResponse
+    ErrorResponse,
 )
 from scriptguard.api.state import app_state
 from scriptguard.utils.logger import logger
-from scriptguard.utils.prompts import format_inference_prompt, parse_classification_output, format_fewshot_prompt
+from scriptguard.utils.prompts import (
+    format_inference_prompt,
+    parse_classification_output,
+    format_fewshot_prompt,
+)
+
 import torch
 from transformers import LogitsProcessorList, LogitsProcessor
 
-# --- Custom Logits Processor for Constrained Decoding ---
 
 class BinaryClassificationLogitsProcessor(LogitsProcessor):
-    """
-    Forces the model to choose between two specific tokens (e.g., BENIGN or MALICIOUS)
-    at the first generation step.
-    """
-    def __init__(self, benign_id: int, malicious_id: int):
-        self.benign_id = benign_id
-        self.malicious_id = malicious_id
-        self.first_token_generated = False
+    """Constrain the *first generated token* to a binary label token.
 
-    def __call__(self, input_ids: torch.LongTensor, scores: torch.FloatTensor) -> torch.FloatTensor:
-        # Only constrain the first token generated
-        if not self.first_token_generated:
-            # Create a mask of -inf
-            mask = torch.full_like(scores, float("-inf"))
-            # Allow only benign and malicious tokens
-            mask[:, self.benign_id] = scores[:, self.benign_id]
-            mask[:, self.malicious_id] = scores[:, self.malicious_id]
-            self.first_token_generated = True
-            return mask
-        return scores
+    Notes:
+        This processor is instantiated per request.
+        It assumes the label can be decided by a single token id.
+    """
+
+    def __init__(self, allowed_token_ids: Sequence[int]) -> None:
+        if len(allowed_token_ids) < 2:
+            raise ValueError("allowed_token_ids must contain at least two token ids")
+        self._allowed_token_ids: Tuple[int, ...] = tuple(int(t) for t in allowed_token_ids)
+        self._applied: bool = False
+
+    def __call__(
+        self, input_ids: torch.LongTensor, scores: torch.FloatTensor
+    ) -> torch.FloatTensor:
+        if self._applied:
+            return scores
+
+        mask = scores.new_full(scores.shape, float("-inf"))
+        for token_id in self._allowed_token_ids:
+            mask[:, token_id] = scores[:, token_id]
+
+        self._applied = True
+        return cast(torch.FloatTensor, mask)
+
+
+def _encode_label_token_id(tokenizer, label: str) -> Optional[int]:
+    """Get a single token id representing a label, if possible.
+
+    Returns:
+        Token id if the label can be represented as a single token (with a leading
+        space variant preferred), otherwise None.
+    """
+
+    candidates = [f" {label}", label]
+    for cand in candidates:
+        token_ids = tokenizer.encode(cand, add_special_tokens=False)
+        if len(token_ids) != 1:
+            continue
+
+        token_id = int(token_ids[0])
+        decoded = tokenizer.decode([token_id], skip_special_tokens=True)
+
+        # Accept either exact match or a whitespace-prefixed variant.
+        if decoded.strip().upper() == label.upper():
+            return token_id
+
+    return None
+
+
+def _confidence_from_first_step_logits(
+    step_logits: torch.FloatTensor, chosen_token_id: int, allowed_token_ids: Sequence[int]
+) -> float:
+    """Compute calibrated confidence as P(chosen | allowed) from step logits."""
+
+    allowed = torch.tensor(list(allowed_token_ids), device=step_logits.device)
+    allowed_logits = step_logits.index_select(dim=-1, index=allowed)
+    probs = torch.softmax(allowed_logits, dim=-1)
+
+    allowed_list = list(int(t) for t in allowed_token_ids)
+    chosen_index = allowed_list.index(int(chosen_token_id))
+    return float(probs[0, chosen_index].detach().cpu().item())
+
 
 # --- Lifecycle Events ---
 
@@ -167,9 +218,9 @@ async def readiness_check():
 @app.post("/analyze", response_model=ScriptAnalysisResponse, dependencies=[Depends(verify_api_key)])
 async def analyze_script(
     request: Request,
-    analysis_request: ScriptAnalysisRequest, 
+    analysis_request: ScriptAnalysisRequest,
     background_tasks: BackgroundTasks,
-    x_api_key: str = Header(None, alias="X-API-Key")
+    x_api_key: str = Header(None, alias="X-API-Key"),
 ):
     """
     Analyze a script for malicious content.
@@ -238,89 +289,67 @@ async def analyze_script(
     # Inference
     try:
         inputs = app_state.tokenizer(prompt, return_tensors="pt").to(app_state.device)
-        
-        # Get generation config from app_state.config if available
-        max_new_tokens = 20 
-        
-        # Constrained Decoding: Force model to choose between BENIGN and MALICIOUS
-        # We need the token IDs for these words
-        # Note: We might need to handle spacing (e.g., " BENIGN" vs "BENIGN") depending on tokenizer
-        # For StarCoder2/GPT2 style tokenizers, usually there is a space prefix
-        
-        try:
-            benign_tokens = app_state.tokenizer.encode(" BENIGN", add_special_tokens=False)
-            malicious_tokens = app_state.tokenizer.encode(" MALICIOUS", add_special_tokens=False)
-            
-            # Fallback if space prefix is not correct for the tokenizer
-            if not benign_tokens:
-                 benign_tokens = app_state.tokenizer.encode("BENIGN", add_special_tokens=False)
-            if not malicious_tokens:
-                 malicious_tokens = app_state.tokenizer.encode("MALICIOUS", add_special_tokens=False)
-                 
-            if benign_tokens and malicious_tokens:
-                benign_token_id = benign_tokens[0]
-                malicious_token_id = malicious_tokens[0]
-            else:
-                # Should not happen with standard tokenizers, but safe fallback
-                raise ValueError("Could not encode target labels")
-                
-        except Exception as e:
-            logger.error(f"Tokenization error for constrained decoding: {e}")
-            # Fallback to unconstrained generation if tokenization fails
-            benign_token_id = None
-            malicious_token_id = None
+
+        max_new_tokens = 5
+
+        benign_token_id = _encode_label_token_id(app_state.tokenizer, "BENIGN")
+        malicious_token_id = _encode_label_token_id(app_state.tokenizer, "MALICIOUS")
 
         logits_processor = LogitsProcessorList()
+        allowed_token_ids: Optional[Tuple[int, int]] = None
         if benign_token_id is not None and malicious_token_id is not None:
-            logits_processor.append(
-                BinaryClassificationLogitsProcessor(benign_token_id, malicious_token_id)
+            allowed_token_ids = (benign_token_id, malicious_token_id)
+            logits_processor.append(BinaryClassificationLogitsProcessor(allowed_token_ids))
+        else:
+            logger.warning(
+                "Constrained decoding disabled: labels are not single-token for this tokenizer"
             )
-        
+
         with torch.no_grad():
             outputs = app_state.model.generate(
                 **inputs,
                 max_new_tokens=max_new_tokens,
-                do_sample=False, # Deterministic
+                do_sample=False,
                 pad_token_id=app_state.tokenizer.pad_token_id,
                 eos_token_id=app_state.tokenizer.eos_token_id,
                 return_dict_in_generate=True,
                 output_scores=True,
-                logits_processor=logits_processor # Apply constrained decoding
+                logits_processor=logits_processor,
             )
 
-        # Decode generated text
         generated_sequence = outputs.sequences[0]
         response_text = app_state.tokenizer.decode(generated_sequence, skip_special_tokens=True)
-        
-        # Post-processing / Parsing using centralized utility
+
         classification_result = parse_classification_output(response_text)
         is_malicious = classification_result == 1
-        
-        # Calculate Confidence using Transition Scores (Logits)
-        confidence = 0.5 # Default fallback
-        
+
+        confidence = 0.0 if classification_result == -1 else 0.5
+
+        # Compute confidence from the *first generation step* logits if possible.
+        # When constrained decoding is enabled, this is a calibrated P(label|{BENIGN,MALICIOUS}).
         try:
-            # Get transition scores (log probabilities of generated tokens)
-            transition_scores = app_state.model.compute_transition_scores(
-                outputs.sequences, outputs.scores, normalize_logits=True
-            )
-            
-            # The first token generated after the prompt is the most critical for classification
-            if len(transition_scores[0]) > 0:
-                first_token_log_prob = transition_scores[0][0].item()
-                confidence = float(torch.exp(torch.tensor(first_token_log_prob)))
-                
-                # If the model is very confident about a wrong format, confidence might be high but result unknown
-                # If result is unknown (-1), we degrade confidence
+            if outputs.scores and len(outputs.scores) > 0:
+                first_step_logits = outputs.scores[0]
+
+                # Determine which token the model actually picked at step 1.
+                prompt_len = inputs["input_ids"].shape[-1]
+                chosen_token_id = int(outputs.sequences[0, prompt_len].item())
+
+                if allowed_token_ids is not None and chosen_token_id in allowed_token_ids:
+                    confidence = _confidence_from_first_step_logits(
+                        step_logits=first_step_logits,
+                        chosen_token_id=chosen_token_id,
+                        allowed_token_ids=allowed_token_ids,
+                    )
+                else:
+                    # Unconstrained path: softmax probability of the chosen token in the full vocab.
+                    # This is less meaningful as "confidence", but still a measurable signal.
+                    probs = torch.softmax(first_step_logits, dim=-1)
+                    confidence = float(probs[0, chosen_token_id].detach().cpu().item())
+
                 if classification_result == -1:
                     confidence = 0.0
-                
-                # Refined confidence calculation:
-                # If we could force constrained decoding, we would compare P(MALICIOUS) vs P(BENIGN)
-                # Here we rely on the model naturally generating one of them.
-                # If it generated "MALICIOUS", confidence is P(MALICIOUS).
-                # If it generated "BENIGN", confidence is P(BENIGN).
-                    
+
         except Exception as e:
             logger.warning(f"Failed to compute confidence scores: {e}")
 
