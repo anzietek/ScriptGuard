@@ -15,6 +15,16 @@ if not hasattr(torch, 'int1'):
     torch.int6 = torch.int8  # type: ignore
     torch.int7 = torch.int8  # type: ignore
 
+# CRITICAL: Disable torch.compile immediately after torch import
+# This must happen before any other imports or code execution to prevent unsloth
+# from triggering compilation with incompatible options on PyTorch 2.5.1
+try:
+    torch._dynamo.config.suppress_errors = True  # type: ignore
+    torch._dynamo.config.disable = True  # type: ignore
+    print("DEBUG: torch._dynamo disabled immediately", file=sys.stderr)
+except (AttributeError, ImportError):
+    pass
+
 # CRITICAL: Import Windows Triton fix FIRST - before any other imports
 # This monkey-patches torch.compile to prevent Triton CUDA version errors
 if sys.platform == "win32":
