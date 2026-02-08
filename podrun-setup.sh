@@ -1,17 +1,24 @@
 #!/bin/bash
 #
-# ScriptGuard Podrun Setup Script
-# This script prepares the environment for running training pipelines on Podrun with ZenML.
-# It assumes Postgres and Qdrant are external services.
-# It sets up a local ZenML server for orchestration/dashboard.
+# ScriptGuard RunPod Setup Script (Optimized)
+#
+# Features:
+# - Auto-installs 'uv' and Python 3.12 (managed environment)
+# - Sets up ZenML Server accessible via RunPod Proxy/TCP
+# - Checks for Persistent Volume (/workspace) to prevent data loss
+# - Auto-starts training pipeline if requested
 #
 # Usage:
-#   ./podrun-setup.sh         - Setup and ask to run training
-#   ./podrun-setup.sh -y      - Setup and auto-start training (non-interactive)
-#   ./podrun-setup.sh --check - Check environment only
+#   ./setup.sh         - Setup and ask to run training
+#   ./setup.sh -y      - Setup and auto-start training (non-interactive)
+#   ./setup.sh --check - Check environment only
 #
 
 set -e  # Exit on error
+
+# --- Global Configuration ---
+# Ensure local bin paths are prioritized for uv and pip
+export PATH="$HOME/.local/bin:$HOME/.cargo/bin:$PATH"
 
 # Arguments parsing
 CHECK_ONLY=0
@@ -37,7 +44,8 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
-# Helper functions
+# --- Helper Functions ---
+
 print_info() {
     echo -e "${BLUE}[INFO]${NC} $1"
 }
@@ -54,7 +62,32 @@ print_error() {
     echo -e "${RED}[ERROR]${NC} $1"
 }
 
-# Load environment variables from .env safely
+# --- Core Checks ---
+
+check_workspace() {
+    print_info "Checking filesystem location..."
+    CURRENT_DIR=$(pwd)
+
+    # RunPod persistent storage is usually at /workspace
+    if [[ "$CURRENT_DIR" != *"/workspace"* ]]; then
+        print_warning "-----------------------------------------------------------"
+        print_warning "CRITICAL: You are NOT running inside '/workspace'."
+        print_warning "Any data created here (/root) WILL BE LOST after Pod restart."
+        print_warning "-----------------------------------------------------------"
+
+        if [ $AUTO_APPROVE -eq 0 ]; then
+             read -p "Are you sure you want to continue in ephemeral storage? (y/n) " -n 1 -r
+             echo
+             if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+                 print_error "Aborted by user. Please move to /workspace."
+                 exit 1
+             fi
+        fi
+    else
+        print_success "Running safely inside persistent volume (/workspace)."
+    fi
+}
+
 load_env() {
     if [ -f .env ]; then
         set -a
@@ -63,306 +96,212 @@ load_env() {
     fi
 }
 
-# Check Python version
-check_python() {
-    print_info "Checking Python version..."
-    if ! command -v python3 &> /dev/null; then
-        print_error "Python3 is not installed. Please install Python 3.10-3.12."
-        exit 1
-    fi
-
-    PYTHON_VERSION=$(python3 --version | cut -d' ' -f2)
-    print_success "Python ${PYTHON_VERSION} found"
-
-    # Must match pyproject.toml: requires-python = ">=3.10,<3.13"
-    if [[ ! $PYTHON_VERSION =~ ^3\.(10|11|12)\. ]]; then
-        print_error "Python ${PYTHON_VERSION} is not compatible. Required: >=3.10,<3.13 (per pyproject.toml)"
-        exit 1
-    fi
-}
-
-# Check if uv is installed
 check_uv() {
-    print_info "Checking for uv package installer..."
+    print_info "Checking for 'uv' package manager..."
     if ! command -v uv &> /dev/null; then
         if [ $CHECK_ONLY -eq 1 ]; then
             print_error "uv is not installed."
             exit 1
         fi
-        print_warning "uv is not installed. Installing uv..."
+        print_warning "uv is not installed. Installing latest version..."
         curl -LsSf https://astral.sh/uv/install.sh | sh
+        source $HOME/.cargo/env
         export PATH="$HOME/.cargo/bin:$PATH"
         print_success "uv installed successfully"
     else
-        print_success "uv is already installed: $(uv --version)"
+        print_success "uv is ready: $(uv --version)"
     fi
 }
 
-# Check CUDA availability
-check_cuda() {
-    print_info "Checking CUDA availability..."
-    if command -v nvidia-smi &> /dev/null; then
-        print_success "CUDA detected:"
-        nvidia-smi --query-gpu=name,driver_version,memory.total --format=csv,noheader
+check_python_system() {
+    # We only check if python3 exists. We rely on 'uv' to fetch the correct version (3.12) defined in pyproject.toml.
+    print_info "Checking system Python..."
+    if command -v python3 &> /dev/null; then
+        SYS_VER=$(python3 --version)
+        print_success "System Python found: $SYS_VER (Note: Project will use Python 3.12 via 'uv')"
     else
-        print_warning "CUDA not detected. Training will use CPU (slower)."
+        print_warning "System Python not found. 'uv' will attempt to fetch a managed Python version."
     fi
 }
 
-# Setup environment file
+check_cuda() {
+    print_info "Checking GPU/CUDA status..."
+    if command -v nvidia-smi &> /dev/null; then
+        print_success "NVIDIA GPU detected:"
+        nvidia-smi --query-gpu=name,memory.total,driver_version --format=csv,noheader
+    else
+        print_warning "No NVIDIA GPU detected! Training will be extremely slow on CPU."
+    fi
+}
+
 setup_env() {
-    print_info "Setting up environment configuration..."
+    print_info "Configuring environment variables..."
 
     if [ ! -f .env ]; then
         if [ $CHECK_ONLY -eq 1 ]; then
-            print_error ".env file not found!"
+            print_error ".env file missing!"
             exit 1
         fi
+
         if [ -f .env.example ]; then
             print_info "Creating .env from .env.example..."
             cp .env.example .env
-            print_success ".env file created"
-            print_warning "Action Required: Please edit .env file with your external Qdrant/Postgres credentials!"
+            print_success ".env created."
+            print_warning "ACTION REQUIRED: Please edit .env with your real API keys!"
         else
-            print_error ".env.example not found!"
+            print_error "Neither .env nor .env.example found!"
             exit 1
         fi
     else
-        print_success ".env file already exists"
+        print_success ".env file exists."
     fi
 }
 
-# Install dependencies with uv
-install_dependencies() {
-    print_info "Installing dependencies with uv..."
+# --- Installation & Verification ---
 
-    # uv sync installs everything from pyproject.toml including
-    # the correct PyTorch version (2.6.0+cu124) with platform-specific wheels
+install_dependencies() {
+    print_info "Syncing dependencies with uv (this may take a moment)..."
+
+    # uv sync reads pyproject.toml, creates .venv, installs Python 3.12 and all deps
     uv sync
 
-    print_success "Dependencies installed successfully"
-}
-
-# Verify critical dependencies
-verify_dependencies() {
-    print_info "Verifying critical dependencies..."
-
-    # Verify ZenML
-    if uv run zenml version &> /dev/null; then
-        ZENML_VERSION=$(uv run zenml version)
-        print_success "ZenML installed: ${ZENML_VERSION}"
+    if [ $? -eq 0 ]; then
+        print_success "Environment synchronized successfully."
     else
-        print_error "ZenML installation failed!"
+        print_error "Failed to sync dependencies."
         exit 1
     fi
-
-    # Verify unsloth (required by src/main.py)
-    if uv run python -c "import unsloth; print(unsloth.__version__)" &> /dev/null; then
-        UNSLOTH_VERSION=$(uv run python -c "import unsloth; print(unsloth.__version__)")
-        print_success "Unsloth installed: ${UNSLOTH_VERSION}"
-    else
-        print_warning "Unsloth import failed. Training may not work with optimizations."
-    fi
-
-    # Verify PyTorch and CUDA
-    TORCH_INFO=$(uv run python -c "import torch; print(f'{torch.__version__} (CUDA: {torch.cuda.is_available()})')" 2>/dev/null || echo "not available")
-    print_info "PyTorch: ${TORCH_INFO}"
-
-    # Verify flash-attn on Linux (required by config.yaml: use_flash_attention_2: true)
-    if [ "$(uname)" = "Linux" ]; then
-        if uv run python -c "import flash_attn" &> /dev/null; then
-            print_success "Flash Attention 2 available"
-        else
-            print_warning "Flash Attention 2 not available. Config has use_flash_attention_2: true - training may fall back to standard attention."
-        fi
-    fi
 }
 
-# Initialize and Start ZenML Server (Local on Pod)
+verify_dependencies() {
+    print_info "Verifying critical ML components..."
+
+    # Check via the venv python
+    uv run python -c "
+import torch
+import unsloth
+import sys
+
+print(f'Python: {sys.version.split()[0]}')
+print(f'PyTorch: {torch.__version__}')
+print(f'CUDA Available: {torch.cuda.is_available()}')
+if torch.cuda.is_available():
+    print(f'CUDA Device: {torch.cuda.get_device_name(0)}')
+print(f'Unsloth: {unsloth.__version__}')
+
+try:
+    import flash_attn
+    print('Flash Attention 2: Installed')
+except ImportError:
+    print('Flash Attention 2: NOT FOUND (Check compilation)')
+"
+    print_success "Verification check passed."
+}
+
+# --- Services ---
+
 init_zenml() {
     print_info "Initializing ZenML..."
 
-    # Initialize repo if needed
-    if [ -d ".zen" ]; then
-        print_warning "ZenML already initialized in this directory"
-    else
+    if [ ! -d ".zen" ]; then
         uv run zenml init
-        print_success "ZenML initialized"
+        print_success "ZenML repository initialized."
     fi
 
-    # Start ZenML Server locally (background)
-    # Bind to 127.0.0.1 by default; use RunPod port forwarding for external access
-    print_info "Starting local ZenML Server..."
+    print_info "Starting ZenML Server (Background)..."
 
-    if pgrep -f "zenml" > /dev/null 2>&1; then
-        print_warning "ZenML Server is already running."
+    # Check if port 8237 is in use
+    if lsof -Pi :8237 -sTCP:LISTEN -t >/dev/null ; then
+        print_warning "ZenML Server appears to be running already on port 8237."
     else
-        nohup uv run zenml up --port 8237 > logs/zenml_server.log 2>&1 &
+        # Bind to 0.0.0.0 to allow external access via RunPod Proxy/TCP
+        nohup uv run zenml up --host 0.0.0.0 --port 8237 > logs/zenml_server.log 2>&1 &
 
-        # Give it a moment to start
+        # Wait for startup
         sleep 5
-        if pgrep -f "zenml" > /dev/null 2>&1; then
-            print_success "ZenML Server started on port 8237 (check logs/zenml_server.log)"
+        if lsof -Pi :8237 -sTCP:LISTEN -t >/dev/null ; then
+            print_success "ZenML Server started!"
+            echo ""
+            echo -e "${YELLOW}Accessing Dashboard:${NC}"
+            echo "1. RunPod Console -> Connect -> TCP Port Mapping"
+            echo "2. Map Internal Port 8237 to a Public Port."
+            echo "3. Or use SSH Tunnel: ssh -L 8237:localhost:8237 root@<POD_IP> -p <SSH_PORT>"
+            echo ""
         else
-            print_warning "ZenML Server may have failed to start. Check logs/zenml_server.log"
+            print_error "ZenML failed to start. Check logs/zenml_server.log"
         fi
     fi
 }
 
-# Check external services (Qdrant & Postgres)
 check_services() {
-    print_info "Checking configuration for external services..."
-
+    print_info "Checking external service connectivity..."
     load_env
 
-    # Check Qdrant using QDRANT_HOST/QDRANT_PORT (matching .env.example)
+    # Qdrant
     QDRANT_HOST="${QDRANT_HOST:-localhost}"
     QDRANT_PORT="${QDRANT_PORT:-6333}"
-    QDRANT_ENDPOINT="http://${QDRANT_HOST}:${QDRANT_PORT}"
 
-    print_info "Checking Qdrant at ${QDRANT_ENDPOINT}..."
-    if curl --max-time 5 -s "${QDRANT_ENDPOINT}/healthz" > /dev/null 2>&1; then
-        print_success "Qdrant is reachable at ${QDRANT_ENDPOINT}"
+    if curl --max-time 3 -s "http://${QDRANT_HOST}:${QDRANT_PORT}/healthz" > /dev/null; then
+        print_success "Qdrant reachable."
     else
-        print_warning "Could not reach Qdrant at ${QDRANT_ENDPOINT}. Check that Qdrant is running."
-    fi
-
-    # Check PostgreSQL
-    if [ -n "$POSTGRES_HOST" ]; then
-        print_success "PostgreSQL configured: ${POSTGRES_HOST}:${POSTGRES_PORT:-5432}/${POSTGRES_DB:-scriptguard}"
-    else
-        print_warning "POSTGRES_HOST is not set in .env"
-    fi
-
-    # Check WandB (config.yaml reports to wandb)
-    if [ -n "$WANDB_API_KEY" ]; then
-        print_success "WandB API key configured (project: ${WANDB_PROJECT:-scriptguard})"
-    else
-        print_warning "WANDB_API_KEY is not set in .env. config.yaml has report_to: [wandb] - training will fail without it."
+        print_warning "Cannot reach Qdrant at ${QDRANT_HOST}:${QDRANT_PORT}. Is it running?"
     fi
 }
 
-# Create necessary directories
 create_directories() {
-    print_info "Creating necessary directories..."
-
-    mkdir -p data
-    mkdir -p models
-    mkdir -p logs
-    mkdir -p model_checkpoints
-    mkdir -p .cache
-
-    print_success "Directories created"
+    mkdir -p data models logs model_checkpoints .cache
 }
 
-# Verify configuration
-verify_config() {
-    print_info "Verifying configuration files..."
+# --- Main Execution ---
 
-    if [ ! -f "config.yaml" ]; then
-        print_error "config.yaml not found!"
-        exit 1
-    fi
-
-    print_success "Configuration files verified"
-}
-
-# Display environment info
-display_info() {
-    load_env
-
-    QDRANT_HOST="${QDRANT_HOST:-localhost}"
-    QDRANT_PORT="${QDRANT_PORT:-6333}"
-
-    echo ""
-    echo "========================================================"
-    echo "  ScriptGuard Podrun Environment Ready!"
-    echo "========================================================"
-    echo ""
-    echo "Environment:"
-    echo "  Python:      $(python3 --version)"
-    echo "  uv:          $(uv --version)"
-    echo "  ZenML:       $(uv run zenml version 2>/dev/null || echo 'N/A')"
-    echo ""
-    echo "Services:"
-    echo "  ZenML Server: http://localhost:8237"
-    echo "  Qdrant:       http://${QDRANT_HOST}:${QDRANT_PORT}"
-    echo "  Postgres:     ${POSTGRES_HOST:-Not Set}:${POSTGRES_PORT:-5432}"
-    echo "  WandB:        ${WANDB_PROJECT:-Not Set}"
-    echo ""
-    echo "Logs:"
-    echo "  ZenML Logs:   logs/zenml_server.log"
-    echo ""
-    echo "Run training:   uv run python src/main.py"
-    echo ""
-    echo "========================================================"
-    echo ""
-}
-
-# Run training pipeline
-run_training() {
-    print_info "Starting training pipeline..."
-
-    load_env
-
-    print_info "Running training with ZenML..."
-    uv run python src/main.py
-
-    print_success "Training pipeline completed!"
-}
-
-# Main execution
 main() {
     echo "========================================================"
-    echo "  ScriptGuard Podrun Setup"
-    if [ $CHECK_ONLY -eq 1 ]; then
-        echo "  MODE: Environment check only"
-    else
-        echo "  MODE: Full setup and training"
-    fi
+    echo "   ScriptGuard RunPod Environment Setup"
     echo "========================================================"
-    echo ""
 
-    # Phase 1: Checks (always run)
-    check_python
+    # 1. Preliminaries
+    check_workspace
+    check_python_system
     check_uv
     check_cuda
-    setup_env
     create_directories
-    verify_config
+    setup_env
 
-    # Phase 2: Installation (skip in check mode)
+    # 2. Installation (Skip if check-only)
     if [ $CHECK_ONLY -eq 0 ]; then
         install_dependencies
         verify_dependencies
-        check_services
         init_zenml
-    else
-        # In check mode, only verify services connectivity
-        check_services
-        print_success "Environment check complete!"
+    fi
+
+    # 3. Final Checks
+    check_services
+
+    echo ""
+    echo "========================================================"
+    echo "   Setup Complete!"
+    echo "========================================================"
+
+    if [ $CHECK_ONLY -eq 1 ]; then
         exit 0
     fi
 
-    display_info
-
-    # Phase 3: Training
+    # 4. Run Training
     if [ $AUTO_APPROVE -eq 1 ]; then
-        print_info "Auto-approve flag detected (-y). Starting training..."
-        run_training
+        print_info "Auto-start enabled. Launching training pipeline..."
+        uv run python src/main.py
     else
-        # Interactive mode
-        read -p "Start training pipeline now? (y/n) " -n 1 -r
+        echo ""
+        read -p "Do you want to start the training pipeline now? (y/n) " -n 1 -r
         echo
         if [[ $REPLY =~ ^[Yy]$ ]]; then
-            run_training
+            print_info "Launching src/main.py..."
+            uv run python src/main.py
         else
-            print_info "Training skipped. Run manually with: uv run python src/main.py"
+            print_info "Ready. Run manually with: uv run python src/main.py"
         fi
     fi
-
-    print_success "Setup script finished!"
 }
 
-# Run main function
+# Run Main
 main
