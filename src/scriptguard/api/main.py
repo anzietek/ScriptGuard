@@ -1,8 +1,9 @@
 import time
 import uuid
 import os
+import hashlib
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, HTTPException, Request, Depends, Header, status
+from fastapi import FastAPI, HTTPException, Request, Depends, Header, status, BackgroundTasks
 from fastapi.responses import JSONResponse
 from fastapi.exception_handlers import http_exception_handler
 from scriptguard.api.schemas import (
@@ -28,7 +29,7 @@ async def lifespan(app: FastAPI):
     """
     logger.info("Starting ScriptGuard API...")
     try:
-        app_state.load_resources()
+        await app_state.load_resources()
     except Exception as e:
         logger.critical(f"Failed to initialize application state: {e}")
         # We allow the app to start so /health can report the error state
@@ -36,7 +37,7 @@ async def lifespan(app: FastAPI):
     yield
     
     logger.info("Shutting down ScriptGuard API...")
-    # Add any cleanup logic here if needed (e.g., closing DB connections)
+    await app_state.shutdown()
 
 app = FastAPI(title="ScriptGuard Inference API", version="1.0.0", lifespan=lifespan)
 
@@ -140,10 +141,17 @@ async def readiness_check():
     )
 
 @app.post("/analyze", response_model=ScriptAnalysisResponse, dependencies=[Depends(verify_api_key)])
-async def analyze_script(request: ScriptAnalysisRequest):
+async def analyze_script(
+    request: ScriptAnalysisRequest, 
+    background_tasks: BackgroundTasks,
+    x_request_id: str = Header(None),
+    x_api_key: str = Header(None)
+):
     """
     Analyze a script for malicious content.
     """
+    start_time = time.time()
+    
     if not app_state.model or not app_state.tokenizer:
         raise HTTPException(status_code=503, detail="Model not initialized")
 
@@ -212,14 +220,34 @@ async def analyze_script(request: ScriptAnalysisRequest):
         classification_result = parse_classification_output(response_text)
         
         is_malicious = classification_result == 1
+        confidence = 0.95 if classification_result != -1 else 0.5
         
         # Extract reasoning (everything after the classification)
         # This is a heuristic since the prompt asks for one word, but the model might generate more
         reasoning = response_text.split("# Analysis: The script above is classified as:")[-1].strip()
         
+        # Calculate processing time
+        processing_time_ms = (time.time() - start_time) * 1000
+        
+        # Log to DB asynchronously
+        script_hash = hashlib.sha256(request.script_content.encode()).hexdigest()
+        api_key_prefix = x_api_key[:4] if x_api_key else "none"
+        
+        log_data = {
+            "request_id": x_request_id or str(uuid.uuid4()),
+            "script_hash": script_hash,
+            "is_malicious": is_malicious,
+            "confidence": confidence,
+            "model_version": app_state.config.training.model_id if app_state.config else "unknown",
+            "api_key_prefix": api_key_prefix,
+            "processing_time_ms": processing_time_ms
+        }
+        
+        background_tasks.add_task(app_state.log_scan_result, log_data)
+        
         return ScriptAnalysisResponse(
             is_malicious=is_malicious,
-            confidence=0.95 if classification_result != -1 else 0.5, # Mocked confidence based on clarity of output
+            confidence=confidence,
             reasoning=reasoning,
             related_cves=related_cves
         )

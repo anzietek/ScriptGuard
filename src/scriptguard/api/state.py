@@ -5,8 +5,10 @@ Handles lifecycle of global resources like models and database connections.
 
 import os
 import torch
-from typing import Optional
-from transformers import AutoTokenizer, AutoModelForCausalLM, AutoModelForSequenceClassification
+import asyncpg
+import hashlib
+from typing import Optional, Dict, Any
+from transformers import AutoTokenizer, AutoModelForCausalLM
 from peft import PeftModel
 from scriptguard.rag.qdrant_store import QdrantStore, bootstrap_cve_data
 from scriptguard.utils.logger import logger
@@ -22,6 +24,7 @@ class AppState:
         self.model = None
         self.tokenizer = None
         self.rag_store: Optional[QdrantStore] = None
+        self.db_pool: Optional[asyncpg.Pool] = None
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
 
     def load_config(self, config_path: str = "config.yaml"):
@@ -31,29 +34,26 @@ class AppState:
             logger.info(f"Configuration loaded from {config_path}")
         except Exception as e:
             logger.error(f"Failed to load config: {e}")
-            # Fallback or re-raise depending on strictness requirements
             raise
 
-    def load_resources(self):
-        """Load model, tokenizer, and RAG store."""
+    async def load_resources(self):
+        """Load model, tokenizer, RAG store, and DB connection."""
         if not self.config:
             self.load_config()
 
         self._load_model()
         self._load_rag()
+        await self._init_db()
+
+    async def shutdown(self):
+        """Cleanup resources."""
+        if self.db_pool:
+            await self.db_pool.close()
+            logger.info("Database connection pool closed")
 
     def _load_model(self):
         """Load the model and tokenizer."""
-        # Use config values if available, else defaults
         model_id = self.config.training.model_id if self.config else "bigcode/starcoder2-3b"
-        # For inference, we might want a different model or adapter path
-        # Assuming adapter path is relative to where we run or defined in env/config
-        # The original code used env vars, let's respect config but allow env overrides if needed
-        
-        # Note: The original code loaded a CausalLM. 
-        # The review suggested SequenceClassification for deterministic output.
-        # For now, we will stick to CausalLM as per current implementation but structure it better.
-        # Switching to SequenceClassification requires a model trained for that head.
         
         logger.info(f"Loading model: {model_id} on {self.device}")
         
@@ -70,7 +70,6 @@ class AppState:
                 low_cpu_mem_usage=True
             )
             
-            # Check for adapter
             adapter_path = os.getenv("ADAPTER_PATH", "./model_checkpoints/final_adapter")
             if os.path.exists(adapter_path):
                 self.model = PeftModel.from_pretrained(base_model, adapter_path)
@@ -118,6 +117,75 @@ class AppState:
             logger.error(f"❌ Qdrant initialization failed: {e}")
             logger.warning("API will run without RAG support")
             self.rag_store = None
+
+    async def _init_db(self):
+        """Initialize PostgreSQL connection pool and schema."""
+        if not self.config:
+            return
+
+        db_cfg = self.config.database.postgresql
+        dsn = f"postgresql://{db_cfg.user}:{db_cfg.password}@{db_cfg.host}:{db_cfg.port}/{db_cfg.database}"
+        
+        try:
+            self.db_pool = await asyncpg.create_pool(
+                dsn=dsn,
+                min_size=db_cfg.min_connections,
+                max_size=db_cfg.max_connections,
+                timeout=db_cfg.connection_timeout
+            )
+            
+            # Create history table if not exists
+            async with self.db_pool.acquire() as conn:
+                await conn.execute("""
+                    CREATE TABLE IF NOT EXISTS scan_history (
+                        id SERIAL PRIMARY KEY,
+                        request_id UUID NOT NULL,
+                        timestamp TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+                        script_hash VARCHAR(64) NOT NULL,
+                        is_malicious BOOLEAN NOT NULL,
+                        confidence FLOAT,
+                        model_version VARCHAR(50),
+                        api_key_prefix VARCHAR(10),
+                        processing_time_ms FLOAT
+                    );
+                    CREATE INDEX IF NOT EXISTS idx_scan_history_hash ON scan_history(script_hash);
+                    CREATE INDEX IF NOT EXISTS idx_scan_history_timestamp ON scan_history(timestamp);
+                """)
+            
+            logger.info("✅ PostgreSQL connected and schema initialized")
+            
+        except Exception as e:
+            logger.error(f"❌ PostgreSQL initialization failed: {e}")
+            logger.warning("API will run without DB logging")
+            self.db_pool = None
+
+    async def log_scan_result(self, data: Dict[str, Any]):
+        """
+        Log scan result to database asynchronously.
+        
+        Args:
+            data: Dictionary containing scan metadata
+        """
+        if not self.db_pool:
+            return
+
+        try:
+            async with self.db_pool.acquire() as conn:
+                await conn.execute("""
+                    INSERT INTO scan_history 
+                    (request_id, script_hash, is_malicious, confidence, model_version, api_key_prefix, processing_time_ms)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7)
+                """,
+                data['request_id'],
+                data['script_hash'],
+                data['is_malicious'],
+                data['confidence'],
+                data['model_version'],
+                data['api_key_prefix'],
+                data['processing_time_ms']
+                )
+        except Exception as e:
+            logger.error(f"Failed to log scan result: {e}")
 
 # Global instance
 app_state = AppState()
