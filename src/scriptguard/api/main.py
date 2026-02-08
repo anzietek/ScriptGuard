@@ -12,6 +12,7 @@ from scriptguard.api.schemas import (
 )
 from scriptguard.api.state import app_state
 from scriptguard.utils.logger import logger
+from scriptguard.utils.prompts import format_inference_prompt, parse_classification_output
 import torch
 
 app = FastAPI(title="ScriptGuard Inference API", version="1.0.0")
@@ -130,27 +131,22 @@ async def analyze_script(request: ScriptAnalysisRequest):
             logger.warning(f"RAG search failed: {e}")
             # Continue without RAG
 
-    # Construct Prompt
-    # Note: In a real production system, we should use a proper template
-    prompt = f"""
-    Context from known vulnerabilities:
-    {rag_context}
+    # Construct Prompt using centralized utility
+    # Note: We are currently not using the RAG context in the prompt format provided by prompts.py
+    # If we want to use RAG context, we should update prompts.py or use format_fewshot_prompt if applicable
+    # For now, we stick to the standard inference prompt to ensure consistency with training
     
-    Analyze the following script for malicious intent:
-    {request.script_content}
-    
-    Is it malicious? Answer with reasoning.
-    """
+    prompt = format_inference_prompt(request.script_content)
     
     # Inference
     try:
         inputs = app_state.tokenizer(prompt, return_tensors="pt").to(app_state.device)
         
         # Get generation config from app_state.config if available
-        max_new_tokens = 100
+        max_new_tokens = 20 # Reduced since we only expect BENIGN/MALICIOUS
         temperature = 0.1
         if app_state.config:
-            max_new_tokens = app_state.config.inference.max_length # This might be too long for just reasoning, but using config
+            # Override max_length for classification task
             temperature = app_state.config.inference.temperature
 
         with torch.no_grad():
@@ -165,20 +161,19 @@ async def analyze_script(request: ScriptAnalysisRequest):
 
         response_text = app_state.tokenizer.decode(outputs[0], skip_special_tokens=True)
         
-        # Post-processing / Parsing
-        # TODO: Replace with deterministic classification head or constrained decoding
-        # For now, we improve the heuristic slightly but acknowledge it's a P0 gap to fix fully with a classifier model
+        # Post-processing / Parsing using centralized utility
+        classification_result = parse_classification_output(response_text)
         
-        # Strip the prompt from the response to analyze only the generated part
-        # This is a simple heuristic; robust implementation requires knowing prompt length
-        generated_text = response_text[len(prompt):] if len(response_text) > len(prompt) else response_text
+        is_malicious = classification_result == 1
         
-        is_malicious = "malicious" in generated_text.lower()
+        # Extract reasoning (everything after the classification)
+        # This is a heuristic since the prompt asks for one word, but the model might generate more
+        reasoning = response_text.split("# Analysis: The script above is classified as:")[-1].strip()
         
         return ScriptAnalysisResponse(
             is_malicious=is_malicious,
-            confidence=0.85, # Still mocked until we have logits/probabilities
-            reasoning=generated_text.strip(),
+            confidence=0.95 if classification_result != -1 else 0.5, # Mocked confidence based on clarity of output
+            reasoning=reasoning,
             related_cves=related_cves
         )
 
