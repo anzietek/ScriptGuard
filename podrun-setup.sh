@@ -1,6 +1,6 @@
 #!/bin/bash
 #
-# ScriptGuard RunPod Setup Script (High Security Version)
+# ScriptGuard RunPod Setup Script (Fixed Paths)
 #
 # Features:
 # - Auto-installs 'uv' and Python 3.12
@@ -13,6 +13,7 @@
 set -e  # Exit on error
 
 # --- Global Configuration ---
+# Fix for UV path: Add both .local/bin and .cargo/bin just in case
 export PATH="$HOME/.local/bin:$HOME/.cargo/bin:$PATH"
 
 # Tunnel Configuration
@@ -77,8 +78,9 @@ check_uv() {
     if ! command -v uv &> /dev/null; then
         print_warning "Installing uv..."
         curl -LsSf https://astral.sh/uv/install.sh | sh
-        source $HOME/.cargo/env
-        export PATH="$HOME/.cargo/bin:$PATH"
+
+        # FIX: Refresh PATH to include the new installation
+        export PATH="$HOME/.local/bin:$HOME/.cargo/bin:$PATH"
     fi
     print_success "uv is ready: $(uv --version)"
 }
@@ -130,11 +132,6 @@ setup_tunnel() {
     print_info "Establishing tunnel..."
 
     # 5. Start SSH in background
-    # -4: Force IPv4
-    # -f: Go to background
-    # -N: Do not execute remote command
-    # -L: Local port forwarding
-    # -o StrictHostKeyChecking=no: Auto-accept fingerprint
     ssh -4 -f -N \
         -o StrictHostKeyChecking=no \
         -o ConnectTimeout=10 \
@@ -214,7 +211,7 @@ create_directories() {
 
 main() {
     echo "========================================================"
-    echo "   ScriptGuard RunPod Setup (Secure Tunnel)"
+    echo "   ScriptGuard RunPod Setup (Secure Tunnel - Fixed)"
     echo "========================================================"
 
     check_workspace
@@ -248,13 +245,11 @@ main() {
 
     if [ $AUTO_APPROVE -eq 1 ]; then
         print_info "Auto-start enabled. Launching training pipeline..."
-        # Reload env vars just in case
         load_env
         uv run python src/main.py
     else
         read -p "Have you updated .env and want to start training now? (y/n) " -n 1 -r; echo
         if [[ $REPLY =~ ^[Yy]$ ]]; then
-            # Reload env vars to ensure shell has them if needed
             load_env
             print_info "Starting pipeline..."
             uv run python src/main.py
