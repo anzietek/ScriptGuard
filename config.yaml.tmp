@@ -1,0 +1,376 @@
+# ScriptGuard Configuration
+# Configuration for data sources, training, and database
+
+# Pipeline Configuration
+pipeline:
+  enable_cache: false  # Set to true to use cached results from previous runs
+  cache_steps:         # Individual step cache control (overrides enable_cache if specified)
+    advanced_data_ingestion: false  # Always fetch fresh data
+    validate_samples: true           # Can cache validation
+    augment_malicious_samples: true  # Can cache augmentation
+    train_model: false               # Always train fresh model
+
+# API Keys (loaded from environment variables)
+api_keys:
+  github_token: ${GITHUB_API_TOKEN}
+  nvd_api_key: ${NVD_API_KEY}
+  malwarebazaar_api_key: ${MALWAREBAZAAR_API_KEY}
+  huggingface_token: ${HUGGINGFACE_TOKEN}
+
+# Data Sources Configuration
+data_sources:
+  github:
+    enabled: true
+    fetch_malicious: true
+    fetch_benign: true
+    malicious_keywords:
+      - "reverse-shell python"
+      - "keylogger python"
+      - "ransomware python"
+      - "backdoor python"
+      - "credential stealer python"
+      - "port scanner python"
+      - "exploit python"
+      - "payload python"
+    benign_repos:
+      - "django/django"
+      - "pallets/flask"
+      - "psf/requests"
+      - "scikit-learn/scikit-learn"
+      - "pandas-dev/pandas"
+      - "pytorch/pytorch"
+    max_samples_per_keyword: 100  # Increased from 20 → 5x more samples
+    max_files_per_repo: 200       # Increased from 50 → 4x more files
+
+  malwarebazaar:
+    enabled: true
+    tags:
+      - "python"
+      - "script"
+      - "ransomware"
+      - "backdoor"
+      - "stealer"
+    max_samples: 500
+
+  vxunderground:
+    enabled: true
+    script_types:
+      - ".py"
+      - ".ps1"
+      - ".js"
+      - ".vbs"
+    max_samples: 500
+
+  thezoo:
+    enabled: true
+    script_types:
+      - ".py"
+      - ".ps1"
+      - ".js"
+      - ".vbs"
+      - ".sh"
+      - ".bat"
+      - ".cmd"
+    max_samples: 500
+
+  huggingface:
+    enabled: false  # Disabled - the-stack-dedup is gated and requires special access
+    datasets:
+      - "codeparrot/github-code"  # This one might work
+    max_samples: 10000
+
+  cve_feeds:
+    enabled: true
+    days_back: 119  # NVD API limit - max 120 days recommended
+    keywords:
+      - "script"
+      - "code execution"
+      - "remote code execution"
+      - "command injection"
+      - "injection"
+      - "arbitrary code"
+      - "code injection"
+      - "shell"
+      - "python"
+      - "vulnerability"
+      - "malicious"
+
+  # Additional HuggingFace Datasets (REAL datasets that exist)
+  additional_hf:
+    enabled: true  # ✅ Now using REAL datasets from HuggingFace
+    max_samples_per_dataset: 50
+
+    # Malware samples datasets (tried in order, first that works is used)
+    malware_datasets:
+      - naorm/malware-text-db                           # Text-based malware
+      - rr4433/Powershell_Malware_Detection_Dataset     # Script malware
+      - pacificsun/Malware_10k                          # 10k samples
+      - cw1521/ember2018-malware-v2                     # EMBER dataset
+
+    # Classification datasets (tried in order)
+    classification_datasets:
+      - deepcode-ai/Malware-Prediction
+      - PurCL/malware-top-100-labels                    # Top 100 with labels
+      - RanggaAS/malware_detection
+      - pacificsun/microsoft_malware                    # Microsoft dataset
+
+    # Malicious URL datasets (converted to C2 scripts, tried in order)
+    url_datasets:
+      - joshtobin/malicious_urls                        # Dedicated malicious URLs
+      - JorgeGMM/malicious_urls
+      - stanpony/phishing_urls
+      - pirocheto/phishing-url
+      - semihGuner2002/PhishingURLsDataset
+      - Bilic/phishing
+
+# Database Configuration (PostgreSQL)
+database:
+  type: "postgresql"  # or "sqlite" for development
+  postgresql:
+    host: ${POSTGRES_HOST:-localhost}
+    port: ${POSTGRES_PORT:-5432}
+    database: ${POSTGRES_DB:-scriptguard}
+    user: ${POSTGRES_USER:-scriptguard}
+    password: ${POSTGRES_PASSWORD:-scriptguard}
+    min_connections: 1
+    max_connections: 10
+  sqlite:
+    path: "./data/scriptguard.db"  # Fallback for development
+  enable_versioning: true
+  auto_backup: false
+
+# Qdrant Configuration
+qdrant:
+  host: ${QDRANT_HOST:-localhost}  # Use QDRANT_HOST env variable, default: localhost
+  port: ${QDRANT_PORT:-6333}  # Use QDRANT_PORT env variable, default: 6333
+  collection_name: "malware_knowledge"
+  embedding_model: "all-MiniLM-L6-v2"
+  api_key: ${QDRANT_API_KEY:-}  # Use QDRANT_API_KEY env variable (empty if not set)
+  use_https: false  # Set to true for Qdrant Cloud or HTTPS connections
+
+# Code Embedding Configuration (for Few-Shot RAG)
+code_embedding:
+  model: "microsoft/unixcoder-base"  # Dedicated code embedding model
+  # Alternative: "Salesforce/codet5p-110m-embedding"
+  # Note: These models are specifically trained for code similarity
+
+  # Few-Shot RAG Configuration (P1.1/P1.5 fix)
+  fewshot:
+    enabled: true                    # Enable/disable few-shot RAG without code changes
+    k: 3                              # Number of similar examples to retrieve
+    balance_labels: true              # Ensure mix of malicious/benign examples
+    score_threshold_mode: "default"  # Options: "default", "strict", "lenient"
+    score_threshold: null             # Explicit threshold (null = use score_thresholds[model][mode])
+    max_context_length: 300           # Maximum length for each reference example
+    max_code_length: 500              # Maximum length for target code
+    aggregate_chunks: true            # Aggregate chunk results to document level
+    enable_reranking: true            # Enable reranking for improved relevance
+
+  # Pooling Strategy Configuration
+  pooling_strategy: "mean_pooling"  # Options: "cls", "mean_pooling", "pooler_output", "sentence_transformer"
+  # - cls: Use [CLS] token from last_hidden_state
+  # - mean_pooling: Mean pooling with attention mask (RECOMMENDED for code)
+  # - pooler_output: Use model's pooler_output (if available)
+  # - sentence_transformer: Use SentenceTransformer.encode() directly
+
+  # Normalization and Chunking
+  normalize: true  # Apply L2 normalization to embeddings (CRITICAL for stable thresholds)
+  enable_chunking: true  # Enable sliding window chunking for long code files
+  max_code_length: 512  # Maximum tokens per chunk
+  chunk_overlap: 64  # Overlap between consecutive chunks (MINIMUM 10-15% recommended)
+
+  # Vectorization Limits (NEW - Control vectorization scope)
+  max_samples_to_vectorize: null  # Optional limit (null = vectorize all samples, or set number for testing)
+
+  # Code Sanitization (NEW - Ingestion Pipeline Quality Control)
+  sanitization:
+    enabled: true  # Enable sanitization before embedding
+    min_entropy: 3.5  # Minimum Shannon entropy (bits/char) - filters low-quality code
+    max_line_length: 500  # Detect minified code
+    min_valid_lines: 3  # Minimum non-empty lines required
+    max_empty_line_ratio: 0.5  # Maximum ratio of empty lines
+    remove_license_headers: true  # Strip copyright/license boilerplate
+    strict_mode: false  # Reject samples with invalid syntax (AST validation)
+
+  # Context Injection (NEW - Metadata Enrichment)
+  context_injection:
+    enabled: true  # Inject metadata into content before embedding
+    injection_format: "structured"  # Options: "structured", "inline", "minimal"
+    # "structured" creates formal header with all metadata
+    # "inline" adds compact inline comment
+    # "minimal" only adds filename
+
+  # Batch processing
+  batch_size: 100
+
+  # Search and Aggregation
+  aggregate_chunks: true  # Aggregate chunk results to document level
+  aggregation_strategy: "max_score"  # Options: "max_score", "average_top_n", "weighted_avg"
+
+  # Score Threshold Configuration (Model-Specific Calibration)
+  # These thresholds are calibrated per model for optimal retrieval quality
+  score_thresholds:
+    "microsoft/unixcoder-base":
+      default: 0.35  # Calibrated for mean_pooling + L2 normalization
+      strict: 0.50   # High precision mode
+      lenient: 0.20  # High recall mode
+    "Salesforce/codet5p-110m-embedding":
+      default: 0.30
+      strict: 0.45
+      lenient: 0.15
+    # Add more models as needed
+
+  # Graceful Fallback Configuration
+  graceful_fallback:
+    enabled: true  # Always guarantee exactly k results
+    fallback_threshold: 0.0  # Minimum threshold for fallback results (effectively no threshold)
+    ensure_label_balance: true  # Prioritize label balance when filling gaps
+    min_per_label: 1  # Minimum number of results per label (when balance_labels=True)
+
+  # Reranking Configuration (P1 Priority)
+  reranking:
+    enabled: true  # Enable two-stage retrieval
+    strategy: "hybrid"  # Options: "heuristic", "cross_encoder", "hybrid"
+
+    # Heuristic-based Reranking
+    heuristic:
+      enabled: true
+      # Security-relevant patterns (boost score)
+      security_keywords:
+        - "os.system"
+        - "subprocess"
+        - "exec"
+        - "eval"
+        - "compile"
+        - "__import__"
+        - "socket"
+        - "requests.get"
+        - "urllib"
+        - "pickle.loads"
+        - "base64.b64decode"
+        - "cryptography"
+        - "pycryptodome"
+        - "keylogger"
+        - "reverse_shell"
+        - "backdoor"
+        - "payload"
+        - "exploit"
+      boost_factor: 1.2  # Multiply score by this factor if keywords present
+
+      # Diversity penalty (reduce score for near-duplicates)
+      diversity_penalty: 0.9  # Penalty for high similarity to already selected results
+      similarity_threshold: 0.95  # Threshold for considering results as near-duplicates
+
+    # Cross-Encoder Reranking (Optional - requires additional model)
+    cross_encoder:
+      enabled: false  # Set to true to use cross-encoder (requires more compute)
+      model: "cross-encoder/ms-marco-MiniLM-L-6-v2"  # Lightweight cross-encoder
+      # For code-specific: "microsoft/codebert-base" with custom head
+      top_k_to_rerank: 20  # Rerank top-k candidates from vector search
+      batch_size: 8
+
+# Data Validation Configuration
+validation:
+  validate_syntax: true
+  skip_syntax_errors: true
+  min_length: 50
+  max_length: 50000
+  min_code_lines: 5
+  max_comment_ratio: 0.5
+
+# Data Augmentation Configuration
+augmentation:
+  enabled: true
+  variants_per_sample: 5  # Increased from 2 → more malware variations
+  techniques:
+    - "base64"
+    - "hex"
+    - "rename_vars"
+    - "split_strings"
+  balance_dataset: true
+  target_balance_ratio: 1.0
+  balance_method: "oversample"  # Changed from undersample → keeps all data
+
+  # Qdrant CVE Pattern Augmentation
+  use_qdrant_patterns: true  # Enable augmentation with CVE patterns from Qdrant
+  qdrant_format_style: "detailed"  # Options: "detailed", "pattern_only", "description_only"
+
+# Feature Extraction Configuration
+features:
+  extract_ast: true
+  extract_entropy: true
+  extract_api_patterns: true
+  extract_string_features: true
+
+# Training Configuration
+training:
+  model_id: "bigcode/starcoder2-3b"
+  output_dir: "./models/scriptguard-model"
+
+  # When the model output is unclear/malformed during evaluation:
+  # - "unknown": count as format error (recommended default)
+  # - "benign": fail-open
+  # - "malicious": fail-secure
+  eval_default_on_unclear: "unknown"
+
+  # QLoRA Configuration
+  use_qlora: true
+  lora_r: 16
+  lora_alpha: 32
+  lora_dropout: 0.05
+  target_modules:
+    - "q_proj"
+    - "v_proj"
+    - "k_proj"
+    - "o_proj"
+
+  # Training Hyperparameters
+  batch_size: 2  # Reduced for 4GB VRAM
+  gradient_accumulation_steps: 8  # Increased to maintain effective batch size of 16
+  num_epochs: 5  # Increased from 3 → model needs more time to learn
+  learning_rate: 0.0001  # Decreased from 0.0002 → more stable training
+  weight_decay: 0.01
+  warmup_steps: 200  # Increased from 100 → longer warmup
+  lr_scheduler_type: "cosine"  # NEW → better LR decay
+  max_seq_length: 2048
+
+  # Optimization
+  fp16: false
+  bf16: true  # Better for modern GPUs
+  optim: "paged_adamw_8bit"
+
+  # Tokenization
+  tokenizer_max_length: 512
+  tokenizer_padding: "max_length"  # or "dynamic" for DataCollatorWithPadding
+  tokenizer_truncation: true
+
+  # Evaluation
+  evaluation_strategy: "steps"
+  eval_steps: 100
+  save_steps: 500
+  logging_steps: 2
+  test_split_size: 0.1  # 10% for test set
+
+  # Early Stopping
+  early_stopping: true
+  early_stopping_patience: 5 # Increased from 3 → more patience
+  # Model Evaluation
+  eval_max_new_tokens: 3  # Reduced from 20 → only allow 1-3 tokens (one word: MALICIOUS or BENIGN)
+  eval_temperature: 0.0  # Reduced from 0.1 → fully deterministic
+  eval_batch_size: 1
+  eval_max_code_length: 500
+
+# Inference Configuration
+inference:
+  host: "0.0.0.0"
+  port: 8000
+  max_length: 2048
+  temperature: 0.1
+  top_p: 0.95
+  device: "cuda"  # or "cpu"
+
+# Logging Configuration
+logging:
+  level: "INFO"
+  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+  file: "./logs/scriptguard.log"

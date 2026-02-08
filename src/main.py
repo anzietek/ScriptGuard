@@ -1,6 +1,16 @@
 import os
 import sys
 
+# CRITICAL: Monkey-patch torch to add missing int1/int2 dtypes BEFORE any imports
+# torchao >= 0.7 requires torch.int1 which was added in PyTorch 2.6+
+# We're on PyTorch 2.5.1 for unsloth compatibility, so we fake these dtypes
+import torch
+if not hasattr(torch, 'int1'):
+    # Create fake dtypes that won't actually be used
+    torch.int1 = torch.int8  # type: ignore
+    torch.int2 = torch.int8  # type: ignore
+    torch.int4 = torch.int8  # type: ignore
+
 # CRITICAL: Import Windows Triton fix FIRST - before any other imports
 # This monkey-patches torch.compile to prevent Triton CUDA version errors
 if sys.platform == "win32":
@@ -33,10 +43,6 @@ if env_dev:
 # Disable transformers lazy loading (fixes Python 3.13 Ctrl+C issues)
 os.environ["TRANSFORMERS_NO_ADVISORY_WARNINGS"] = "1"
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
-
-# CRITICAL: Block torchao import in transformers (incompatible with PyTorch 2.5.1)
-# torchao >= 0.7 requires torch.int1 which was added in PyTorch 2.6+
-os.environ["TRANSFORMERS_NO_TORCHAO"] = "1"
 
 # Configure torch._dynamo AFTER env is loaded but BEFORE importing torch libraries
 if sys.platform == "win32":

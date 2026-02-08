@@ -1,0 +1,559 @@
+# ScriptGuard Configuration — RunPod Optimized (RTX 3090/4090/A5000 24GB VRAM)
+# Enhanced with stability, monitoring, and preemption protection
+
+# ============================================================================
+# PIPELINE CONFIGURATION
+# ============================================================================
+pipeline:
+  enable_cache: true
+  cache_ttl_hours: 24
+  cache_key_includes_version: true
+  cache_invalidation_on_config_change: true
+  
+  cache_steps:
+    advanced_data_ingestion: true
+    validate_samples: true
+    augment_malicious_samples: true
+    train_model: false  # Always train fresh
+
+# ============================================================================
+# API KEYS & NETWORK CONFIGURATION
+# ============================================================================
+api_keys:
+  github_token: ${GITHUB_API_TOKEN}
+  nvd_api_key: ${NVD_API_KEY}
+  malwarebazaar_api_key: ${MALWAREBAZAAR_API_KEY}
+  huggingface_token: ${HUGGINGFACE_TOKEN}
+  
+  # Network resilience
+  max_retries: 3
+  retry_backoff_factor: 2
+  timeout_seconds: 30
+  connection_pool_size: 10
+
+# ============================================================================
+# DATA SOURCES CONFIGURATION
+# ============================================================================
+data_sources:
+  github:
+    enabled: true
+    fetch_malicious: true
+    fetch_benign: true
+    timeout: 30
+    max_retries: 3
+    
+    malicious_keywords:
+      - "reverse-shell python"
+      - "keylogger python"
+      - "ransomware python"
+      - "backdoor python"
+      - "credential stealer python"
+      - "port scanner python"
+      - "exploit python"
+      - "payload python"
+    
+    benign_repos:
+      - "django/django"
+      - "pallets/flask"
+      - "psf/requests"
+      - "scikit-learn/scikit-learn"
+      - "pandas-dev/pandas"
+      - "pytorch/pytorch"
+    
+    max_samples_per_keyword: 200
+    max_files_per_repo: 500
+
+  malwarebazaar:
+    enabled: true
+    timeout: 60
+    max_retries: 3
+    tags:
+      - "python"
+      - "script"
+      - "ransomware"
+      - "backdoor"
+      - "stealer"
+    max_samples: 1000
+
+  vxunderground:
+    enabled: true
+    timeout: 60
+    max_retries: 3
+    script_types:
+      - ".py"
+      - ".ps1"
+      - ".js"
+      - ".vbs"
+    max_samples: 1000
+
+  thezoo:
+    enabled: true
+    timeout: 60
+    max_retries: 3
+    script_types:
+      - ".py"
+      - ".ps1"
+      - ".js"
+      - ".vbs"
+      - ".sh"
+      - ".bat"
+      - ".cmd"
+    max_samples: 1000
+
+  huggingface:
+    enabled: false  # Gated dataset
+    timeout: 120
+    max_retries: 3
+    datasets:
+      - "codeparrot/github-code"
+    max_samples: 20000
+
+  cve_feeds:
+    enabled: true
+    timeout: 45
+    max_retries: 3
+    days_back: 119
+    keywords:
+      - "script"
+      - "code execution"
+      - "remote code execution"
+      - "command injection"
+      - "injection"
+      - "arbitrary code"
+      - "code injection"
+      - "shell"
+      - "python"
+      - "vulnerability"
+      - "malicious"
+
+  additional_hf:
+    enabled: true
+    timeout: 120
+    max_retries: 3
+    max_samples_per_dataset: 200
+    
+    malware_datasets:
+      - naorm/malware-text-db
+      - rr4433/Powershell_Malware_Detection_Dataset
+      - pacificsun/Malware_10k
+      - cw1521/ember2018-malware-v2
+    
+    classification_datasets:
+      - deepcode-ai/Malware-Prediction
+      - PurCL/malware-top-100-labels
+      - RanggaAS/malware_detection
+      - pacificsun/microsoft_malware
+    
+    url_datasets:
+      - joshtobin/malicious_urls
+      - JorgeGMM/malicious_urls
+      - stanpony/phishing_urls
+      - pirocheto/phishing-url
+      - semihGuner2002/PhishingURLsDataset
+      - Bilic/phishing
+
+# ============================================================================
+# DATABASE CONFIGURATION
+# ============================================================================
+database:
+  type: "postgresql"
+  
+  postgresql:
+    host: ${POSTGRES_HOST:-localhost}
+    port: ${POSTGRES_PORT:-5432}
+    database: ${POSTGRES_DB:-scriptguard}
+    user: ${POSTGRES_USER:-scriptguard}
+    password: ${POSTGRES_PASSWORD:-scriptguard}
+    min_connections: 1
+    max_connections: 10
+    connection_timeout: 30
+    command_timeout: 60
+  
+  enable_versioning: true
+  auto_backup: false
+
+# ============================================================================
+# QDRANT CONFIGURATION
+# ============================================================================
+qdrant:
+  host: ${QDRANT_HOST:-localhost}
+  port: ${QDRANT_PORT:-6333}
+  collection_name: "malware_knowledge"
+  embedding_model: "all-MiniLM-L6-v2"
+  api_key: ${QDRANT_API_KEY:-}
+  use_https: false
+  timeout: 30
+  grpc_port: ${QDRANT_GRPC_PORT:-6334}
+  prefer_grpc: true
+
+# ============================================================================
+# CODE EMBEDDING CONFIGURATION
+# ============================================================================
+code_embedding:
+  model: "microsoft/unixcoder-base"
+  cache_dir: ${HF_CACHE_DIR:-/workspace/cache}
+
+  # Few-Shot RAG Configuration
+  fewshot:
+    enabled: true
+    k: 3
+    balance_labels: true
+    score_threshold_mode: "default"
+    score_threshold: null
+    max_context_length: 300
+    max_code_length: 500
+    aggregate_chunks: true
+    enable_reranking: true
+
+  # Pooling Strategy
+  pooling_strategy: "mean_pooling"
+  
+  # Normalization and Chunking
+  normalize: true
+  enable_chunking: true
+  max_code_length: 512
+  chunk_overlap: 64
+  
+  # Vectorization
+  max_samples_to_vectorize: null
+  batch_size: 256
+
+  # Code Sanitization
+  sanitization:
+    enabled: true
+    min_entropy: 3.5
+    max_line_length: 500
+    min_valid_lines: 3
+    max_empty_line_ratio: 0.5
+    remove_license_headers: true
+    strict_mode: false
+
+  # Context Injection
+  context_injection:
+    enabled: true
+    injection_format: "structured"
+
+  # Aggregation
+  aggregate_chunks: true
+  aggregation_strategy: "max_score"
+
+  # Score Thresholds
+  score_thresholds:
+    "microsoft/unixcoder-base":
+      default: 0.35
+      strict: 0.50
+      lenient: 0.20
+    "Salesforce/codet5p-110m-embedding":
+      default: 0.30
+      strict: 0.45
+      lenient: 0.15
+
+  # Graceful Fallback
+  graceful_fallback:
+    enabled: true
+    fallback_threshold: 0.0
+    ensure_label_balance: true
+    min_per_label: 1
+
+  # Reranking Configuration
+  reranking:
+    enabled: true
+    strategy: "hybrid"
+    
+    heuristic:
+      enabled: true
+      security_keywords:
+        - "os.system"
+        - "subprocess"
+        - "exec"
+        - "eval"
+        - "compile"
+        - "__import__"
+        - "socket"
+        - "requests.get"
+        - "urllib"
+        - "pickle.loads"
+        - "base64.b64decode"
+        - "cryptography"
+        - "pycryptodome"
+        - "keylogger"
+        - "reverse_shell"
+        - "backdoor"
+        - "payload"
+        - "exploit"
+      boost_factor: 1.2
+      diversity_penalty: 0.9
+      similarity_threshold: 0.95
+    
+    cross_encoder:
+      enabled: true
+      model: "cross-encoder/ms-marco-MiniLM-L-6-v2"
+      top_k_to_rerank: 30
+      batch_size: 16
+
+# ============================================================================
+# DATA VALIDATION CONFIGURATION
+# ============================================================================
+validation:
+  validate_syntax: true
+  skip_syntax_errors: true
+  min_length: 50
+  max_length: 100000
+  min_code_lines: 5
+  max_comment_ratio: 0.5
+
+# ============================================================================
+# DATA AUGMENTATION CONFIGURATION
+# ============================================================================
+augmentation:
+  enabled: true
+  variants_per_sample: 3
+  techniques:
+    - "base64"
+    - "hex"
+    - "rename_vars"
+    - "split_strings"
+  balance_dataset: true
+  target_balance_ratio: 1.0
+  balance_method: "oversample"
+  
+  # Qdrant CVE Pattern Augmentation
+  use_qdrant_patterns: true
+  qdrant_format_style: "detailed"
+
+# ============================================================================
+# FEATURE EXTRACTION CONFIGURATION
+# ============================================================================
+features:
+  extract_ast: true
+  extract_entropy: true
+  extract_api_patterns: true
+  extract_string_features: true
+
+# ============================================================================
+# TRAINING CONFIGURATION — RunPod Optimized
+# ============================================================================
+training:
+  model_id: "bigcode/starcoder2-3b"
+  
+  # Paths with environment variable support
+  output_dir: ${MODEL_OUTPUT_DIR:-/workspace/models/scriptguard-model}
+  cache_dir: ${HF_CACHE_DIR:-/workspace/cache}
+  logging_dir: ${TENSORBOARD_DIR:-/workspace/logs/tensorboard}
+  
+  # GPU Configuration & Memory Management
+  device: ${DEVICE:-cuda}  # Auto-fallback to CPU if CUDA unavailable
+  max_memory_mb: 22000  # Reserve 2GB for system overhead
+  gradient_checkpointing: true  # Reduce memory footprint
+  
+  # Flash Attention 2 (2x faster, 50% less memory on Ampere/Ada)
+  use_flash_attention_2: true
+  attn_implementation: "flash_attention_2"
+  
+  # Disk Space Management
+  save_total_limit: 2  # Keep only 2 checkpoints (aggressive cleanup)
+  cleanup_old_checkpoints: true
+  
+  # RunPod Preemption Safety
+  save_steps: 50  # Frequent checkpoints (every 50 steps)
+  save_on_each_node: true
+  resume_from_checkpoint: ${RESUME_CHECKPOINT:-latest}
+  load_best_model_at_end: true
+  
+  # Auto Batch Size Detection
+  auto_find_batch_size: true
+  per_device_train_batch_size: ${BATCH_SIZE:-16}
+  per_device_eval_batch_size: ${EVAL_BATCH_SIZE:-8}
+  
+  # Default on unclear prediction
+  eval_default_on_unclear: "unknown"
+  
+  # QLoRA Configuration
+  use_qlora: true
+  lora_r: 32
+  lora_alpha: 64
+  lora_dropout: 0.05
+  target_modules:
+    - "q_proj"
+    - "v_proj"
+    - "k_proj"
+    - "o_proj"
+    - "gate_proj"
+    - "up_proj"
+    - "down_proj"
+  
+  # Training Hyperparameters
+  batch_size: 16  # Will be overridden by per_device_train_batch_size if auto_find_batch_size fails
+  gradient_accumulation_steps: 2  # Effective batch size = 32
+  
+  # Dataloader Configuration (reduced for stability)
+  dataloader_num_workers: 4  # Reduced from 8 to avoid OOM
+  dataloader_pin_memory: true
+  dataloader_prefetch_factor: 2
+  dataloader_persistent_workers: true
+  
+  # Training Duration
+  num_epochs: 3
+  max_steps: -1  # -1 means use num_epochs
+  
+  # Optimizer Configuration
+  learning_rate: 2e-4
+  weight_decay: 0.01
+  warmup_steps: 100
+  lr_scheduler_type: "cosine"
+  
+  # Context Length
+  max_seq_length: 2048
+  
+  # Mixed Precision Training
+  fp16: false
+  bf16: true  # Native BF16 on Ampere/Ada GPUs
+  tf32: true  # Extra speedup on Ampere (A100, RTX 3090, 4090)
+  
+  # Optimizer
+  optim: "adamw_8bit"  # Memory-efficient optimizer
+  
+  # Tokenization
+  tokenizer_max_length: 2048
+  tokenizer_padding: "max_length"
+  tokenizer_truncation: true
+  
+  # Evaluation Strategy
+  evaluation_strategy: "steps"
+  eval_steps: 50
+  logging_steps: 10
+  logging_first_step: true
+  test_split_size: 0.1
+  
+  # Early Stopping
+  early_stopping: true
+  early_stopping_patience: 5
+  early_stopping_threshold: 0.001
+  metric_for_best_model: "eval_loss"
+  greater_is_better: false
+  
+  # Model Evaluation
+  eval_max_new_tokens: 3
+  eval_temperature: 0.0
+  eval_batch_size: 8
+  eval_max_code_length: 500
+  
+  # Gradient Clipping
+  max_grad_norm: 1.0
+  
+  # Seed for reproducibility
+  seed: 42
+  
+  # Report to tensorboard
+  report_to: ["tensorboard"]
+  
+  # Disable tqdm if running in non-interactive mode
+  disable_tqdm: false
+
+# ============================================================================
+# INFERENCE CONFIGURATION
+# ============================================================================
+inference:
+  host: "0.0.0.0"
+  port: 8000
+  max_length: 2048
+  temperature: 0.1
+  top_p: 0.95
+  device: ${DEVICE:-cuda}
+  
+  # Graceful Shutdown
+  graceful_shutdown_timeout: 30
+  save_on_sigterm: true
+  
+  # Batch Inference
+  batch_size: 8
+  max_batch_wait_ms: 100
+
+# ============================================================================
+# MONITORING CONFIGURATION
+# ============================================================================
+monitoring:
+  enabled: true
+  log_gpu_stats: true
+  gpu_log_interval: 60  # Log GPU stats every 60 seconds
+  alert_on_oom: true
+  save_gpu_timeline: true
+  
+  # Metrics to track
+  track_metrics:
+    - "gpu_utilization"
+    - "gpu_memory_used"
+    - "gpu_temperature"
+    - "training_loss"
+    - "eval_loss"
+    - "learning_rate"
+  
+  # Alerts
+  alerts:
+    gpu_memory_threshold: 0.95  # Alert if >95% GPU memory used
+    gpu_temp_threshold: 85  # Alert if GPU temp >85°C
+    disk_space_threshold_gb: 10  # Alert if <10GB free
+
+# ============================================================================
+# HEALTH CHECK CONFIGURATION
+# ============================================================================
+health:
+  enabled: true
+  endpoint: "/health"
+  port: 8001
+  check_gpu: true
+  check_disk_space: true
+  min_free_disk_gb: 10
+  check_interval_seconds: 30
+
+# ============================================================================
+# LOGGING CONFIGURATION
+# ============================================================================
+logging:
+  level: ${LOG_LEVEL:-INFO}
+  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+  file: ${LOG_FILE:-/workspace/logs/scriptguard.log}
+  
+  # Rotation
+  max_bytes: 104857600  # 100MB
+  backup_count: 5
+  
+  # Console logging
+  console: true
+  
+  # Log to file and console
+  handlers:
+    - "console"
+    - "file"
+
+# ============================================================================
+# EXPERIMENTAL FEATURES
+# ============================================================================
+experimental:
+  # Compile model with torch.compile (PyTorch 2.0+)
+  use_torch_compile: false  # Set to true for 20-30% speedup, but may be unstable
+  
+  # Use 4-bit quantization for inference
+  use_4bit_inference: false
+  
+  # Enable CPU offloading for very large models
+  cpu_offload: false
+
+# ============================================================================
+# RUNPOD-SPECIFIC CONFIGURATION
+# ============================================================================
+runpod:
+  # Pod ID (auto-detected if running on RunPod)
+  pod_id: ${RUNPOD_POD_ID:-}
+  
+  # Persistent volume mount point
+  volume_mount: ${RUNPOD_VOLUME_PATH:-/workspace}
+  
+  # Network test on startup
+  test_network_on_startup: true
+  
+  # Auto-restart on OOM
+  auto_restart_on_oom: false
+  
+  # Snapshot before training
+  snapshot_before_training: false

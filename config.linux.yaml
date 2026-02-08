@@ -1,0 +1,63 @@
+# ScriptGuard Linux/RunPod Configuration
+# This config enables Flash Attention 2 for faster training (Linux only)
+# DO NOT use on Windows - flash-attn package is not available
+
+# Inherit from base config
+# Copy all settings from config.yaml and override training section
+
+# Training Configuration - LINUX OPTIMIZED
+training:
+  model_id: ${MODEL_ID:-bigcode/starcoder2-3b}
+  output_dir: ${OUTPUT_DIR:-./models/scriptguard-model}
+
+  # Flash Attention 2 (Linux only - 2x faster, 50% less memory)
+  use_flash_attention_2: true
+  attn_implementation: "flash_attention_2"
+  # Note: attention_dropout is automatically disabled in qlora_finetuner.py
+
+  # Training Parameters
+  num_epochs: ${NUM_EPOCHS:-5}
+  batch_size: ${BATCH_SIZE:-2}
+  gradient_accumulation_steps: ${GRAD_ACCUM_STEPS:-8}
+  learning_rate: ${LEARNING_RATE:-1e-4}
+  max_seq_length: ${MAX_SEQ_LENGTH:-2048}
+  tokenizer_max_length: ${TOKENIZER_MAX_LENGTH:-2048}
+
+  warmup_steps: ${WARMUP_STEPS:-200}
+  logging_steps: ${LOGGING_STEPS:-2}
+  save_steps: ${SAVE_STEPS:-500}
+  eval_steps: ${EVAL_STEPS:-100}
+  evaluation_strategy: "steps"
+  save_total_limit: ${SAVE_TOTAL_LIMIT:-3}
+
+  # Precision (BF16 recommended for Ampere/Ada GPUs)
+  fp16: false
+  bf16: true
+  bf16_full_eval: true  # Match training dtype during evaluation
+
+  # Memory Optimization
+  gradient_checkpointing: true
+  optim: "paged_adamw_8bit"
+
+  # LoRA Configuration
+  lora_r: ${LORA_R:-16}
+  lora_alpha: ${LORA_ALPHA:-32}
+  lora_dropout: ${LORA_DROPOUT:-0.05}
+  target_modules:
+    - "q_proj"
+    - "v_proj"
+    - "k_proj"
+    - "o_proj"
+
+  # Learning Rate Schedule
+  lr_scheduler_type: "cosine"
+  weight_decay: ${WEIGHT_DECAY:-0.01}
+
+  # Evaluation
+  test_split_size: ${TEST_SPLIT_SIZE:-0.1}
+  eval_max_new_tokens: ${EVAL_MAX_NEW_TOKENS:-50}
+  eval_temperature: ${EVAL_TEMPERATURE:-0.1}
+  eval_max_code_length: ${EVAL_MAX_CODE_LENGTH:-512}
+
+# Note: For other sections (data_sources, rag, etc.), use settings from config.yaml
+# This file only overrides the training section for Linux optimization
