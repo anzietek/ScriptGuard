@@ -23,7 +23,6 @@ REMOTE_IP="62.171.130.236"
 REMOTE_USER="deployer"
 # Key will be stored here TEMPORARILY and then deleted
 KEY_TEMP_PATH="/tmp/deployer_key_temp"
-
 # Arguments parsing
 CHECK_ONLY=0
 AUTO_APPROVE=0
@@ -216,6 +215,13 @@ install_dependencies() {
 
     print_info "Syncing dependencies with uv..."
     uv sync
+
+    # FIX: Force-downgrade torchao to version compatible with Torch 2.5.1
+    # uv override-dependencies does NOT reliably pin this transitive dep,
+    # so we force-install the correct version after resolution.
+    # torchao >= 0.7 requires torch.int1 (PyTorch 2.6+), causing AttributeError.
+    print_info "Pinning torchao to 0.6.1 (compatible with Torch 2.5.1)..."
+    uv pip install torchao==0.6.1
 }
 
 # --- Services ---
