@@ -22,6 +22,7 @@ if sys.platform == "win32":
 
 import signal
 import yaml
+import shutil
 from scriptguard.utils.logger import logger
 
 # Disable torch.compile FIRST - before ANY imports or .env loading
@@ -31,6 +32,16 @@ os.environ["TORCH_COMPILE_DISABLE"] = "1"
 os.environ["TORCHDYNAMO_DISABLE"] = "1"
 if sys.platform == "win32":
     os.environ["PYTORCH_ENABLE_MPS_FALLBACK"] = "1"
+
+# CRITICAL: Clear unsloth compiled cache - it may contain code using incompatible triton options
+unsloth_cache = "/tmp/unsloth_compiled_cache"
+if os.path.exists(unsloth_cache):
+    try:
+        shutil.rmtree(unsloth_cache)
+        logger.info(f"Cleared stale unsloth cache: {unsloth_cache}")
+    except Exception as e:
+        logger.warning(f"Could not clear unsloth cache: {e}")
+
 logger.info("torch.compile disabled (PyTorch 2.5.1 compatibility)")
 
 # Now load .env files
@@ -78,6 +89,19 @@ def signal_handler(sig, frame):
     sys.exit(0)
 
 signal.signal(signal.SIGINT, signal_handler)
+
+# CRITICAL: Patch torch._inductor.runtime.hints to avoid TypeError on Windows
+# unsloth imports DeviceProperties from this module, but it fails on load
+# because of a dataclasses issue with AttrsDescriptor.
+if sys.platform == "win32":
+    import types
+    if "torch._inductor.runtime.hints" not in sys.modules:
+        mock_hints = types.ModuleType("torch._inductor.runtime.hints")
+        class DeviceProperties:
+            pass
+        mock_hints.DeviceProperties = DeviceProperties
+        sys.modules["torch._inductor.runtime.hints"] = mock_hints
+        logger.info("Mocked torch._inductor.runtime.hints to bypass Windows compatibility issue")
 
 # Import unsloth FIRST - must precede transformers/peft for optimizations
 import unsloth  # noqa: F401

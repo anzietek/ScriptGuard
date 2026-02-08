@@ -291,11 +291,25 @@ main() {
 
     if [ $AUTO_APPROVE -eq 1 ]; then
         print_info "Auto-start enabled. Launching training pipeline..."
+
+        # CRITICAL: Clear unsloth compiled cache to prevent PyTorch 2.5.1 incompatibility
+        # Cached code uses triton options (enable_persistent_tma_matmul) not available in 2.5.1
+        if [ -d "/tmp/unsloth_compiled_cache" ]; then
+            print_warning "Clearing stale unsloth compiled cache..."
+            rm -rf /tmp/unsloth_compiled_cache
+        fi
+
         load_env
         uv run python src/main.py
     else
         read -p "Have you updated .env and want to start training now? (y/n) " -n 1 -r; echo
         if [[ $REPLY =~ ^[Yy]$ ]]; then
+            # CRITICAL: Clear unsloth compiled cache to prevent PyTorch 2.5.1 incompatibility
+            if [ -d "/tmp/unsloth_compiled_cache" ]; then
+                print_warning "Clearing stale unsloth compiled cache..."
+                rm -rf /tmp/unsloth_compiled_cache
+            fi
+
             load_env
             print_info "Starting pipeline..."
             uv run python src/main.py
