@@ -9,7 +9,7 @@ if platform.system() == "Windows":
 
 from unsloth import FastLanguageModel, UnslothTrainer
 import torch
-from transformers import TrainingArguments
+from transformers import TrainingArguments, DataCollatorForLanguageModeling
 from datasets import Dataset
 from scriptguard.utils.logger import logger
 
@@ -93,7 +93,7 @@ class QLoRAFineTuner:
                 examples["text"],
                 truncation=True,
                 max_length=max_length,
-                padding="max_length",
+                padding=False,  # No padding during tokenization - DataCollator will handle it
             )
             result["labels"] = result["input_ids"].copy()
             return result
@@ -145,7 +145,7 @@ class QLoRAFineTuner:
 
         training_args = TrainingArguments(
             output_dir=output_dir,
-            per_device_train_batch_size=int(training_config.get("batch_size", 4)),
+            per_device_train_batch_size=int(training_config.get("per_device_train_batch_size", training_config.get("batch_size", 4))),
             gradient_accumulation_steps=int(training_config.get("gradient_accumulation_steps", 4)),
             learning_rate=float(training_config.get("learning_rate", 2e-4)),
             weight_decay=float(training_config.get("weight_decay", 0.01)),
@@ -167,11 +167,18 @@ class QLoRAFineTuner:
         )
 
 
+        # Use dynamic padding via DataCollator
+        data_collator = DataCollatorForLanguageModeling(
+            tokenizer=self.tokenizer,
+            mlm=False,  # We're doing causal LM, not masked LM
+        )
+
         trainer = UnslothTrainer(
             model=self.model,
             args=training_args,
             train_dataset=tokenized_dataset,
             eval_dataset=tokenized_eval_dataset,
+            data_collator=data_collator,
         )
 
         logger.info("Starting training with unsloth optimization...")
