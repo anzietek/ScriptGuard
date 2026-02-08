@@ -91,7 +91,8 @@ class EmbeddingService:
             self.tokenizer = AutoTokenizer.from_pretrained(self.model_name)
             self.model = AutoModel.from_pretrained(
                 self.model_name,
-                trust_remote_code=trust_remote
+                trust_remote_code=trust_remote,
+                use_safetensors=True  # Force safetensors to avoid PyTorch 2.6 requirement (CVE-2025-32434)
             ).to(self.device)
             self.model.eval()
 
