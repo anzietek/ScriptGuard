@@ -16,22 +16,21 @@ if platform.system() == "Windows":
 
     original_compile = torch.compile
 
-    def disabled_compile(model=None, *args, **kwargs):
+    def disabled_compile(*args, **kwargs):
         """
         No-op compile that just returns the model/function unchanged.
         Works as both a function and a decorator.
         """
-        def wrapper(func_or_model):
-            print(f"torch.compile called but disabled on Windows - returning {type(func_or_model).__name__} unchanged")
-            return func_or_model
+        # If called with a function as first arg, return it unchanged
+        if args and callable(args[0]):
+            print(f"torch.compile called but disabled on Windows - returning {type(args[0]).__name__} unchanged")
+            return args[0]
 
-        # If called as decorator: @torch.compile(...)
-        if model is None:
-            return wrapper
-
-        # If called as function: torch.compile(model, ...)
-        print(f"torch.compile called but disabled on Windows - returning {type(model).__name__} unchanged")
-        return model
+        # Otherwise return a decorator that returns functions unchanged
+        def decorator(func):
+            print(f"torch.compile decorator called but disabled on Windows - returning {type(func).__name__} unchanged")
+            return func
+        return decorator
 
     torch.compile = disabled_compile
 

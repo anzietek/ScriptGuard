@@ -25,6 +25,11 @@ try:
     # Monkeypatch torch.compile to be a no-op
     # unsloth uses @torch.compile with options invalid for PyTorch 2.5.1
     def no_op_compile(*args, **kwargs):
+        """No-op replacement for torch.compile that returns functions unchanged."""
+        # If called with a function as first arg, return it unchanged
+        if args and callable(args[0]):
+            return args[0]
+        # Otherwise return a decorator that returns functions unchanged
         def decorator(func):
             return func
         return decorator
