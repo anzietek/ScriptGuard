@@ -5,6 +5,7 @@ Vectorizes verified code samples and uploads them to Qdrant for Few-Shot RAG.
 
 from typing import Dict, Any, Optional, List
 from zenml import step
+import os
 
 from scriptguard.rag.code_similarity_store import CodeSimilarityStore
 from scriptguard.utils.logger import logger
@@ -37,6 +38,18 @@ def vectorize_samples(
         return {
             "status": "skipped",
             "samples_vectorized": 0
+        }
+
+    # Check if vectorization is enabled via environment variable
+    enable_vectorization = os.getenv("ENABLE_QDRANT_VECTORIZATION", "true").lower() == "true"
+    
+    if not enable_vectorization:
+        logger.info("⚠️ Vectorization to Qdrant is DISABLED via ENABLE_QDRANT_VECTORIZATION env var.")
+        logger.info("Skipping vectorization step.")
+        return {
+            "status": "skipped",
+            "samples_vectorized": 0,
+            "message": "Vectorization disabled by configuration"
         }
 
     logger.info("=" * 60)

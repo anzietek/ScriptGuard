@@ -6,6 +6,7 @@ Integrates multiple data sources with deduplication and database storage.
 from scriptguard.utils.logger import logger
 from typing import Dict, List
 from zenml import step
+import os
 
 from ..data_sources import (
     GitHubDataSource,
@@ -32,6 +33,34 @@ def advanced_data_ingestion(config: dict) -> List[Dict]:
     """
     logger.info("Starting advanced data ingestion...")
 
+    # Check if ingestion is enabled via environment variable
+    enable_ingestion = os.getenv("ENABLE_POSTGRES_INGESTION", "true").lower() == "true"
+    
+    if not enable_ingestion:
+        logger.info("⚠️ Data ingestion from external sources is DISABLED via ENABLE_POSTGRES_INGESTION env var.")
+        logger.info("Attempting to load existing data from PostgreSQL database...")
+        
+        try:
+            db_manager = DatasetManager()
+            # Fetch all samples from DB
+            malicious = db_manager.get_all_samples(label="malicious", limit=None)
+            benign = db_manager.get_all_samples(label="benign", limit=None)
+            
+            all_samples = malicious + benign
+            
+            if not all_samples:
+                logger.warning("No data found in PostgreSQL! Pipeline might fail if data is required.")
+            else:
+                logger.info(f"Loaded {len(all_samples)} samples directly from PostgreSQL.")
+                
+            return all_samples
+            
+        except Exception as e:
+            logger.error(f"Failed to load data from PostgreSQL: {e}")
+            # Return empty list or raise error depending on requirements
+            return []
+
+    # If ingestion is enabled, proceed with fetching from sources
     all_samples = []
 
     # GitHub Data Source
