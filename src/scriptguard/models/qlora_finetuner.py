@@ -74,6 +74,11 @@ class QLoRAFineTuner:
             **model_kwargs
         )
 
+        # Ensure tokenizer has pad_token (required for DataCollator)
+        if self.tokenizer.pad_token is None:
+            self.tokenizer.pad_token = self.tokenizer.eos_token
+            logger.info(f"Set pad_token to eos_token: {self.tokenizer.eos_token}")
+
         logger.info("Adding LoRA adapters with unsloth...")
         self.model = FastLanguageModel.get_peft_model(
             self.model,
@@ -168,6 +173,10 @@ class QLoRAFineTuner:
 
 
         # Use dynamic padding via DataCollator
+        if self.tokenizer is None:
+            raise ValueError("Tokenizer is None! Cannot create DataCollator.")
+
+        logger.info(f"Creating DataCollator with pad_token: {self.tokenizer.pad_token}")
         data_collator = DataCollatorForLanguageModeling(
             tokenizer=self.tokenizer,
             mlm=False,  # We're doing causal LM, not masked LM
