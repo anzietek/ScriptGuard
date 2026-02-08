@@ -184,6 +184,7 @@ class QLoRAFineTuner:
 
         trainer = UnslothTrainer(
             model=self.model,
+            tokenizer=self.tokenizer,  # CRITICAL: Trainer needs tokenizer reference!
             args=training_args,
             train_dataset=tokenized_dataset,
             eval_dataset=tokenized_eval_dataset,
