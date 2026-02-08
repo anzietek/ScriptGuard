@@ -1,6 +1,6 @@
 #!/bin/bash
 #
-# ScriptGuard RunPod Setup Script (Fixed Paths)
+# ScriptGuard RunPod Setup Script (Fixed Paths + Clean Install)
 #
 # Features:
 # - Auto-installs 'uv' and Python 3.12
@@ -8,6 +8,7 @@
 # - Checks for Persistent Volume (/workspace)
 # - Establishes Secure SSH Tunnel (Key is deleted from disk immediately after use)
 # - Auto-starts training pipeline
+# - Supports Clean Install (--clean) to wipe .venv
 #
 
 set -e  # Exit on error
@@ -25,6 +26,7 @@ KEY_TEMP_PATH="/tmp/deployer_key_temp"
 # Arguments parsing
 CHECK_ONLY=0
 AUTO_APPROVE=0
+CLEAN_INSTALL=0
 
 for arg in "$@"; do
   case $arg in
@@ -34,6 +36,10 @@ for arg in "$@"; do
       ;;
     -y|--yes)
       AUTO_APPROVE=1
+      shift
+      ;;
+    --clean|-c)
+      CLEAN_INSTALL=1
       shift
       ;;
   esac
@@ -175,6 +181,13 @@ setup_env_file() {
 # --- Installation ---
 
 install_dependencies() {
+    # Clean Install Logic
+    if [ "$CLEAN_INSTALL" -eq 1 ]; then
+        print_warning "Clean Install requested: Removing .venv..."
+        rm -rf .venv
+        print_success ".venv removed."
+    fi
+
     print_info "Syncing dependencies with uv..."
     uv sync
 }

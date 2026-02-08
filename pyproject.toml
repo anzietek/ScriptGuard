@@ -7,7 +7,7 @@ requires-python = "==3.12.*"
 
 dependencies = [
     # --- Core ML (CUDA 12.4) - Downgraded to 2.5.1 for Unsloth Compatibility ---
-    # Używamy wersji 2.5.1, aby uniknąć konieczności kompilacji flash-attn i problemów z Unsloth
+    # Using version 2.5.1 to avoid the need for flash-attn compilation and Unsloth issues
     "torch @ https://download.pytorch.org/whl/cu124/torch-2.5.1%2Bcu124-cp312-cp312-win_amd64.whl ; sys_platform == 'win32'",
     "torch @ https://download.pytorch.org/whl/cu124/torch-2.5.1%2Bcu124-cp312-cp312-linux_x86_64.whl ; sys_platform == 'linux'",
 
@@ -24,7 +24,7 @@ dependencies = [
     "bitsandbytes>=0.44.1",
 
     # --- UNSLOTH ---
-    # Ta wersja wymaga Torch 2.5.1 (dlatego zrobiliśmy downgrade powyżej)
+    # This version requires Torch 2.5.1 (hence the downgrade above)
     "unsloth[cu124-torch251] @ git+https://github.com/unslothai/unsloth.git",
     "unsloth-zoo @ git+https://github.com/unslothai/unsloth-zoo.git",
 
