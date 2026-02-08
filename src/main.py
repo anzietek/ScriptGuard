@@ -34,6 +34,10 @@ if env_dev:
 os.environ["TRANSFORMERS_NO_ADVISORY_WARNINGS"] = "1"
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
+# CRITICAL: Block torchao import in transformers (incompatible with PyTorch 2.5.1)
+# torchao >= 0.7 requires torch.int1 which was added in PyTorch 2.6+
+os.environ["TRANSFORMERS_NO_TORCHAO"] = "1"
+
 # Configure torch._dynamo AFTER env is loaded but BEFORE importing torch libraries
 if sys.platform == "win32":
     import torch

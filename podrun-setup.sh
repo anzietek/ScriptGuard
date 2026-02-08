@@ -106,6 +106,8 @@ check_system_tools() {
 
 load_env() {
     if [ -f .env ]; then set -a; source .env; set +a; fi
+    # CRITICAL: Disable torchao in transformers (PyTorch 2.5.1 incompatibility)
+    export TRANSFORMERS_NO_TORCHAO=1
 }
 
 check_uv() {
@@ -216,12 +218,13 @@ install_dependencies() {
     print_info "Syncing dependencies with uv..."
     uv sync
 
-    # FIX: Force-downgrade torchao to version compatible with Torch 2.5.1
-    # uv override-dependencies does NOT reliably pin this transitive dep,
-    # so we force-install the correct version after resolution.
-    # torchao >= 0.7 requires torch.int1 (PyTorch 2.6+), causing AttributeError.
-    print_info "Pinning torchao to 0.6.1 (compatible with Torch 2.5.1)..."
-    uv pip install torchao==0.6.1
+    # CRITICAL FIX: Uninstall torchao if present (incompatible with PyTorch 2.5.1)
+    # transformers pulls it as optional dep, but torchao >= 0.7 requires torch.int1 (PyTorch 2.6+)
+    if uv pip show torchao &>/dev/null; then
+        print_warning "Removing incompatible torchao package..."
+        uv pip uninstall -y torchao
+        print_success "torchao removed successfully."
+    fi
 }
 
 # --- Services ---

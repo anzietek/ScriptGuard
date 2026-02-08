@@ -17,7 +17,7 @@ dependencies = [
     "torchaudio @ https://download.pytorch.org/whl/cu124/torchaudio-2.5.1%2Bcu124-cp312-cp312-linux_x86_64.whl ; sys_platform == 'linux'",
 
     # --- LLM & Optimization ---
-    "transformers>=4.46.0",
+    "transformers>=4.46.0,<4.48.0",
     "accelerate>=0.34.0",
     "peft>=0.7.1",
     "bitsandbytes>=0.44.1",
