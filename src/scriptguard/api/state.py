@@ -5,7 +5,7 @@ Handles lifecycle of global resources like models and database connections.
 
 import os
 import torch
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, Protocol, runtime_checkable, Any as TypingAny
 from transformers import AutoTokenizer, AutoModelForCausalLM
 from peft import PeftModel
 from scriptguard.rag.qdrant_store import QdrantStore, bootstrap_cve_data
@@ -15,34 +15,54 @@ from scriptguard.schemas.config_schema import ScriptGuardConfig
 
 # Optional asyncpg import for graceful degradation
 try:
-    import asyncpg
+    import asyncpg as _asyncpg
     HAS_ASYNCPG = True
 except ImportError:
+    _asyncpg = None
     HAS_ASYNCPG = False
     logger.warning("asyncpg not found. Database logging will be disabled.")
+
+
+@runtime_checkable
+class _DbPool(Protocol):
+    """Protocol for the subset of asyncpg.Pool API used by this service."""
+
+    async def close(self) -> None:
+        """Close the pool."""
+
+    def acquire(self) -> TypingAny:
+        """Return an async context manager yielding a connection."""
+
 
 class AppState:
     """
     Singleton-like class to hold application state.
     """
+
     def __init__(self):
         self.config: Optional[ScriptGuardConfig] = None
         self.model = None
         self.tokenizer = None
         self.rag_store: Optional[QdrantStore] = None
-        self.db_pool = None # Type: Optional[asyncpg.Pool]
+        self.db_pool: Optional[_DbPool] = None
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
 
-    def load_config(self, config_path: str = "config.yaml"):
-        """Load configuration."""
+    def load_config(self, config_path: Optional[str] = None) -> None:
+        """Load configuration.
+
+        Args:
+            config_path: Optional explicit path to config. If not provided, uses
+                CONFIG_PATH env var, falling back to "config.yaml".
+        """
+        resolved_path = config_path or os.getenv("CONFIG_PATH", "config.yaml")
         try:
-            self.config = load_config(config_path)
-            logger.info(f"Configuration loaded from {config_path}")
+            self.config = load_config(resolved_path)
+            logger.info(f"Configuration loaded from {resolved_path}")
         except Exception as e:
-            logger.error(f"Failed to load config: {e}")
+            logger.error(f"Failed to load config from {resolved_path}: {e}")
             raise
 
-    async def load_resources(self):
+    async def load_resources(self) -> None:
         """Load model, tokenizer, RAG store, and DB connection."""
         if not self.config:
             self.load_config()
@@ -51,7 +71,7 @@ class AppState:
         self._load_rag()
         await self._init_db()
 
-    async def shutdown(self):
+    async def shutdown(self) -> None:
         """Cleanup resources."""
         if self.db_pool:
             await self.db_pool.close()
@@ -136,25 +156,31 @@ class AppState:
             logger.warning("API will run without RAG support")
             self.rag_store = None
 
-    async def _init_db(self):
+    async def _init_db(self) -> None:
         """Initialize PostgreSQL connection pool and schema."""
         if not HAS_ASYNCPG or not self.config:
             return
 
         db_cfg = self.config.database.postgresql
-        dsn = f"postgresql://{db_cfg.user}:{db_cfg.password}@{db_cfg.host}:{db_cfg.port}/{db_cfg.database}"
-        
+        dsn = (
+            f"postgresql://{db_cfg.user}:{db_cfg.password}"
+            f"@{db_cfg.host}:{db_cfg.port}/{db_cfg.database}"
+        )
+
         try:
-            self.db_pool = await asyncpg.create_pool(
+            # asyncpg.create_pool timeout is a connection-establishment timeout.
+            # command_timeout should be applied per-connection, not here.
+            self.db_pool = await _asyncpg.create_pool(
                 dsn=dsn,
                 min_size=db_cfg.min_connections,
                 max_size=db_cfg.max_connections,
-                timeout=db_cfg.connection_timeout
+                timeout=db_cfg.connection_timeout,
+                command_timeout=db_cfg.command_timeout,
             )
-            
-            # Create history table if not exists
+
             async with self.db_pool.acquire() as conn:
-                await conn.execute("""
+                await conn.execute(
+                    """
                     CREATE TABLE IF NOT EXISTS scan_history (
                         id SERIAL PRIMARY KEY,
                         request_id UUID NOT NULL,
@@ -168,10 +194,11 @@ class AppState:
                     );
                     CREATE INDEX IF NOT EXISTS idx_scan_history_hash ON scan_history(script_hash);
                     CREATE INDEX IF NOT EXISTS idx_scan_history_timestamp ON scan_history(timestamp);
-                """)
-            
+                    """
+                )
+
             logger.info("✅ PostgreSQL connected and schema initialized")
-            
+
         except Exception as e:
             logger.error(f"❌ PostgreSQL initialization failed: {e}")
             logger.warning("API will run without DB logging")

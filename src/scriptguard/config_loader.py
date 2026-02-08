@@ -5,7 +5,7 @@ Handles YAML loading, environment variable substitution, and schema validation.
 
 import os
 import yaml
-from typing import Dict, Any, Optional
+from typing import Dict, Any
 from scriptguard.schemas.config_schema import validate_config, ScriptGuardConfig
 from scriptguard.utils.logger import logger
 
