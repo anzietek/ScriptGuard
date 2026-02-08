@@ -1,21 +1,44 @@
 import time
 import uuid
 import os
+from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, Request, Depends, Header, status
 from fastapi.responses import JSONResponse
+from fastapi.exception_handlers import http_exception_handler
 from scriptguard.api.schemas import (
     ScriptAnalysisRequest, 
     ScriptAnalysisResponse, 
     VulnerabilityInfo,
     HealthResponse,
-    ReadinessResponse
+    ReadinessResponse,
+    ErrorResponse
 )
 from scriptguard.api.state import app_state
 from scriptguard.utils.logger import logger
 from scriptguard.utils.prompts import format_inference_prompt, parse_classification_output
 import torch
 
-app = FastAPI(title="ScriptGuard Inference API", version="1.0.0")
+# --- Lifecycle Events ---
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """
+    Lifespan context manager for startup and shutdown events.
+    Replaces deprecated @app.on_event("startup").
+    """
+    logger.info("Starting ScriptGuard API...")
+    try:
+        app_state.load_resources()
+    except Exception as e:
+        logger.critical(f"Failed to initialize application state: {e}")
+        # We allow the app to start so /health can report the error state
+    
+    yield
+    
+    logger.info("Shutting down ScriptGuard API...")
+    # Add any cleanup logic here if needed (e.g., closing DB connections)
+
+app = FastAPI(title="ScriptGuard Inference API", version="1.0.0", lifespan=lifespan)
 
 # --- Middleware ---
 
@@ -28,14 +51,50 @@ async def add_process_time_header(request: Request, call_next):
     # For simplicity here, we'll just log the start
     logger.info(f"Request started: {request.method} {request.url.path} - ID: {request_id}")
     
-    response = await call_next(request)
-    
-    process_time = time.time() - start_time
-    response.headers["X-Process-Time"] = str(process_time)
-    response.headers["X-Request-ID"] = request_id
-    
-    logger.info(f"Request finished: {request.method} {request.url.path} - ID: {request_id} - Status: {response.status_code} - Duration: {process_time:.4f}s")
-    return response
+    try:
+        response = await call_next(request)
+        
+        process_time = time.time() - start_time
+        response.headers["X-Process-Time"] = str(process_time)
+        response.headers["X-Request-ID"] = request_id
+        
+        logger.info(f"Request finished: {request.method} {request.url.path} - ID: {request_id} - Status: {response.status_code} - Duration: {process_time:.4f}s")
+        return response
+    except Exception as e:
+        process_time = time.time() - start_time
+        logger.error(f"Request failed: {request.method} {request.url.path} - ID: {request_id} - Error: {e} - Duration: {process_time:.4f}s")
+        raise e
+
+# --- Exception Handlers ---
+
+@app.exception_handler(HTTPException)
+async def custom_http_exception_handler(request: Request, exc: HTTPException):
+    """
+    Return consistent JSON error response for HTTP exceptions.
+    """
+    return JSONResponse(
+        status_code=exc.status_code,
+        content=ErrorResponse(
+            error=str(exc.status_code),
+            message=exc.detail,
+            details=None
+        ).model_dump()
+    )
+
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception):
+    """
+    Catch-all handler for unhandled exceptions.
+    """
+    logger.error(f"Unhandled exception: {exc}", exc_info=True)
+    return JSONResponse(
+        status_code=500,
+        content=ErrorResponse(
+            error="internal_server_error",
+            message="An unexpected error occurred. Please contact support.",
+            details={"request_id": request.headers.get("X-Request-ID")}
+        ).model_dump()
+    )
 
 # --- Dependencies ---
 
@@ -55,18 +114,6 @@ async def verify_api_key(x_api_key: str = Header(None)):
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid API Key",
         )
-
-# --- Lifecycle Events ---
-
-@app.on_event("startup")
-async def startup_event():
-    logger.info("Starting ScriptGuard API...")
-    try:
-        app_state.load_resources()
-    except Exception as e:
-        logger.critical(f"Failed to initialize application state: {e}")
-        # We might want to exit here, but let's allow it to run so /health can report error
-        pass
 
 # --- Endpoints ---
 

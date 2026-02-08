@@ -34,3 +34,9 @@ class ReadinessResponse(BaseModel):
     status: str
     model_loaded: bool
     rag_connected: bool
+
+class ErrorResponse(BaseModel):
+    """Standard error response model."""
+    error: str = Field(..., description="Error code or type")
+    message: str = Field(..., description="Human-readable error message")
+    details: Optional[Dict[str, Any]] = Field(None, description="Additional error context")
