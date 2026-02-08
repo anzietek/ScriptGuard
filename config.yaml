@@ -368,9 +368,9 @@ training:
 
   # BATCHING STRATEGY (Fixed for stability)
   auto_find_batch_size: false     # Disabled to ensure accumulation works as intended
-  per_device_train_batch_size: 8  # Reduced to fit 4096 context
-  per_device_eval_batch_size: 8
-  gradient_accumulation_steps: 4  # 8 * 4 = 32 Effective Batch Size
+  per_device_train_batch_size: 4  # Optimal for 4096 context on 24GB GPU
+  per_device_eval_batch_size: 4
+  gradient_accumulation_steps: 8  # 4 * 8 = 32 Effective Batch Size
 
   # Default on unclear prediction
   eval_default_on_unclear: "unknown"

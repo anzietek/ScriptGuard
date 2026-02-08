@@ -57,6 +57,9 @@ os.environ["TORCHDYNAMO_DISABLE"] = "1"
 if sys.platform == "win32":
     os.environ["PYTORCH_ENABLE_MPS_FALLBACK"] = "1"
 
+1# CUDA Memory Management - prevent fragmentation
+os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
+
 # CRITICAL: Clear unsloth compiled cache - it may contain code using incompatible triton options
 unsloth_cache = "/tmp/unsloth_compiled_cache"
 if os.path.exists(unsloth_cache):
