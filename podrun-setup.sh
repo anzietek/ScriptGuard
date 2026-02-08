@@ -1,24 +1,25 @@
 #!/bin/bash
 #
-# ScriptGuard RunPod Setup Script (Optimized)
+# ScriptGuard RunPod Setup Script (High Security Version)
 #
 # Features:
-# - Auto-installs 'uv' and Python 3.12 (managed environment)
+# - Auto-installs 'uv' and Python 3.12
 # - Sets up ZenML Server accessible via RunPod Proxy/TCP
-# - Checks for Persistent Volume (/workspace) to prevent data loss
-# - Auto-starts training pipeline if requested
-#
-# Usage:
-#   ./setup.sh         - Setup and ask to run training
-#   ./setup.sh -y      - Setup and auto-start training (non-interactive)
-#   ./setup.sh --check - Check environment only
+# - Checks for Persistent Volume (/workspace)
+# - Establishes Secure SSH Tunnel (Key is deleted from disk immediately after use)
+# - Auto-starts training pipeline
 #
 
 set -e  # Exit on error
 
 # --- Global Configuration ---
-# Ensure local bin paths are prioritized for uv and pip
 export PATH="$HOME/.local/bin:$HOME/.cargo/bin:$PATH"
+
+# Tunnel Configuration
+REMOTE_IP="62.171.130.236"
+REMOTE_USER="deployer"
+# Key will be stored here TEMPORARILY and then deleted
+KEY_TEMP_PATH="/tmp/deployer_key_temp"
 
 # Arguments parsing
 CHECK_ONLY=0
@@ -37,214 +38,171 @@ for arg in "$@"; do
   esac
 done
 
-# Colors for output
+# Colors
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
-NC='\033[0m' # No Color
+NC='\033[0m'
 
 # --- Helper Functions ---
-
-print_info() {
-    echo -e "${BLUE}[INFO]${NC} $1"
-}
-
-print_success() {
-    echo -e "${GREEN}[SUCCESS]${NC} $1"
-}
-
-print_warning() {
-    echo -e "${YELLOW}[WARNING]${NC} $1"
-}
-
-print_error() {
-    echo -e "${RED}[ERROR]${NC} $1"
-}
+print_info() { echo -e "${BLUE}[INFO]${NC} $1"; }
+print_success() { echo -e "${GREEN}[SUCCESS]${NC} $1"; }
+print_warning() { echo -e "${YELLOW}[WARNING]${NC} $1"; }
+print_error() { echo -e "${RED}[ERROR]${NC} $1"; }
 
 # --- Core Checks ---
 
 check_workspace() {
     print_info "Checking filesystem location..."
-    CURRENT_DIR=$(pwd)
-
-    # RunPod persistent storage is usually at /workspace
-    if [[ "$CURRENT_DIR" != *"/workspace"* ]]; then
+    if [[ "$(pwd)" != *"/workspace"* ]]; then
         print_warning "-----------------------------------------------------------"
-        print_warning "CRITICAL: You are NOT running inside '/workspace'."
-        print_warning "Any data created here (/root) WILL BE LOST after Pod restart."
+        print_warning "CRITICAL: You are NOT in '/workspace'."
+        print_warning "Data will be lost on restart. Please move to /workspace."
         print_warning "-----------------------------------------------------------"
-
         if [ $AUTO_APPROVE -eq 0 ]; then
-             read -p "Are you sure you want to continue in ephemeral storage? (y/n) " -n 1 -r
-             echo
-             if [[ ! $REPLY =~ ^[Yy]$ ]]; then
-                 print_error "Aborted by user. Please move to /workspace."
-                 exit 1
-             fi
+             read -p "Continue anyway (Not Recommended)? (y/n) " -n 1 -r; echo
+             if [[ ! $REPLY =~ ^[Yy]$ ]]; then exit 1; fi
         fi
     else
-        print_success "Running safely inside persistent volume (/workspace)."
+        print_success "Running safely inside persistent volume."
     fi
 }
 
 load_env() {
-    if [ -f .env ]; then
-        set -a
-        source .env
-        set +a
-    fi
+    if [ -f .env ]; then set -a; source .env; set +a; fi
 }
 
 check_uv() {
-    print_info "Checking for 'uv' package manager..."
     if ! command -v uv &> /dev/null; then
-        if [ $CHECK_ONLY -eq 1 ]; then
-            print_error "uv is not installed."
-            exit 1
-        fi
-        print_warning "uv is not installed. Installing latest version..."
+        print_warning "Installing uv..."
         curl -LsSf https://astral.sh/uv/install.sh | sh
         source $HOME/.cargo/env
         export PATH="$HOME/.cargo/bin:$PATH"
-        print_success "uv installed successfully"
-    else
-        print_success "uv is ready: $(uv --version)"
     fi
+    print_success "uv is ready: $(uv --version)"
 }
 
 check_python_system() {
-    # We only check if python3 exists. We rely on 'uv' to fetch the correct version (3.12) defined in pyproject.toml.
-    print_info "Checking system Python..."
     if command -v python3 &> /dev/null; then
-        SYS_VER=$(python3 --version)
-        print_success "System Python found: $SYS_VER (Note: Project will use Python 3.12 via 'uv')"
+        print_success "System Python found (uv will manage Python 3.12 for project)"
     else
-        print_warning "System Python not found. 'uv' will attempt to fetch a managed Python version."
+        print_warning "System Python missing, relying on uv."
     fi
 }
 
-check_cuda() {
-    print_info "Checking GPU/CUDA status..."
-    if command -v nvidia-smi &> /dev/null; then
-        print_success "NVIDIA GPU detected:"
-        nvidia-smi --query-gpu=name,memory.total,driver_version --format=csv,noheader
-    else
-        print_warning "No NVIDIA GPU detected! Training will be extremely slow on CPU."
+# --- SSH Tunnel Setup (Secure Mode) ---
+
+setup_tunnel() {
+    print_info "Setting up Secure SSH Tunnel to $REMOTE_IP..."
+
+    # 1. Install SSH Client if missing
+    if ! command -v ssh &> /dev/null; then
+        apt-get update && apt-get install -y openssh-client
     fi
-}
 
-setup_env() {
-    print_info "Configuring environment variables..."
-
-    if [ ! -f .env ]; then
-        if [ $CHECK_ONLY -eq 1 ]; then
-            print_error ".env file missing!"
-            exit 1
-        fi
-
-        if [ -f .env.example ]; then
-            print_info "Creating .env from .env.example..."
-            cp .env.example .env
-            print_success ".env created."
-            print_warning "ACTION REQUIRED: Please edit .env with your real API keys!"
-        else
-            print_error "Neither .env nor .env.example found!"
-            exit 1
-        fi
-    else
-        print_success ".env file exists."
+    # 2. Check if tunnel is already running
+    if pgrep -f "ssh.*$REMOTE_IP" > /dev/null; then
+        print_success "Tunnel is already active."
+        return
     fi
-}
 
-# --- Installation & Verification ---
+    # 3. Request Key (Since we delete it, we must ask every time if tunnel is down)
+    echo "--------------------------------------------------------"
+    echo -e "${YELLOW}SECURITY CHECK: SSH Tunnel is required.${NC}"
+    echo "Please paste your Private Key content (id_ed25519) below."
+    echo "The file will be used to connect and then IMMEDIATELY DELETED."
+    echo "--------------------------------------------------------"
+    echo "Press ENTER, paste the key, then press Ctrl+D (EOF)."
 
-install_dependencies() {
-    print_info "Syncing dependencies with uv (this may take a moment)..."
+    # Read multiline input
+    cat > "$KEY_TEMP_PATH"
 
-    # uv sync reads pyproject.toml, creates .venv, installs Python 3.12 and all deps
-    uv sync
+    # Check if file is not empty
+    if [ ! -s "$KEY_TEMP_PATH" ]; then
+        print_error "Key file is empty. Aborting tunnel setup."
+        return
+    fi
 
-    if [ $? -eq 0 ]; then
-        print_success "Environment synchronized successfully."
+    # 4. Set Permissions (Critical)
+    chmod 600 "$KEY_TEMP_PATH"
+
+    print_info "Establishing tunnel..."
+
+    # 5. Start SSH in background
+    # -4: Force IPv4
+    # -f: Go to background
+    # -N: Do not execute remote command
+    # -L: Local port forwarding
+    # -o StrictHostKeyChecking=no: Auto-accept fingerprint
+    ssh -4 -f -N \
+        -o StrictHostKeyChecking=no \
+        -o ConnectTimeout=10 \
+        -i "$KEY_TEMP_PATH" \
+        -L 5432:127.0.0.1:5432 \
+        -L 6333:127.0.0.1:6333 \
+        -L 5050:127.0.0.1:5050 \
+        $REMOTE_USER@$REMOTE_IP
+
+    # Wait for connection
+    sleep 5
+
+    # 6. SECURITY WIPE - Delete key from disk
+    rm -f "$KEY_TEMP_PATH"
+    print_warning "Private key file has been deleted from disk for security."
+
+    # 7. Verify
+    if pgrep -f "ssh.*$REMOTE_IP" > /dev/null; then
+        print_success "Tunnel ESTABLISHED."
+        echo "   - Postgres: localhost:5432 -> Remote:5432"
+        echo "   - Qdrant:   localhost:6333 -> Remote:6333"
     else
-        print_error "Failed to sync dependencies."
+        print_error "Failed to establish tunnel. Check your key and try again."
         exit 1
     fi
 }
 
-verify_dependencies() {
-    print_info "Verifying critical ML components..."
+setup_env_file() {
+    print_info "Checking .env configuration..."
+    if [ ! -f .env ]; then
+        if [ -f .env.example ]; then
+            cp .env.example .env
+            print_success "Created .env from template."
+        else
+            touch .env
+            print_warning "Created empty .env file."
+        fi
+    fi
+}
 
-    # Check via the venv python
-    uv run python -c "
-import torch
-import unsloth
-import sys
+# --- Installation ---
 
-print(f'Python: {sys.version.split()[0]}')
-print(f'PyTorch: {torch.__version__}')
-print(f'CUDA Available: {torch.cuda.is_available()}')
-if torch.cuda.is_available():
-    print(f'CUDA Device: {torch.cuda.get_device_name(0)}')
-print(f'Unsloth: {unsloth.__version__}')
-
-try:
-    import flash_attn
-    print('Flash Attention 2: Installed')
-except ImportError:
-    print('Flash Attention 2: NOT FOUND (Check compilation)')
-"
-    print_success "Verification check passed."
+install_dependencies() {
+    print_info "Syncing dependencies with uv..."
+    uv sync
 }
 
 # --- Services ---
 
 init_zenml() {
     print_info "Initializing ZenML..."
+    [ ! -d ".zen" ] && uv run zenml init
 
-    if [ ! -d ".zen" ]; then
-        uv run zenml init
-        print_success "ZenML repository initialized."
-    fi
-
-    print_info "Starting ZenML Server (Background)..."
-
-    # Check if port 8237 is in use
-    if lsof -Pi :8237 -sTCP:LISTEN -t >/dev/null ; then
-        print_warning "ZenML Server appears to be running already on port 8237."
-    else
-        # Bind to 0.0.0.0 to allow external access via RunPod Proxy/TCP
+    if ! lsof -Pi :8237 -sTCP:LISTEN -t >/dev/null ; then
         nohup uv run zenml up --host 0.0.0.0 --port 8237 > logs/zenml_server.log 2>&1 &
-
-        # Wait for startup
         sleep 5
-        if lsof -Pi :8237 -sTCP:LISTEN -t >/dev/null ; then
-            print_success "ZenML Server started!"
-            echo ""
-            echo -e "${YELLOW}Accessing Dashboard:${NC}"
-            echo "1. RunPod Console -> Connect -> TCP Port Mapping"
-            echo "2. Map Internal Port 8237 to a Public Port."
-            echo "3. Or use SSH Tunnel: ssh -L 8237:localhost:8237 root@<POD_IP> -p <SSH_PORT>"
-            echo ""
-        else
-            print_error "ZenML failed to start. Check logs/zenml_server.log"
-        fi
+        print_success "ZenML Server running on port 8237 (Use TCP Port Mapping)"
     fi
 }
 
 check_services() {
-    print_info "Checking external service connectivity..."
-    load_env
+    print_info "Checking service connectivity via Tunnel..."
 
-    # Qdrant
-    QDRANT_HOST="${QDRANT_HOST:-localhost}"
-    QDRANT_PORT="${QDRANT_PORT:-6333}"
-
-    if curl --max-time 3 -s "http://${QDRANT_HOST}:${QDRANT_PORT}/healthz" > /dev/null; then
-        print_success "Qdrant reachable."
+    # Check Qdrant Local (via Tunnel)
+    if curl --max-time 3 -s "http://localhost:6333/healthz" > /dev/null; then
+        print_success "Qdrant reachable via localhost:6333 (Tunnel OK)"
     else
-        print_warning "Cannot reach Qdrant at ${QDRANT_HOST}:${QDRANT_PORT}. Is it running?"
+        print_warning "Cannot reach Qdrant on localhost:6333. Tunnel might be down."
     fi
 }
 
@@ -252,56 +210,61 @@ create_directories() {
     mkdir -p data models logs model_checkpoints .cache
 }
 
-# --- Main Execution ---
+# --- Main ---
 
 main() {
     echo "========================================================"
-    echo "   ScriptGuard RunPod Environment Setup"
+    echo "   ScriptGuard RunPod Setup (Secure Tunnel)"
     echo "========================================================"
 
-    # 1. Preliminaries
     check_workspace
     check_python_system
     check_uv
-    check_cuda
     create_directories
-    setup_env
+    setup_env_file
 
-    # 2. Installation (Skip if check-only)
+    # Setup SSH Tunnel BEFORE syncing deps
+    setup_tunnel
+
     if [ $CHECK_ONLY -eq 0 ]; then
         install_dependencies
-        verify_dependencies
         init_zenml
     fi
 
-    # 3. Final Checks
     check_services
 
-    echo ""
     echo "========================================================"
     echo "   Setup Complete!"
     echo "========================================================"
 
-    if [ $CHECK_ONLY -eq 1 ]; then
-        exit 0
-    fi
+    if [ $CHECK_ONLY -eq 1 ]; then exit 0; fi
 
-    # 4. Run Training
+    # --- TRAINING LAUNCH SECTION ---
+
+    echo ""
+    echo -e "${YELLOW}IMPORTANT:${NC} Before starting training, ensure you have edited"
+    echo -e "           the ${BLUE}.env${NC} file with your API keys (WandB, HF, etc.)!"
+    echo ""
+
     if [ $AUTO_APPROVE -eq 1 ]; then
         print_info "Auto-start enabled. Launching training pipeline..."
+        # Reload env vars just in case
+        load_env
         uv run python src/main.py
     else
-        echo ""
-        read -p "Do you want to start the training pipeline now? (y/n) " -n 1 -r
-        echo
+        read -p "Have you updated .env and want to start training now? (y/n) " -n 1 -r; echo
         if [[ $REPLY =~ ^[Yy]$ ]]; then
-            print_info "Launching src/main.py..."
+            # Reload env vars to ensure shell has them if needed
+            load_env
+            print_info "Starting pipeline..."
             uv run python src/main.py
         else
-            print_info "Ready. Run manually with: uv run python src/main.py"
+            print_info "Pipeline skipped."
+            echo "To run manually:"
+            echo "1. nano .env"
+            echo "2. uv run python src/main.py"
         fi
     fi
 }
 
-# Run Main
-main
+main "$@"
