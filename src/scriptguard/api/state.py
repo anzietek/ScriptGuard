@@ -5,7 +5,6 @@ Handles lifecycle of global resources like models and database connections.
 
 import os
 import torch
-import asyncpg
 import hashlib
 from typing import Optional, Dict, Any
 from transformers import AutoTokenizer, AutoModelForCausalLM
@@ -14,6 +13,14 @@ from scriptguard.rag.qdrant_store import QdrantStore, bootstrap_cve_data
 from scriptguard.utils.logger import logger
 from scriptguard.config_loader import load_config
 from scriptguard.schemas.config_schema import ScriptGuardConfig
+
+# Optional asyncpg import for graceful degradation
+try:
+    import asyncpg
+    HAS_ASYNCPG = True
+except ImportError:
+    HAS_ASYNCPG = False
+    logger.warning("asyncpg not found. Database logging will be disabled.")
 
 class AppState:
     """
@@ -24,7 +31,7 @@ class AppState:
         self.model = None
         self.tokenizer = None
         self.rag_store: Optional[QdrantStore] = None
-        self.db_pool: Optional[asyncpg.Pool] = None
+        self.db_pool = None # Type: Optional[asyncpg.Pool]
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
 
     def load_config(self, config_path: str = "config.yaml"):
@@ -102,16 +109,24 @@ class AppState:
                 use_https=qdrant_cfg.use_https
             )
 
-            # Bootstrap if empty
-            info = self.rag_store.get_collection_info()
-            points_count = info.get('points_count', 0)
+            # Check if bootstrapping is allowed via env var (default: False for API)
+            bootstrap_enabled = os.getenv("BOOTSTRAP_QDRANT", "false").lower() == "true"
 
-            if points_count == 0:
-                logger.info("Qdrant collection is empty. Bootstrapping...")
-                bootstrap_cve_data(self.rag_store)
-                logger.info("✅ Qdrant initialized with CVE patterns")
+            if bootstrap_enabled:
+                info = self.rag_store.get_collection_info()
+                points_count = info.get('points_count', 0)
+
+                if points_count == 0:
+                    logger.info("Qdrant collection is empty. Bootstrapping...")
+                    bootstrap_cve_data(self.rag_store)
+                    logger.info("✅ Qdrant initialized with CVE patterns")
+                else:
+                    logger.info(f"✅ Qdrant ready ({points_count} vectors)")
             else:
-                logger.info(f"✅ Qdrant ready ({points_count} vectors)")
+                # Just check connection without writing
+                info = self.rag_store.get_collection_info()
+                points_count = info.get('points_count', 0)
+                logger.info(f"✅ Qdrant connected ({points_count} vectors). Bootstrapping disabled.")
 
         except Exception as e:
             logger.error(f"❌ Qdrant initialization failed: {e}")
@@ -120,7 +135,7 @@ class AppState:
 
     async def _init_db(self):
         """Initialize PostgreSQL connection pool and schema."""
-        if not self.config:
+        if not HAS_ASYNCPG or not self.config:
             return
 
         db_cfg = self.config.database.postgresql

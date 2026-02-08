@@ -16,7 +16,7 @@ from scriptguard.api.schemas import (
 )
 from scriptguard.api.state import app_state
 from scriptguard.utils.logger import logger
-from scriptguard.utils.prompts import format_inference_prompt, parse_classification_output
+from scriptguard.utils.prompts import format_inference_prompt, parse_classification_output, format_fewshot_prompt
 import torch
 
 # --- Lifecycle Events ---
@@ -46,10 +46,9 @@ app = FastAPI(title="ScriptGuard Inference API", version="1.0.0", lifespan=lifes
 @app.middleware("http")
 async def add_process_time_header(request: Request, call_next):
     request_id = str(uuid.uuid4())
+    request.state.request_id = request_id # Store for endpoint access
     start_time = time.time()
     
-    # Add request ID to logger context if possible, or just log it
-    # For simplicity here, we'll just log the start
     logger.info(f"Request started: {request.method} {request.url.path} - ID: {request_id}")
     
     try:
@@ -87,19 +86,20 @@ async def global_exception_handler(request: Request, exc: Exception):
     """
     Catch-all handler for unhandled exceptions.
     """
+    request_id = getattr(request.state, "request_id", "unknown")
     logger.error(f"Unhandled exception: {exc}", exc_info=True)
     return JSONResponse(
         status_code=500,
         content=ErrorResponse(
             error="internal_server_error",
             message="An unexpected error occurred. Please contact support.",
-            details={"request_id": request.headers.get("X-Request-ID")}
+            details={"request_id": request_id}
         ).model_dump()
     )
 
 # --- Dependencies ---
 
-async def verify_api_key(x_api_key: str = Header(None)):
+async def verify_api_key(x_api_key: str = Header(None, alias="X-API-Key")):
     """
     Verify API key from header against environment variable.
     If SCRIPTGUARD_API_KEY is not set, auth is disabled (warning logged).
@@ -142,38 +142,56 @@ async def readiness_check():
 
 @app.post("/analyze", response_model=ScriptAnalysisResponse, dependencies=[Depends(verify_api_key)])
 async def analyze_script(
-    request: ScriptAnalysisRequest, 
+    request: Request,
+    analysis_request: ScriptAnalysisRequest, 
     background_tasks: BackgroundTasks,
-    x_request_id: str = Header(None),
-    x_api_key: str = Header(None)
+    x_api_key: str = Header(None, alias="X-API-Key")
 ):
     """
     Analyze a script for malicious content.
     """
     start_time = time.time()
+    request_id = getattr(request.state, "request_id", str(uuid.uuid4()))
     
     if not app_state.model or not app_state.tokenizer:
         raise HTTPException(status_code=503, detail="Model not initialized")
 
-    # Input validation (basic length check handled by Pydantic, but we can add more)
-    if len(request.script_content.strip()) == 0:
+    # Input validation (Config-driven limits)
+    max_len = 100000 # Default fallback
+    if app_state.config and app_state.config.validation:
+        max_len = app_state.config.validation.max_length
+        
+    if len(analysis_request.script_content) > max_len:
+        raise HTTPException(
+            status_code=400, 
+            detail=f"Script content exceeds maximum allowed length of {max_len} characters"
+        )
+
+    if len(analysis_request.script_content.strip()) == 0:
         raise HTTPException(status_code=400, detail="Script content cannot be empty")
 
     # RAG Context
-    rag_context = ""
+    rag_context_examples = []
     related_cves = []
     
-    if request.include_rag and app_state.rag_store:
+    if analysis_request.include_rag and app_state.rag_store:
         try:
             # Use config for limit if available
             limit = 2
             if app_state.config and app_state.config.code_embedding and app_state.config.code_embedding.fewshot:
                  limit = app_state.config.code_embedding.fewshot.k or 2
 
-            results = app_state.rag_store.search(request.script_content, limit=limit)
+            results = app_state.rag_store.search(analysis_request.script_content, limit=limit)
             
             for r in results:
                 payload = r.get('payload', {})
+                # Prepare context for few-shot prompt
+                rag_context_examples.append({
+                    "code": payload.get("pattern", "") or payload.get("description", ""), # Use pattern if available as code example
+                    "label": "malicious", # Assuming RAG returns malicious patterns/CVEs
+                    "score": r.get("score")
+                })
+                
                 related_cves.append(VulnerabilityInfo(
                     id=r.get('id'),
                     description=payload.get('description', 'Unknown'),
@@ -181,27 +199,26 @@ async def analyze_script(
                     score=r.get('score')
                 ))
             
-            rag_context = "\n".join([f"Known Vulnerability: {c.description}" for c in related_cves])
         except Exception as e:
             logger.warning(f"RAG search failed: {e}")
             # Continue without RAG
 
-    # Construct Prompt using centralized utility
-    # Note: We are currently not using the RAG context in the prompt format provided by prompts.py
-    # If we want to use RAG context, we should update prompts.py or use format_fewshot_prompt if applicable
-    # For now, we stick to the standard inference prompt to ensure consistency with training
-    
-    prompt = format_inference_prompt(request.script_content)
+    # Construct Prompt
+    if rag_context_examples:
+        # Use Few-Shot prompt if RAG provided context
+        prompt = format_fewshot_prompt(analysis_request.script_content, rag_context_examples)
+    else:
+        # Fallback to standard inference prompt
+        prompt = format_inference_prompt(analysis_request.script_content)
     
     # Inference
     try:
         inputs = app_state.tokenizer(prompt, return_tensors="pt").to(app_state.device)
         
         # Get generation config from app_state.config if available
-        max_new_tokens = 20 # Reduced since we only expect BENIGN/MALICIOUS
+        max_new_tokens = 20 
         temperature = 0.1
         if app_state.config:
-            # Override max_length for classification task
             temperature = app_state.config.inference.temperature
 
         with torch.no_grad():
@@ -209,7 +226,7 @@ async def analyze_script(
                 **inputs,
                 max_new_tokens=max_new_tokens,
                 do_sample=False, # Deterministic
-                temperature=temperature if temperature > 0 else None, # Only if sampling
+                # temperature is ignored when do_sample=False, removing to avoid warnings
                 pad_token_id=app_state.tokenizer.pad_token_id,
                 eos_token_id=app_state.tokenizer.eos_token_id
             )
@@ -222,19 +239,18 @@ async def analyze_script(
         is_malicious = classification_result == 1
         confidence = 0.95 if classification_result != -1 else 0.5
         
-        # Extract reasoning (everything after the classification)
-        # This is a heuristic since the prompt asks for one word, but the model might generate more
+        # Extract reasoning
         reasoning = response_text.split("# Analysis: The script above is classified as:")[-1].strip()
         
         # Calculate processing time
         processing_time_ms = (time.time() - start_time) * 1000
         
         # Log to DB asynchronously
-        script_hash = hashlib.sha256(request.script_content.encode()).hexdigest()
+        script_hash = hashlib.sha256(analysis_request.script_content.encode()).hexdigest()
         api_key_prefix = x_api_key[:4] if x_api_key else "none"
         
         log_data = {
-            "request_id": x_request_id or str(uuid.uuid4()),
+            "request_id": request_id,
             "script_hash": script_hash,
             "is_malicious": is_malicious,
             "confidence": confidence,

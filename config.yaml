@@ -24,6 +24,7 @@ api_keys:
   nvd_api_key: ${NVD_API_KEY}
   malwarebazaar_api_key: ${MALWAREBAZAAR_API_KEY}
   huggingface_token: ${HUGGINGFACE_TOKEN}
+  scriptguard_api_key: ${SCRIPTGUARD_API_KEY}
 
   # Network resilience
   max_retries: 3
@@ -185,6 +186,7 @@ qdrant:
   timeout: 30
   grpc_port: ${QDRANT_GRPC_PORT:-6334}
   prefer_grpc: true
+  bootstrap_on_startup: ${BOOTSTRAP_QDRANT:-false}
 
 # ============================================================================
 # CODE EMBEDDING CONFIGURATION
