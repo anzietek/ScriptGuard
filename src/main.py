@@ -1,15 +1,19 @@
 import os
 import sys
 
-# CRITICAL: Monkey-patch torch to add missing int1/int2 dtypes BEFORE any imports
-# torchao >= 0.7 requires torch.int1 which was added in PyTorch 2.6+
+# CRITICAL: Monkey-patch torch to add missing low-bit int dtypes BEFORE any imports
+# torchao >= 0.7 requires torch.int1/int2/int3/int4/int5/int6/int7 added in PyTorch 2.6+
 # We're on PyTorch 2.5.1 for unsloth compatibility, so we fake these dtypes
 import torch
 if not hasattr(torch, 'int1'):
-    # Create fake dtypes that won't actually be used
+    # Create fake dtypes as aliases to int8 (they won't actually be used in our pipeline)
     torch.int1 = torch.int8  # type: ignore
     torch.int2 = torch.int8  # type: ignore
+    torch.int3 = torch.int8  # type: ignore
     torch.int4 = torch.int8  # type: ignore
+    torch.int5 = torch.int8  # type: ignore
+    torch.int6 = torch.int8  # type: ignore
+    torch.int7 = torch.int8  # type: ignore
 
 # CRITICAL: Import Windows Triton fix FIRST - before any other imports
 # This monkey-patches torch.compile to prevent Triton CUDA version errors
