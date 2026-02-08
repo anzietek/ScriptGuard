@@ -89,7 +89,13 @@ override-dependencies = [
 ]
 
 [tool.uv.extra-build-dependencies]
-flash-attn = ["torch"]
+flash-attn = [
+    "torch>=2.6.0",
+    "ninja",
+    "packaging",
+    "setuptools",
+    "wheel",
+]
 
 [dependency-groups]
 dev = [
