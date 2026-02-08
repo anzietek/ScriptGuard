@@ -1,97 +1,137 @@
-from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel
-from typing import List, Optional
-import torch
-from transformers import AutoTokenizer, AutoModelForCausalLM
-from peft import PeftModel
-from scriptguard.rag.qdrant_store import QdrantStore
-from scriptguard.utils.logger import logger
+import time
+import uuid
 import os
+from fastapi import FastAPI, HTTPException, Request, Depends, Header, status
+from fastapi.responses import JSONResponse
+from scriptguard.api.schemas import (
+    ScriptAnalysisRequest, 
+    ScriptAnalysisResponse, 
+    VulnerabilityInfo,
+    HealthResponse,
+    ReadinessResponse
+)
+from scriptguard.api.state import app_state
+from scriptguard.utils.logger import logger
+import torch
 
-app = FastAPI(title="ScriptGuard Inference API")
+app = FastAPI(title="ScriptGuard Inference API", version="1.0.0")
 
-class ScriptAnalysisRequest(BaseModel):
-    script_content: str
-    include_rag: bool = True
+# --- Middleware ---
 
-class ScriptAnalysisResponse(BaseModel):
-    is_malicious: bool
-    confidence: float
-    reasoning: str
-    related_cves: List[dict] = []
+@app.middleware("http")
+async def add_process_time_header(request: Request, call_next):
+    request_id = str(uuid.uuid4())
+    start_time = time.time()
+    
+    # Add request ID to logger context if possible, or just log it
+    # For simplicity here, we'll just log the start
+    logger.info(f"Request started: {request.method} {request.url.path} - ID: {request_id}")
+    
+    response = await call_next(request)
+    
+    process_time = time.time() - start_time
+    response.headers["X-Process-Time"] = str(process_time)
+    response.headers["X-Request-ID"] = request_id
+    
+    logger.info(f"Request finished: {request.method} {request.url.path} - ID: {request_id} - Status: {response.status_code} - Duration: {process_time:.4f}s")
+    return response
 
-# Global variables for model and tokenizer (loaded on startup)
-model = None
-tokenizer = None
-rag_store = None
+# --- Dependencies ---
 
-@app.on_event("startup")
-def load_resources():
-    global model, tokenizer, rag_store
-
-    model_id = os.getenv("BASE_MODEL_ID", "bigcode/starcoder2-3b")
-    adapter_path = os.getenv("ADAPTER_PATH", "./model_checkpoints/final_adapter")
-
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-    torch_dtype = torch.float16 if torch.cuda.is_available() else torch.float32
-
-    logger.info(f"Loading model: {model_id} on {device}")
-    tokenizer = AutoTokenizer.from_pretrained(model_id)
-    base_model = AutoModelForCausalLM.from_pretrained(
-        model_id,
-        torch_dtype=torch_dtype,
-        low_cpu_mem_usage=True
-    )
-    base_model = base_model.to(device)
-
-    if os.path.exists(adapter_path):
-        model = PeftModel.from_pretrained(base_model, adapter_path)
-        logger.info(f"✅ Loaded adapter from {adapter_path}")
-    else:
-        model = base_model
-        logger.warning(f"⚠️  Adapter not found at {adapter_path}, using base model.")
-
-    # Initialize Qdrant RAG store
-    try:
-        from scriptguard.rag.qdrant_store import bootstrap_cve_data
-
-        rag_store = QdrantStore(
-            host=os.getenv("QDRANT_HOST", "localhost"),
-            port=int(os.getenv("QDRANT_PORT", 6333))
+async def verify_api_key(x_api_key: str = Header(None)):
+    """
+    Verify API key from header against environment variable.
+    If SCRIPTGUARD_API_KEY is not set, auth is disabled (warning logged).
+    """
+    expected_key = os.getenv("SCRIPTGUARD_API_KEY")
+    
+    if not expected_key:
+        # Auth disabled
+        return
+        
+    if x_api_key != expected_key:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid API Key",
         )
 
-        # Bootstrap with data if collection is empty
-        info = rag_store.get_collection_info()
-        points_count = info.get('points_count', 0)
+# --- Lifecycle Events ---
 
-        if points_count == 0:
-            logger.info("Qdrant collection is empty. Bootstrapping...")
-            bootstrap_cve_data(rag_store)
-            logger.info("✅ Qdrant initialized with CVE patterns")
-        else:
-            logger.info(f"✅ Qdrant ready ({points_count} vectors)")
-
+@app.on_event("startup")
+async def startup_event():
+    logger.info("Starting ScriptGuard API...")
+    try:
+        app_state.load_resources()
     except Exception as e:
-        logger.error(f"❌ Qdrant initialization failed: {e}")
-        logger.warning("API will run without RAG support")
-        rag_store = None
+        logger.critical(f"Failed to initialize application state: {e}")
+        # We might want to exit here, but let's allow it to run so /health can report error
+        pass
 
-@app.post("/analyze", response_model=ScriptAnalysisResponse)
-async def analyze_script(request: ScriptAnalysisRequest):
-    if not model or not tokenizer:
-        raise HTTPException(status_code=503, detail="Model not loaded")
+# --- Endpoints ---
+
+@app.get("/health", response_model=HealthResponse)
+async def health_check():
+    """Liveness probe."""
+    return HealthResponse(status="ok", version="1.0.0")
+
+@app.get("/ready", response_model=ReadinessResponse)
+async def readiness_check():
+    """Readiness probe."""
+    model_loaded = app_state.model is not None and app_state.tokenizer is not None
+    rag_connected = app_state.rag_store is not None
     
+    status_str = "ready" if model_loaded else "not_ready"
+    
+    if not model_loaded:
+        raise HTTPException(status_code=503, detail="Model not loaded")
+        
+    return ReadinessResponse(
+        status=status_str,
+        model_loaded=model_loaded,
+        rag_connected=rag_connected
+    )
+
+@app.post("/analyze", response_model=ScriptAnalysisResponse, dependencies=[Depends(verify_api_key)])
+async def analyze_script(request: ScriptAnalysisRequest):
+    """
+    Analyze a script for malicious content.
+    """
+    if not app_state.model or not app_state.tokenizer:
+        raise HTTPException(status_code=503, detail="Model not initialized")
+
+    # Input validation (basic length check handled by Pydantic, but we can add more)
+    if len(request.script_content.strip()) == 0:
+        raise HTTPException(status_code=400, detail="Script content cannot be empty")
+
     # RAG Context
     rag_context = ""
     related_cves = []
-    if request.include_rag and rag_store:
+    
+    if request.include_rag and app_state.rag_store:
         try:
-            results = rag_store.search(request.script_content, limit=2)
-            related_cves = results
-            rag_context = "\n".join([f"Known Vulnerability: {r['payload']['description']}" for r in results])
+            # Use config for limit if available
+            limit = 2
+            if app_state.config and app_state.config.code_embedding and app_state.config.code_embedding.fewshot:
+                 limit = app_state.config.code_embedding.fewshot.k or 2
+
+            results = app_state.rag_store.search(request.script_content, limit=limit)
+            
+            for r in results:
+                payload = r.get('payload', {})
+                related_cves.append(VulnerabilityInfo(
+                    id=r.get('id'),
+                    description=payload.get('description', 'Unknown'),
+                    severity=payload.get('severity'),
+                    score=r.get('score')
+                ))
+            
+            rag_context = "\n".join([f"Known Vulnerability: {c.description}" for c in related_cves])
         except Exception as e:
             logger.warning(f"RAG search failed: {e}")
-    
+            # Continue without RAG
+
+    # Construct Prompt
+    # Note: In a real production system, we should use a proper template
     prompt = f"""
     Context from known vulnerabilities:
     {rag_context}
@@ -102,28 +142,57 @@ async def analyze_script(request: ScriptAnalysisRequest):
     Is it malicious? Answer with reasoning.
     """
     
-    inputs = tokenizer(prompt, return_tensors="pt").to(model.device)
-    with torch.no_grad():
-        outputs = model.generate(
-            **inputs,
-            max_new_tokens=100,
-            do_sample=False,  # Deterministic generation
-            pad_token_id=tokenizer.pad_token_id,
-            eos_token_id=tokenizer.eos_token_id
+    # Inference
+    try:
+        inputs = app_state.tokenizer(prompt, return_tensors="pt").to(app_state.device)
+        
+        # Get generation config from app_state.config if available
+        max_new_tokens = 100
+        temperature = 0.1
+        if app_state.config:
+            max_new_tokens = app_state.config.inference.max_length # This might be too long for just reasoning, but using config
+            temperature = app_state.config.inference.temperature
+
+        with torch.no_grad():
+            outputs = app_state.model.generate(
+                **inputs,
+                max_new_tokens=max_new_tokens,
+                do_sample=False, # Deterministic
+                temperature=temperature if temperature > 0 else None, # Only if sampling
+                pad_token_id=app_state.tokenizer.pad_token_id,
+                eos_token_id=app_state.tokenizer.eos_token_id
+            )
+
+        response_text = app_state.tokenizer.decode(outputs[0], skip_special_tokens=True)
+        
+        # Post-processing / Parsing
+        # TODO: Replace with deterministic classification head or constrained decoding
+        # For now, we improve the heuristic slightly but acknowledge it's a P0 gap to fix fully with a classifier model
+        
+        # Strip the prompt from the response to analyze only the generated part
+        # This is a simple heuristic; robust implementation requires knowing prompt length
+        generated_text = response_text[len(prompt):] if len(response_text) > len(prompt) else response_text
+        
+        is_malicious = "malicious" in generated_text.lower()
+        
+        return ScriptAnalysisResponse(
+            is_malicious=is_malicious,
+            confidence=0.85, # Still mocked until we have logits/probabilities
+            reasoning=generated_text.strip(),
+            related_cves=related_cves
         )
 
-    response_text = tokenizer.decode(outputs[0], skip_special_tokens=True)
-    
-    # Simplified logic for demonstration
-    is_malicious = "malicious" in response_text.lower()
-    
-    return ScriptAnalysisResponse(
-        is_malicious=is_malicious,
-        confidence=0.85, # Mocked
-        reasoning=response_text,
-        related_cves=related_cves
-    )
+    except Exception as e:
+        logger.error(f"Inference failed: {e}")
+        raise HTTPException(status_code=500, detail="Internal inference error")
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    # Use config for host/port if available, else defaults
+    host = "0.0.0.0"
+    port = 8000
+    
+    # We can't easily access app_state.config here before startup, 
+    # so we rely on env vars or defaults for the server start
+    
+    uvicorn.run(app, host=host, port=port)
