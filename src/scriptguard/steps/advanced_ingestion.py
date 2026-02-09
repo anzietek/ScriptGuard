@@ -294,21 +294,34 @@ def advanced_data_ingestion(config: dict) -> List[Dict]:
 
         logger.info(f"✅ Saved {saved_count} samples to PostgreSQL (skipped {skipped_count} duplicates)")
 
-        # Verify what's in the database
+        # CRITICAL: Return samples FROM database (with IDs), not unique_samples (without IDs)
+        # This ensures downstream steps (vectorization) have db_id field
         malicious = db_manager.get_all_samples(label="malicious", limit=None)
         benign = db_manager.get_all_samples(label="benign", limit=None)
         logger.info(f"PostgreSQL now contains: {len(malicious)} malicious, {len(benign)} benign samples")
 
+        # Combine samples from DB (with IDs)
+        db_samples = malicious + benign
+        logger.info(f"Returning {len(db_samples)} samples FROM database (with IDs)")
+
+        # Print statistics on DB samples
+        logger.info("Generating statistics report...")
+        stats = DatasetStatistics(db_samples)
+        stats.print_report()
+
+        logger.info(f"Data ingestion completed: {len(db_samples)} samples with database IDs")
+
+        return db_samples
+
     except Exception as e:
         logger.error(f"Failed to store samples in PostgreSQL: {e}")
-        # Don't fail the pipeline, just log the error
+        logger.warning("Falling back to unique_samples (without database IDs)")
 
+        # Print statistics on unique samples (fallback)
+        logger.info("Generating statistics report...")
+        stats = DatasetStatistics(unique_samples)
+        stats.print_report()
 
-    # Print statistics
-    logger.info("Generating statistics report...")
-    stats = DatasetStatistics(unique_samples)
-    stats.print_report()
+        logger.info(f"Data ingestion completed: {len(unique_samples)} samples (no database IDs)")
 
-    logger.info(f"Data ingestion completed: {len(unique_samples)} unique samples")
-
-    return unique_samples
+        return unique_samples

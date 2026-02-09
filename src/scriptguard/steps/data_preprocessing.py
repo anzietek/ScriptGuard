@@ -88,7 +88,17 @@ def preprocess_data(
 
         # Use centralized prompt formatting
         text = format_training_prompt(code=content, label=label)
-        formatted_data.append({"text": text})
+
+        # CRITICAL: Preserve metadata fields for vectorization
+        # vectorize_samples needs: id, content, label, source, metadata
+        formatted_data.append({
+            "text": text,  # For training
+            "id": item.get("id"),  # Database ID (None for synthetic)
+            "content": content,  # Original code (for vectorization)
+            "label": label,  # Normalized label
+            "source": item.get("source", "unknown"),  # Data source
+            "metadata": item.get("metadata", {})  # Additional metadata
+        })
 
     dataset = Dataset.from_list(formatted_data)
 
