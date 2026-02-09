@@ -176,6 +176,23 @@ class CodeSimilarityStore:
         """Get API key (for backward compatibility)."""
         return self._api_key
 
+    def get_connection_info(self) -> Dict[str, Any]:
+        """Get connection information for diagnostics."""
+        connection_type = "cloud" if self._api_key else "local"
+        connection_url = (
+            f"{'https' if self._api_key else 'http'}://{self.host}:{self.port}"
+            if self._api_key else f"http://localhost:{self.port}"
+        )
+
+        return {
+            "connection_type": connection_type,
+            "connection_url": connection_url,
+            "host": self.host,
+            "port": self.port,
+            "has_api_key": bool(self._api_key),
+            "collection_name": self.collection_name
+        }
+
     def _load_config(self, config_path: str) -> Dict[str, Any]:
         """
         Load configuration from YAML file and substitute environment variables.
@@ -449,11 +466,13 @@ class CodeSimilarityStore:
             chunks = []
             for sample in samples:
                 content = sample.get("content", "")
-                db_id = sample.get("id")
+                # Get both point_id and db_id
+                point_id = sample.get("id")  # Qdrant point ID (always present)
+                db_id = sample.get("db_id")  # Database ID (None for synthetic samples)
 
                 # Generate parent metadata even for single-chunk documents
                 import hashlib
-                parent_id = hashlib.sha256(f"{db_id}_{content}".encode()).hexdigest()
+                parent_id = hashlib.sha256(f"{point_id}_{content}".encode()).hexdigest()
 
                 # Extract simple parent context
                 lines = content.split('\n')[:5]
@@ -461,9 +480,9 @@ class CodeSimilarityStore:
 
                 chunks.append({
                     "content": content,
-                    "db_id": db_id,
+                    "db_id": db_id,  # Real database ID (can be None)
                     "chunk_index": 0,
-                    "chunk_id": self._generate_id(content),
+                    "chunk_id": point_id,  # Use point_id as chunk_id
                     "total_chunks": 1,
                     "token_count": None,
                     "parent_id": parent_id,

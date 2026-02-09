@@ -86,8 +86,20 @@ def vectorize_samples(
         normalize=normalize,
         max_length=max_length,
         enable_chunking=enable_chunking,
-        chunk_overlap=chunk_overlap
+        chunk_overlap=chunk_overlap,
+        api_key=qdrant_config.get("api_key"),  # CRITICAL: Pass API key for connection consistency
+        use_https=qdrant_config.get("use_https", False)
     )
+
+    # Log connection information for diagnostics
+    connection_info = code_store.get_connection_info()
+    logger.info("=" * 60)
+    logger.info("VECTORIZATION CONNECTION INFO")
+    logger.info(f"  Type: {connection_info['connection_type']}")
+    logger.info(f"  URL: {connection_info['connection_url']}")
+    logger.info(f"  Collection: {connection_info['collection_name']}")
+    logger.info(f"  API key: {'SET' if connection_info['has_api_key'] else 'NOT SET'}")
+    logger.info("=" * 60)
 
     # Clear existing if requested
     if clear_existing:
@@ -106,14 +118,18 @@ def vectorize_samples(
     benign_count = 0
 
     for sample in data:
-        # Ensure ID exists (if not, generate one from hash)
-        sample_id = sample.get("id")
-        if sample_id is None:
-            # Fallback for synthetic/augmented data without DB ID
+        # Separate concerns: point_id (for Qdrant) vs db_id (for PostgreSQL)
+        db_id = sample.get("id")  # Real database ID (can be None for synthetic samples)
+
+        # Generate point_id for Qdrant (always needed)
+        if db_id is not None:
+            # Use database ID as point ID
+            point_id = db_id
+        else:
+            # Generate hash-based ID for synthetic/augmented samples
             import hashlib
             content_hash = hashlib.md5(sample.get("content", "").encode()).hexdigest()
-            # Use first 8 bytes as int ID
-            sample_id = int(content_hash[:16], 16) % (2**63 - 1)
+            point_id = int(content_hash[:16], 16) % (2**63 - 1)
 
         label = sample.get("label", "unknown")
         if label == "malicious":
@@ -122,7 +138,8 @@ def vectorize_samples(
             benign_count += 1
 
         samples_to_vectorize.append({
-            "id": sample_id,
+            "id": point_id,  # Qdrant point ID
+            "db_id": db_id,  # Real database ID (None if synthetic)
             "content": sample.get("content", ""),
             "label": label,
             "source": sample.get("source", "unknown"),

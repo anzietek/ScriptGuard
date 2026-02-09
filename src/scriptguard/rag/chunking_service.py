@@ -274,9 +274,13 @@ class ChunkingService:
         all_chunks = []
 
         for sample in samples:
+            # Use db_id field (real database ID, can be None for synthetic samples)
+            # Fallback to "id" for backward compatibility
+            db_id = sample.get("db_id") if "db_id" in sample else sample.get("id")
+
             chunks = self.chunk_code(
                 code=sample.get("content", ""),
-                db_id=sample.get("id"),
+                db_id=db_id,
                 label=sample.get("label"),
                 source=sample.get("source"),
                 metadata=sample.get("metadata")

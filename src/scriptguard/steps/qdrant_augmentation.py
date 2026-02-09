@@ -131,9 +131,52 @@ def augment_with_qdrant_patterns(
                 config_path=config_path
             )
 
-            # Get collection info
-            info = code_store.get_collection_info()
-            points_count = info.get('total_samples', 0)
+            # Log connection information for diagnostics
+            connection_info = code_store.get_connection_info()
+            logger.info("=" * 60)
+            logger.info("AUGMENTATION CONNECTION INFO")
+            logger.info(f"  Type: {connection_info['connection_type']}")
+            logger.info(f"  URL: {connection_info['connection_url']}")
+            logger.info(f"  Collection: {connection_info['collection_name']}")
+            logger.info(f"  API key: {'SET' if connection_info['has_api_key'] else 'NOT SET'}")
+            logger.info("=" * 60)
+
+            # Get collection info with enhanced error handling
+            try:
+                info = code_store.get_collection_info()
+                points_count = info.get('total_samples', 0)
+
+                logger.info(f"Collection status:")
+                logger.info(f"  Total points: {points_count}")
+                logger.info(f"  Status: {info.get('status', 'unknown')}")
+
+            except Exception as e:
+                logger.error("=" * 60)
+                logger.error("❌ COLLECTION ACCESS FAILED")
+                logger.error(f"Collection: {code_store.collection_name}")
+                logger.error(f"Error: {e}")
+                logger.error("")
+                logger.error("Possible causes:")
+                logger.error("  1. Connection mismatch between vectorization and augmentation")
+                logger.error("  2. Wrong API key or credentials")
+                logger.error("  3. Collection not created - run vectorization first")
+                logger.error(f"Connection: {connection_info}")
+                logger.error("=" * 60)
+                raise
+
+            # Warn if collection is empty
+            if points_count == 0:
+                logger.warning("=" * 60)
+                logger.warning("⚠️ EMPTY COLLECTION DETECTED")
+                logger.warning(f"Collection '{code_store.collection_name}' has 0 points")
+                logger.warning("")
+                logger.warning("Troubleshooting:")
+                logger.warning("  1. Check if vectorization completed successfully")
+                logger.warning("  2. Verify connection settings match between steps:")
+                logger.warning(f"     - Type: {connection_info['connection_type']}")
+                logger.warning(f"     - URL: {connection_info['connection_url']}")
+                logger.warning("  3. Review QDRANT_API_KEY environment variable")
+                logger.warning("=" * 60)
 
             if points_count > 0:
                 logger.info(f"Found {points_count} code samples in 'code_samples'")
@@ -150,6 +193,7 @@ def augment_with_qdrant_patterns(
                 total_points_scrolled = 0
                 chunk_index_distribution = {}
                 points_with_db_id = 0
+                points_with_null_db_id = 0  # Track synthetic/augmented samples
                 points_missing_chunk_index = 0
 
                 while True:
@@ -174,9 +218,21 @@ def augment_with_qdrant_patterns(
                         db_id = payload.get('db_id')
 
                         if not db_id:
+                            points_with_null_db_id += 1
                             continue
 
                         points_with_db_id += 1
+
+                        # Normalize db_id to integer (handle string/int types)
+                        try:
+                            if isinstance(db_id, str):
+                                db_id = int(db_id)
+                            elif not isinstance(db_id, int):
+                                logger.debug(f"Unexpected db_id type: {type(db_id)} = {db_id}")
+                                db_id = int(db_id)
+                        except (ValueError, TypeError) as e:
+                            logger.warning(f"Failed to convert db_id to int: {db_id} ({type(db_id)})")
+                            continue
 
                         # Get chunk_index with type safety
                         chunk_idx = payload.get('chunk_index')
@@ -217,9 +273,10 @@ def augment_with_qdrant_patterns(
                 # Log collection statistics
                 logger.info(f"Scrolled {total_points_scrolled} points from code_samples collection")
                 logger.info(f"Points with db_id: {points_with_db_id}")
+                logger.info(f"Points with NULL db_id (synthetic): {points_with_null_db_id}")
                 logger.info(f"Points missing chunk_index: {points_missing_chunk_index}")
                 logger.info(f"Chunk index distribution (top 10): {dict(sorted(chunk_index_distribution.items(), key=lambda x: x[1], reverse=True)[:10])}")
-                logger.info(f"Collected {len(db_ids_to_fetch)} unique db_ids for augmentation")
+                logger.info(f"Collected {len(db_ids_to_fetch)} unique db_ids for augmentation (from database samples only)")
 
                 # CRITICAL: Validate db_ids_to_fetch is not empty
                 if not db_ids_to_fetch:
@@ -242,10 +299,20 @@ def augment_with_qdrant_patterns(
                     # Batch fetch full content from PostgreSQL
                     logger.info(f"Fetching full content for {len(db_ids_to_fetch)} unique documents...")
 
+                    # Debug: Log sample of db_ids
+                    sample_ids = list(db_ids_to_fetch)[:10]
+                    logger.debug(f"Sample db_ids (first 10): {sample_ids}")
+                    logger.debug(f"Sample db_id types: {[type(x).__name__ for x in sample_ids[:3]]}")
+
                     from scriptguard.database.db_schema import get_connection
 
                     conn = get_connection()
                     cursor = conn.cursor()
+
+                    # Verify database has data
+                    cursor.execute("SELECT COUNT(*) as count, MIN(id) as min_id, MAX(id) as max_id FROM samples")
+                    db_stats = cursor.fetchone()
+                    logger.info(f"PostgreSQL database stats: {db_stats['count']} total samples, ID range: {db_stats['min_id']} to {db_stats['max_id']}")
 
                     placeholders = ','.join(['%s'] * len(db_ids_to_fetch))
                     query = f"""
@@ -254,8 +321,31 @@ def augment_with_qdrant_patterns(
                         WHERE id IN ({placeholders})
                     """
 
+                    logger.debug(f"Executing SQL query with {len(db_ids_to_fetch)} IDs...")
                     cursor.execute(query, tuple(db_ids_to_fetch))
                     rows = cursor.fetchall()
+
+                    logger.info(f"SQL query returned {len(rows)} rows from PostgreSQL")
+
+                    if len(rows) == 0 and len(db_ids_to_fetch) > 0:
+                        logger.error("=" * 60)
+                        logger.error("❌ ZERO ROWS RETURNED FROM DATABASE")
+                        logger.error(f"Expected: {len(db_ids_to_fetch)} rows")
+                        logger.error(f"Got: 0 rows")
+                        logger.error(f"Sample IDs queried: {sample_ids}")
+                        logger.error(f"Database has IDs from {db_stats['min_id']} to {db_stats['max_id']}")
+                        logger.error("")
+                        logger.error("Possible causes:")
+                        logger.error("  1. db_ids in Qdrant don't match PostgreSQL IDs")
+                        logger.error("     → Check if vectorization used actual DB IDs or generated hashes")
+                        logger.error("  2. Data was deleted from PostgreSQL after vectorization")
+                        logger.error("  3. Need to re-vectorize data with updated code")
+                        logger.error("")
+                        logger.error("Solution: Clear Qdrant collection and re-run vectorization:")
+                        logger.error("  1. Delete the collection in Qdrant")
+                        logger.error("  2. Set ENABLE_QDRANT_VECTORIZATION=true")
+                        logger.error("  3. Run the training pipeline again")
+                        logger.error("=" * 60)
 
                     # Initialize sanitizer and enricher (if enabled in config)
                     code_emb_config = config.get("code_embedding", {})
