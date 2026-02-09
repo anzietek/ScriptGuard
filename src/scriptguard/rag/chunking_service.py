@@ -1,8 +1,15 @@
 """
-Chunking Service - Sliding Window Chunking for Long Code Files
-Handles tokenization-aware chunking with overlap for better context preservation.
+Chunking Service - Hierarchical and Sliding Window Chunking for Code Files
+
+Supports two chunking strategies:
+1. Hierarchical (AST-aware): Chunks by function/class boundaries for semantic coherence
+2. Sliding Window: Token-based chunking with overlap for compatibility
+
+Hierarchical chunking completes the parent-child architecture vision by using AST
+boundaries (not just metadata) to create semantically complete chunks.
 """
 
+import ast
 import hashlib
 import warnings
 from typing import List, Dict, Any, Optional
@@ -14,31 +21,38 @@ class ChunkingService:
     """
     Token-aware chunking service for code files.
 
-    Uses sliding window approach to handle files exceeding max token length.
-    Preserves metadata and enables document-level aggregation.
+    Supports both hierarchical (AST-aware) and sliding window chunking strategies.
+    Preserves metadata and enables document-level aggregation through parent-child architecture.
     """
 
     def __init__(
         self,
         tokenizer_name: str = "microsoft/unixcoder-base",
         chunk_size: int = 512,
-        overlap: int = 64
+        overlap: int = 64,
+        max_function_tokens: int = 1024,
+        strategy: str = "sliding_window"
     ):
         """
         Initialize chunking service.
 
         Args:
             tokenizer_name: Tokenizer to use for token counting
-            chunk_size: Maximum tokens per chunk
-            overlap: Overlap tokens between consecutive chunks
+            chunk_size: Maximum tokens per chunk (for sliding window)
+            overlap: Overlap tokens between consecutive chunks (for sliding window)
+            max_function_tokens: Maximum tokens for a single function/class (hierarchical)
+            strategy: Default chunking strategy ("sliding_window" or "hierarchical")
         """
         self.chunk_size = chunk_size
         self.overlap = overlap
+        self.max_function_tokens = max_function_tokens
+        self.default_strategy = strategy
 
         logger.info(f"Initializing ChunkingService:")
         logger.info(f"  Tokenizer: {tokenizer_name}")
-        logger.info(f"  Chunk size: {chunk_size} tokens")
-        logger.info(f"  Overlap: {overlap} tokens")
+        logger.info(f"  Default strategy: {strategy}")
+        logger.info(f"  Sliding window - chunk size: {chunk_size} tokens, overlap: {overlap} tokens")
+        logger.info(f"  Hierarchical - max function tokens: {max_function_tokens}")
 
         try:
             self.tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
@@ -124,6 +138,42 @@ class ChunkingService:
         db_id: Optional[int] = None,
         label: Optional[str] = None,
         source: Optional[str] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+        strategy: Optional[str] = None,
+        language: str = "python"
+    ) -> List[Dict[str, Any]]:
+        """
+        Chunk code using specified strategy (hierarchical or sliding window).
+
+        Args:
+            code: Source code to chunk
+            db_id: Database ID of the original sample
+            label: Label (malicious/benign)
+            source: Data source
+            metadata: Additional metadata
+            strategy: Chunking strategy ("hierarchical" or "sliding_window", defaults to self.default_strategy)
+            language: Programming language (for hierarchical chunking, currently only "python" supported)
+
+        Returns:
+            List of chunk dictionaries with parent-child metadata
+        """
+        if not code or not code.strip():
+            return []
+
+        # Use specified strategy or default
+        chunking_strategy = strategy or self.default_strategy
+
+        if chunking_strategy == "hierarchical":
+            return self._chunk_hierarchical(code, db_id, label, source, metadata, language)
+        else:
+            return self._chunk_sliding_window(code, db_id, label, source, metadata)
+
+    def _chunk_sliding_window(
+        self,
+        code: str,
+        db_id: Optional[int] = None,
+        label: Optional[str] = None,
+        source: Optional[str] = None,
         metadata: Optional[Dict[str, Any]] = None
     ) -> List[Dict[str, Any]]:
         """
@@ -148,6 +198,7 @@ class ChunkingService:
                 - chunk_id: Unique chunk identifier
                 - total_chunks: Total number of chunks for this document
                 - token_count: Actual token count of this chunk
+                - chunk_type: "sliding_window"
                 - parent_id: Hash of parent document
                 - parent_context: Module-level context (imports, signatures)
                 - label: Label
@@ -181,6 +232,7 @@ class ChunkingService:
                 "chunk_id": self._generate_chunk_id(code, 0),
                 "total_chunks": 1,
                 "token_count": len(tokens),
+                "chunk_type": "sliding_window",
                 "parent_id": parent_id,
                 "parent_context": parent_context,
                 "label": label,
@@ -227,6 +279,7 @@ class ChunkingService:
                 "chunk_id": self._generate_chunk_id(chunk_text, chunk_index),
                 "total_chunks": -1,  # Will be updated later
                 "token_count": len(chunk_tokens),
+                "chunk_type": "sliding_window",
                 "start_token": start_idx,
                 "end_token": end_idx,
                 "parent_id": parent_id,  # Parent document hash
@@ -251,8 +304,175 @@ class ChunkingService:
             chunk["total_chunks"] = total_chunks
 
         logger.debug(
-            f"Chunked document (db_id={db_id}, parent_id={parent_id[:8]}...): {len(tokens)} tokens → "
+            f"Sliding window chunking (db_id={db_id}, parent_id={parent_id[:8]}...): {len(tokens)} tokens → "
             f"{len(chunks)} chunks (size={self.chunk_size}, overlap={self.overlap}, stride={stride})"
+        )
+        return chunks
+
+    def _chunk_hierarchical(
+        self,
+        code: str,
+        db_id: Optional[int] = None,
+        label: Optional[str] = None,
+        source: Optional[str] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+        language: str = "python"
+    ) -> List[Dict[str, Any]]:
+        """
+        Chunk code using AST-aware hierarchical strategy (function/class boundaries).
+
+        Completes the parent-child architecture vision by using AST boundaries
+        (not just metadata) to create semantically complete chunks.
+
+        Strategy:
+        1. Parse code with AST (Python only)
+        2. Extract complete functions/classes as chunks
+        3. If function >max_function_tokens → fallback to sliding window for that function
+        4. If AST parse fails → fallback to sliding window for entire file
+        5. If non-Python → fallback to sliding window
+
+        Args:
+            code: Source code to chunk
+            db_id: Database ID of the original sample
+            label: Label (malicious/benign)
+            source: Data source
+            metadata: Additional metadata
+            language: Programming language (currently only "python" supported)
+
+        Returns:
+            List of chunk dictionaries with:
+                - content: Complete function/class code
+                - chunk_type: "function" | "class" | "module" | "sliding_window_fallback"
+                - function_name: Name of function/class (if applicable)
+                - line_start, line_end: Source line numbers
+                - All standard chunk metadata (parent_id, parent_context, etc.)
+        """
+        if language != "python":
+            logger.debug(f"Hierarchical chunking not supported for {language}, fallback to sliding window")
+            return self._chunk_sliding_window(code, db_id, label, source, metadata)
+
+        # Try to parse AST
+        try:
+            with warnings.catch_warnings():
+                warnings.filterwarnings('ignore', category=SyntaxWarning)
+                tree = ast.parse(code)
+        except SyntaxError as e:
+            logger.warning(f"AST parse failed (db_id={db_id}): {e}. Fallback to sliding window.")
+            return self._chunk_sliding_window(code, db_id, label, source, metadata)
+
+        chunks = []
+
+        # Generate parent metadata (reuse existing infrastructure)
+        parent_id = self._generate_parent_id(code, db_id)
+        parent_context = self._extract_parent_context(code)
+
+        # Extract module-level code (imports, globals, etc.)
+        code_lines = code.split('\n')
+        module_code_lines = []
+        last_line = 0
+
+        for node in tree.body:
+            if isinstance(node, (ast.FunctionDef, ast.ClassDef, ast.AsyncFunctionDef)):
+                # Extract code BEFORE this function/class (module-level)
+                if node.lineno > last_line + 1:
+                    module_lines = code_lines[last_line:node.lineno - 1]
+                    module_code = '\n'.join(module_lines).strip()
+                    if module_code:
+                        module_code_lines.append(module_code)
+
+                # Extract this function/class
+                try:
+                    chunk_code = ast.get_source_segment(code, node)
+                    if not chunk_code:
+                        continue
+
+                    tokens = self.tokenizer.encode(chunk_code, add_special_tokens=False)
+
+                    if len(tokens) <= self.max_function_tokens:
+                        # Small enough - keep as complete unit
+                        chunks.append({
+                            "content": chunk_code,
+                            "db_id": db_id,
+                            "chunk_index": len(chunks),
+                            "chunk_id": self._generate_chunk_id(chunk_code, len(chunks)),
+                            "total_chunks": -1,  # Updated later
+                            "chunk_type": "function" if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) else "class",
+                            "function_name": node.name,
+                            "line_start": node.lineno,
+                            "line_end": node.end_lineno,
+                            "token_count": len(tokens),
+                            "parent_id": parent_id,
+                            "parent_context": parent_context,
+                            "label": label,
+                            "source": source,
+                            "metadata": metadata or {}
+                        })
+                    else:
+                        # Too large - fallback to sliding window for this function
+                        logger.debug(f"Function {node.name} too large ({len(tokens)} tokens), using sliding window")
+
+                        # Reuse sliding window logic
+                        sub_chunks = self._chunk_sliding_window(
+                            chunk_code, db_id, label, source, metadata
+                        )
+                        # Mark as sliding window fallback and preserve function context
+                        for sc in sub_chunks:
+                            sc["chunk_type"] = "sliding_window_fallback"
+                            sc["function_name"] = f"{node.name} (partial)"
+                            sc["parent_id"] = parent_id  # Preserve parent relationship
+                            sc["parent_context"] = parent_context
+                        chunks.extend(sub_chunks)
+
+                    last_line = node.end_lineno if node.end_lineno else last_line
+
+                except Exception as e:
+                    logger.warning(f"Failed to extract {node.name}: {e}")
+                    continue
+
+        # Extract trailing module-level code (after last function)
+        if last_line < len(code_lines):
+            trailing_lines = code_lines[last_line:]
+            trailing_code = '\n'.join(trailing_lines).strip()
+            if trailing_code:
+                module_code_lines.append(trailing_code)
+
+        # If there's module-level code, add as first chunk
+        if module_code_lines:
+            module_code = '\n'.join(module_code_lines)
+            tokens = self.tokenizer.encode(module_code, add_special_tokens=False)
+            chunks.insert(0, {
+                "content": module_code,
+                "db_id": db_id,
+                "chunk_index": 0,
+                "chunk_id": self._generate_chunk_id(module_code, 0),
+                "total_chunks": -1,
+                "chunk_type": "module",
+                "function_name": None,
+                "token_count": len(tokens),
+                "parent_id": parent_id,
+                "parent_context": parent_context,
+                "label": label,
+                "source": source,
+                "metadata": metadata or {}
+            })
+
+        # Update chunk indices and total_chunks
+        for i, chunk in enumerate(chunks):
+            chunk["chunk_index"] = i
+            chunk["total_chunks"] = len(chunks)
+
+        if not chunks:
+            # No functions extracted - fallback to sliding window
+            logger.debug(f"No functions/classes found in code (db_id={db_id}), fallback to sliding window")
+            return self._chunk_sliding_window(code, db_id, label, source, metadata)
+
+        # Count chunk types for logging
+        func_count = sum(1 for c in chunks if c['chunk_type'] in ['function', 'class'])
+        fallback_count = sum(1 for c in chunks if c['chunk_type'] == 'sliding_window_fallback')
+
+        logger.debug(
+            f"Hierarchical chunking (db_id={db_id}, parent_id={parent_id[:8]}...): "
+            f"{len(chunks)} chunks ({func_count} functions/classes, {fallback_count} fallback chunks)"
         )
         return chunks
 

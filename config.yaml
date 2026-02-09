@@ -210,9 +210,29 @@ code_embedding:
   # Pooling Strategy
   pooling_strategy: "mean_pooling"
 
-  # Normalization and Chunking
+  # Normalization
   normalize: true
+
+  # Chunking Strategy Configuration
   enable_chunking: true
+  chunking_strategy: "hierarchical"  # "sliding_window" | "hierarchical"
+
+  # Hierarchical Chunking (AST-aware)
+  # Completes parent-child architecture by using AST boundaries for chunk creation
+  hierarchical:
+    enabled: true
+    max_function_tokens: 1024  # Max tokens for single function/class chunk
+    fallback_to_sliding: true  # Auto-fallback for large functions/parse errors
+    languages:
+      - "python"  # Currently only Python supported
+      # Future: "javascript", "powershell"
+
+  # Sliding Window Chunking (used for fallback and non-Python)
+  sliding_window:
+    max_code_length: 512
+    chunk_overlap: 64
+
+  # Legacy support (deprecated, use sliding_window.*)
   max_code_length: 512
   chunk_overlap: 64
 

