@@ -80,20 +80,25 @@ class AppState:
     def _load_model(self):
         """Load the model and tokenizer."""
         model_id = self.config.training.model_id if self.config else "bigcode/starcoder2-3b"
-        
+
         logger.info(f"Loading model: {model_id} on {self.device}")
-        
+
         try:
+            # Platform-specific attention for API
+            import platform
+            attn_impl = "eager" if platform.system() == "Windows" else None
+
             torch_dtype = torch.float16 if self.device == "cuda" else torch.float32
-            
+
             self.tokenizer = AutoTokenizer.from_pretrained(model_id)
             if not self.tokenizer.pad_token:
                 self.tokenizer.pad_token = self.tokenizer.eos_token
-                
+
             base_model = AutoModelForCausalLM.from_pretrained(
                 model_id,
                 torch_dtype=torch_dtype,
-                low_cpu_mem_usage=True
+                low_cpu_mem_usage=True,
+                attn_implementation=attn_impl  # None on Linux = use default
             )
             
             adapter_path = os.getenv("ADAPTER_PATH", "./model_checkpoints/final_adapter")

@@ -254,6 +254,10 @@ def evaluate_model(
         eval_dtype = torch.float32
         logger.info("Using FP32 for evaluation")
 
+    # Platform-specific attention for evaluation
+    import platform
+    attn_impl = "eager" if platform.system() == "Windows" else None
+
     try:
         if device == "cuda":
             # Load model on GPU with dtype matching training
@@ -262,6 +266,7 @@ def evaluate_model(
                 base_model_id,
                 dtype=eval_dtype,  # Use 'dtype' instead of deprecated 'torch_dtype'
                 low_cpu_mem_usage=True,
+                attn_implementation=attn_impl,  # None on Linux = use default
                 # NO device_map="auto" - causes issues with PEFT adapter loading
             )
             base_model = base_model.to(device)
@@ -275,7 +280,8 @@ def evaluate_model(
         base_model = AutoModelForCausalLM.from_pretrained(
             base_model_id,
             dtype=torch.float32,  # Use 'dtype' instead of deprecated 'torch_dtype'
-            low_cpu_mem_usage=True
+            low_cpu_mem_usage=True,
+            attn_implementation=attn_impl  # None on Linux = use default
         )
         base_model = base_model.to("cpu")
         device = "cpu"

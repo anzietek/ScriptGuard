@@ -50,15 +50,14 @@ class QLoRAFineTuner:
         # Prepare model config overrides
         model_kwargs = {}
 
-        # On Windows, always disable dropout (Unsloth may use flash attention internally)
+        # Platform-specific attention implementation
         if is_windows:
-            logger.info("Windows detected - disabling all dropout layers (required for Unsloth)")
+            # Force eager attention on Windows to avoid flex_attention errors
+            model_kwargs["attn_implementation"] = "eager"
             model_kwargs["attention_dropout"] = 0.0
             model_kwargs["residual_dropout"] = 0.0
             model_kwargs["embedding_dropout"] = 0.0
-            # Force disable Flash Attention on Windows if it causes issues, or ensure it's compatible
-            # Usually Unsloth handles this, but explicit disable might be safer if no Triton support
-            # model_kwargs["attn_implementation"] = "eager"
+            logger.info("Windows detected - using eager attention (flex_attention disabled)")
         elif use_flash_attn:
             logger.info("Flash Attention 2 enabled - disabling all dropout layers")
             model_kwargs["attention_dropout"] = 0.0
