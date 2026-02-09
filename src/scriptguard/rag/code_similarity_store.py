@@ -132,10 +132,29 @@ class CodeSimilarityStore:
 
         # Initialize chunking service if enabled
         if enable_chunking:
+            # Read chunking strategy from config
+            chunking_strategy = code_emb_config.get("chunking_strategy", "sliding_window")
+
+            # Read hierarchical config
+            hierarchical_config = code_emb_config.get("hierarchical", {})
+            max_function_tokens = hierarchical_config.get("max_function_tokens", 1024)
+
+            # Read sliding window config (with backward compatibility)
+            sliding_config = code_emb_config.get("sliding_window", {})
+            sliding_chunk_size = sliding_config.get("max_code_length", max_length)
+            sliding_overlap = sliding_config.get("chunk_overlap", chunk_overlap)
+
+            logger.info(f"  Chunking Strategy: {chunking_strategy}")
+            if chunking_strategy == "hierarchical":
+                logger.info(f"    - Max function tokens: {max_function_tokens}")
+                logger.info(f"    - Fallback (sliding window): {sliding_chunk_size} tokens, {sliding_overlap} overlap")
+
             self.chunking_service = ChunkingService(
                 tokenizer_name=embedding_model,
-                chunk_size=max_length,
-                overlap=chunk_overlap
+                chunk_size=sliding_chunk_size,
+                overlap=sliding_overlap,
+                max_function_tokens=max_function_tokens,
+                strategy=chunking_strategy
             )
         else:
             self.chunking_service = None

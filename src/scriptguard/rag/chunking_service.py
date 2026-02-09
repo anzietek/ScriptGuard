@@ -486,7 +486,7 @@ class ChunkingService:
                 - content: Code content
                 - label: Label
                 - source: Source
-                - metadata: Metadata (optional)
+                - metadata: Metadata (optional, may contain 'language')
 
         Returns:
             List of all chunks from all samples
@@ -498,17 +498,50 @@ class ChunkingService:
             # Fallback to "id" for backward compatibility
             db_id = sample.get("db_id") if "db_id" in sample else sample.get("id")
 
+            # Detect language from metadata or infer from source
+            language = self._detect_language(sample)
+
             chunks = self.chunk_code(
                 code=sample.get("content", ""),
                 db_id=db_id,
                 label=sample.get("label"),
                 source=sample.get("source"),
-                metadata=sample.get("metadata")
+                metadata=sample.get("metadata"),
+                language=language
             )
             all_chunks.extend(chunks)
 
         logger.info(f"Chunked {len(samples)} samples into {len(all_chunks)} chunks")
         return all_chunks
+
+    def _detect_language(self, sample: Dict[str, Any]) -> str:
+        """
+        Detect programming language from sample metadata or infer from source.
+
+        Args:
+            sample: Sample dictionary
+
+        Returns:
+            Language string (default: "python")
+        """
+        # Check metadata first
+        metadata = sample.get("metadata", {})
+        if isinstance(metadata, dict) and "language" in metadata:
+            return metadata["language"].lower()
+
+        # Infer from source field (e.g., "github_python", "malware.py")
+        source = sample.get("source", "")
+        if "python" in source.lower() or source.endswith(".py"):
+            return "python"
+        elif "javascript" in source.lower() or source.endswith((".js", ".jsx", ".ts", ".tsx")):
+            return "javascript"
+        elif "powershell" in source.lower() or source.endswith((".ps1", ".psm1")):
+            return "powershell"
+        elif source.endswith((".sh", ".bash")):
+            return "bash"
+
+        # Default to Python (most common in dataset)
+        return "python"
 
     def get_stats(self, samples: List[Dict[str, Any]]) -> Dict[str, Any]:
         """
