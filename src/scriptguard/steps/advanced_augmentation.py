@@ -198,6 +198,7 @@ def generate_polymorphic_variant(sample: Dict) -> Dict:
 
     # Create new sample
     variant = {
+        "id": None,  # CRITICAL: Augmented samples are synthetic (no DB ID)
         "content": obfuscated,
         "label": sample.get("label"),
         "source": sample.get("source") + "_augmented",
@@ -205,7 +206,8 @@ def generate_polymorphic_variant(sample: Dict) -> Dict:
         "metadata": {
             **sample.get("metadata", {}),
             "augmentation": technique,
-            "original_sample": sample.get("content_hash")
+            "original_sample": sample.get("content_hash"),
+            "parent_id": sample.get("id")  # Track original DB ID if present
         }
     }
 
@@ -275,13 +277,15 @@ def apply_obfuscation_techniques(
 
             if obfuscated != sample.get("content"):  # Only add if changed
                 augmented.append({
+                    "id": None,  # CRITICAL: Augmented samples are synthetic (no DB ID)
                     "content": obfuscated,
                     "label": sample.get("label"),
                     "source": sample.get("source") + f"_{technique}",
                     "url": sample.get("url"),
                     "metadata": {
                         **sample.get("metadata", {}),
-                        "obfuscation": technique
+                        "obfuscation": technique,
+                        "parent_id": sample.get("id")  # Track original DB ID if present
                     }
                 })
 
