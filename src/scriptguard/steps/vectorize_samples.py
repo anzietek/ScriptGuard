@@ -112,14 +112,36 @@ def vectorize_samples(
 
     logger.info(f"Processing {len(data)} training samples...")
 
+    # Log sample structure for debugging
+    if data:
+        first_sample = data[0]
+        logger.info(f"First sample keys: {list(first_sample.keys())}")
+        logger.info(f"First sample 'id' field: {first_sample.get('id', 'NOT FOUND')}")
+        logger.info(f"First sample 'source': {first_sample.get('source', 'NOT FOUND')}")
+
     # Prepare samples for vectorization
     samples_to_vectorize = []
     malicious_count = 0
     benign_count = 0
+    samples_with_id = 0
+    samples_without_id = 0
+    sample_id_examples = []
 
     for sample in data:
         # Separate concerns: point_id (for Qdrant) vs db_id (for PostgreSQL)
         db_id = sample.get("id")  # Real database ID (can be None for synthetic samples)
+
+        # Track statistics
+        if db_id is not None:
+            samples_with_id += 1
+            if len(sample_id_examples) < 10:
+                sample_id_examples.append({
+                    "id": db_id,
+                    "source": sample.get("source", "unknown"),
+                    "has_augmentation": "augmentation" in sample.get("metadata", {})
+                })
+        else:
+            samples_without_id += 1
 
         # Generate point_id for Qdrant (always needed)
         if db_id is not None:
@@ -149,6 +171,25 @@ def vectorize_samples(
 
     logger.info(f"  - Malicious: {malicious_count}")
     logger.info(f"  - Benign: {benign_count}")
+
+    # Log ID statistics
+    logger.info("=" * 60)
+    logger.info("SAMPLE ID ANALYSIS")
+    logger.info(f"Samples WITH database ID: {samples_with_id} ({samples_with_id/len(data)*100:.1f}%)")
+    logger.info(f"Samples WITHOUT database ID: {samples_without_id} ({samples_without_id/len(data)*100:.1f}%)")
+
+    if sample_id_examples:
+        logger.info(f"Sample IDs (first 10 with IDs):")
+        for ex in sample_id_examples:
+            logger.info(f"  - ID: {ex['id']}, Source: {ex['source']}, Augmented: {ex['has_augmentation']}")
+    else:
+        logger.warning("⚠️ NO SAMPLES HAVE DATABASE IDs!")
+        logger.warning("This means ALL samples will get db_id=NULL in Qdrant")
+        logger.warning("Possible causes:")
+        logger.warning("  1. Pipeline steps are dropping the 'id' field")
+        logger.warning("  2. Data ingestion doesn't load 'id' field")
+        logger.warning("  3. All samples are synthetic/augmented")
+    logger.info("=" * 60)
 
     # Vectorize and upload to Qdrant
     logger.info("Generating embeddings and uploading to Qdrant...")

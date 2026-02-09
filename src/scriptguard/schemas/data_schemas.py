@@ -16,6 +16,7 @@ class LabelType(str, Enum):
 
 class CodeSample(BaseModel):
     """Schema for raw code sample from data sources"""
+    id: Optional[int] = Field(None, description="Database ID (None for synthetic samples)")
     content: str = Field(..., min_length=1, description="Source code content")
     label: LabelType = Field(..., description="Classification label")
     source: str = Field(..., description="Data source (github, malwarebazaar, etc)")
