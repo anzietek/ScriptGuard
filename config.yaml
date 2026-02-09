@@ -333,7 +333,7 @@ features:
   extract_string_features: true
 
 # ============================================================================
-# TRAINING CONFIGURATION — RunPod Optimized
+# TRAINING CONFIGURATION — RunPod Optimized (FIXED FOR CUDA OOM)
 # ============================================================================
 training:
   model_id: "bigcode/starcoder2-3b"
@@ -366,11 +366,11 @@ training:
   resume_from_checkpoint: ${RESUME_CHECKPOINT:-latest}
   load_best_model_at_end: true
 
-  # BATCHING STRATEGY (Fixed for stability)
+  # BATCHING STRATEGY (Adjusted to prevent OOM)
   auto_find_batch_size: false     # Disabled to ensure accumulation works as intended
-  per_device_train_batch_size: 8  # Optimal for 2048 context on 24GB GPU
-  per_device_eval_batch_size: 8
-  gradient_accumulation_steps: 4  # 8 * 4 = 32 Effective Batch Size
+  per_device_train_batch_size: 4  # REDUCED from 8 to fix CUDA OOM
+  per_device_eval_batch_size: 4   # REDUCED from 8
+  gradient_accumulation_steps: 8  # INCREASED from 4 (4 * 8 = 32 Effective Batch Size)
 
   # Default on unclear prediction
   eval_default_on_unclear: "unknown"
@@ -415,7 +415,7 @@ training:
   tf32: true
 
   # Optimizer
-  optim: "adamw_8bit"
+  optim: "paged_adamw_8bit"   # CHANGED to paged optimizer to offload to CPU RAM if needed
 
   # Tokenization
   tokenizer_max_length: 2048  # Match max_seq_length
@@ -439,7 +439,7 @@ training:
   # Model Evaluation
   eval_max_new_tokens: 32
   eval_temperature: 0.2
-  eval_batch_size: 8
+  eval_batch_size: 4        # REDUCED to match training batch size
   eval_max_code_length: 500
 
   # Gradient Clipping

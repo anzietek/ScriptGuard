@@ -146,6 +146,12 @@ def augment_with_qdrant_patterns(
                 offset = None
                 batch_size = 100
 
+                # Initialize tracking for debugging
+                total_points_scrolled = 0
+                chunk_index_distribution = {}
+                points_with_db_id = 0
+                points_missing_chunk_index = 0
+
                 while True:
                     scroll_result = code_store.client.scroll(
                         collection_name="code_samples",
@@ -160,11 +166,47 @@ def augment_with_qdrant_patterns(
                     if not points:
                         break
 
-                    # Collect db_ids
+                    total_points_scrolled += len(points)
+
+                    # Collect db_ids with defensive type handling
                     for point in points:
                         payload = point.payload
                         db_id = payload.get('db_id')
-                        if db_id and payload.get('chunk_index', 0) == 0:  # Only first chunk per doc
+
+                        if not db_id:
+                            continue
+
+                        points_with_db_id += 1
+
+                        # Get chunk_index with type safety
+                        chunk_idx = payload.get('chunk_index')
+
+                        # Track distribution
+                        chunk_index_distribution[chunk_idx] = chunk_index_distribution.get(chunk_idx, 0) + 1
+
+                        if chunk_idx is None:
+                            points_missing_chunk_index += 1
+                            # If no chunk_index, assume it's a single document (treat as chunk 0)
+                            db_ids_to_fetch.add(db_id)
+                            continue
+
+                        # Type-safe comparison: handle both int and string
+                        is_first_chunk = False
+                        try:
+                            # Try int comparison first
+                            if isinstance(chunk_idx, int) and chunk_idx == 0:
+                                is_first_chunk = True
+                            # Handle string type
+                            elif isinstance(chunk_idx, str) and chunk_idx == "0":
+                                is_first_chunk = True
+                            # Handle numeric string
+                            elif str(chunk_idx) == "0":
+                                is_first_chunk = True
+                        except (ValueError, TypeError):
+                            logger.debug(f"Invalid chunk_index type: {type(chunk_idx)} = {chunk_idx}")
+                            continue
+
+                        if is_first_chunk:
                             db_ids_to_fetch.add(db_id)
 
                     if next_offset is None:
@@ -172,109 +214,140 @@ def augment_with_qdrant_patterns(
 
                     offset = next_offset
 
-                # Batch fetch full content from PostgreSQL
-                logger.info(f"Fetching full content for {len(db_ids_to_fetch)} unique documents...")
+                # Log collection statistics
+                logger.info(f"Scrolled {total_points_scrolled} points from code_samples collection")
+                logger.info(f"Points with db_id: {points_with_db_id}")
+                logger.info(f"Points missing chunk_index: {points_missing_chunk_index}")
+                logger.info(f"Chunk index distribution (top 10): {dict(sorted(chunk_index_distribution.items(), key=lambda x: x[1], reverse=True)[:10])}")
+                logger.info(f"Collected {len(db_ids_to_fetch)} unique db_ids for augmentation")
 
-                from scriptguard.database.db_schema import get_connection
+                # CRITICAL: Validate db_ids_to_fetch is not empty
+                if not db_ids_to_fetch:
+                    logger.warning(
+                        f"❌ No documents with chunk_index==0 found in code_samples collection!\n"
+                        f"   Total points in collection: {points_count}\n"
+                        f"   Points scrolled: {total_points_scrolled}\n"
+                        f"   Points with db_id: {points_with_db_id}\n"
+                        f"   Chunk index distribution: {chunk_index_distribution}\n"
+                        f"   This indicates a data integrity issue - all chunks have index > 0.\n"
+                        f"   Skipping code sample augmentation."
+                    )
+                    # Skip to avoid SQL syntax error with empty IN clause
+                    logger.warning("'code_samples' collection has no valid first chunks to fetch")
+                else:
+                    logger.info(f"✓ Found {len(db_ids_to_fetch)} unique documents to augment")
 
-                conn = get_connection()
-                cursor = conn.cursor()
+                # Only proceed if we have IDs to fetch
+                if db_ids_to_fetch:
+                    # Batch fetch full content from PostgreSQL
+                    logger.info(f"Fetching full content for {len(db_ids_to_fetch)} unique documents...")
 
-                placeholders = ','.join(['%s'] * len(db_ids_to_fetch))
-                query = f"""
-                    SELECT id, content, label, source, metadata
-                    FROM samples
-                    WHERE id IN ({placeholders})
-                """
+                    from scriptguard.database.db_schema import get_connection
 
-                cursor.execute(query, tuple(db_ids_to_fetch))
-                rows = cursor.fetchall()
+                    conn = get_connection()
+                    cursor = conn.cursor()
 
-                # Initialize sanitizer and enricher (if enabled in config)
-                code_emb_config = config.get("code_embedding", {})
+                    placeholders = ','.join(['%s'] * len(db_ids_to_fetch))
+                    query = f"""
+                        SELECT id, content, label, source, metadata
+                        FROM samples
+                        WHERE id IN ({placeholders})
+                    """
 
-                sanitization_config = code_emb_config.get("sanitization", {})
-                sanitizer = None
-                if sanitization_config.get("enabled", True):
-                    sanitizer = create_sanitizer(sanitization_config)
-                    logger.info("  Sanitization enabled for code samples")
+                    cursor.execute(query, tuple(db_ids_to_fetch))
+                    rows = cursor.fetchall()
 
-                context_injection_config = code_emb_config.get("context_injection", {})
-                enricher = None
-                if context_injection_config.get("enabled", True):
-                    enricher = create_enricher(context_injection_config)
-                    logger.info("  Context injection enabled for code samples")
+                    # Initialize sanitizer and enricher (if enabled in config)
+                    code_emb_config = config.get("code_embedding", {})
 
-                code_added = 0
-                code_rejected = 0
-                rejection_reasons = {}
+                    sanitization_config = code_emb_config.get("sanitization", {})
+                    sanitizer = None
+                    if sanitization_config.get("enabled", True):
+                        sanitizer = create_sanitizer(sanitization_config)
+                        logger.info("  Sanitization enabled for code samples")
 
-                for row in rows:
-                    raw_content = row['content']
+                    context_injection_config = code_emb_config.get("context_injection", {})
+                    enricher = None
+                    if context_injection_config.get("enabled", True):
+                        enricher = create_enricher(context_injection_config)
+                        logger.info("  Context injection enabled for code samples")
 
-                    # SANITIZATION PASS
-                    if sanitizer:
-                        cleaned_content, report = sanitizer.sanitize(
-                            content=raw_content,
-                            language="python",
-                            metadata=row.get('metadata', {})
-                        )
+                    code_added = 0
+                    code_rejected = 0
+                    rejection_reasons = {}
 
-                        if not report.get("valid", False):
-                            code_rejected += 1
-                            reason = report.get("reason", "unknown")
-                            rejection_reasons[reason] = rejection_reasons.get(reason, 0) + 1
-                            logger.debug(f"Rejected code sample {row['id']}: {reason}")
-                            continue
+                    for row in rows:
+                        raw_content = row['content']
 
-                        processed_content = cleaned_content
-                    else:
-                        processed_content = raw_content
+                        # SANITIZATION PASS
+                        if sanitizer:
+                            cleaned_content, report = sanitizer.sanitize(
+                                content=raw_content,
+                                language="python",
+                                metadata=row.get('metadata', {})
+                            )
 
-                    # CONTEXT INJECTION PASS
-                    if enricher:
-                        enrichment_metadata = {
-                            "file_path": row.get('metadata', {}).get('file_path'),
-                            "repository": row.get('metadata', {}).get('repository'),
-                            "language": "python",
-                            "source": row['source'],
-                            "label": row['label']
+                            if not report.get("valid", False):
+                                code_rejected += 1
+                                reason = report.get("reason", "unknown")
+                                rejection_reasons[reason] = rejection_reasons.get(reason, 0) + 1
+                                logger.debug(f"Rejected code sample {row['id']}: {reason}")
+                                continue
+
+                            processed_content = cleaned_content
+                        else:
+                            processed_content = raw_content
+
+                        # CONTEXT INJECTION PASS
+                        if enricher:
+                            enrichment_metadata = {
+                                "file_path": row.get('metadata', {}).get('file_path'),
+                                "repository": row.get('metadata', {}).get('repository'),
+                                "language": "python",
+                                "source": row['source'],
+                                "label": row['label']
+                            }
+                            processed_content = enricher.enrich(processed_content, enrichment_metadata)
+
+                        sample = {
+                            'content': processed_content,  # SANITIZED + ENRICHED content
+                            'label': row['label'],
+                            'source': 'qdrant_code_samples',
+                            'metadata': {
+                                'db_id': row['id'],
+                                'original_source': row['source'],
+                                'db_metadata': row['metadata'] or {},
+                                'sanitized': bool(sanitizer),
+                                'enriched': bool(enricher)
+                            }
                         }
-                        processed_content = enricher.enrich(processed_content, enrichment_metadata)
 
-                    sample = {
-                        'content': processed_content,  # SANITIZED + ENRICHED content
-                        'label': row['label'],
-                        'source': 'qdrant_code_samples',
-                        'metadata': {
-                            'db_id': row['id'],
-                            'original_source': row['source'],
-                            'db_metadata': row['metadata'] or {},
-                            'sanitized': bool(sanitizer),
-                            'enriched': bool(enricher)
-                        }
-                    }
+                        all_augmented_samples.append(sample)
+                        code_added += 1
 
-                    all_augmented_samples.append(sample)
-                    code_added += 1
+                    cursor.close()
+                    conn.close()
 
-                cursor.close()
-                conn.close()
+                    logger.info(
+                        f"✓ Added {code_added} code samples with full content from PostgreSQL "
+                        f"({code_rejected} rejected by sanitization)"
+                    )
 
-                logger.info(
-                    f"✓ Added {code_added} code samples with full content from PostgreSQL "
-                    f"({code_rejected} rejected by sanitization)"
-                )
-
-                if rejection_reasons:
-                    logger.info("  Rejection reasons:")
-                    for reason, count in rejection_reasons.items():
-                        logger.info(f"    - {reason}: {count}")
+                    if rejection_reasons:
+                        logger.info("  Rejection reasons:")
+                        for reason, count in rejection_reasons.items():
+                            logger.info(f"    - {reason}: {count}")
             else:
                 logger.warning("'code_samples' collection is empty")
 
         except Exception as e:
-            logger.warning(f"Failed to fetch from 'code_samples': {e}", exc_info=True)
+            logger.error(
+                f"Failed to fetch from 'code_samples' collection: {e}\n"
+                f"  Points scrolled: {total_points_scrolled if 'total_points_scrolled' in locals() else 'N/A'}\n"
+                f"  DB IDs collected: {len(db_ids_to_fetch) if 'db_ids_to_fetch' in locals() else 'N/A'}\n"
+                f"  Consider checking Qdrant data integrity and chunk_index values.",
+                exc_info=True
+            )
 
         # Combine all
         if all_augmented_samples:
