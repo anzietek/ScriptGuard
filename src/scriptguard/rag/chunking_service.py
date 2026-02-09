@@ -303,9 +303,10 @@ class ChunkingService:
         for chunk in chunks:
             chunk["total_chunks"] = total_chunks
 
-        logger.debug(
-            f"Sliding window chunking (db_id={db_id}, parent_id={parent_id[:8]}...): {len(tokens)} tokens → "
-            f"{len(chunks)} chunks (size={self.chunk_size}, overlap={self.overlap}, stride={stride})"
+        # Log SUCCESS at INFO level
+        logger.info(
+            f"✅ Sliding window chunking (db_id={db_id}): {len(tokens)} tokens → "
+            f"{len(chunks)} chunks (size={self.chunk_size}, overlap={self.overlap})"
         )
         return chunks
 
@@ -357,7 +358,8 @@ class ChunkingService:
                 warnings.filterwarnings('ignore', category=SyntaxWarning)
                 tree = ast.parse(code)
         except SyntaxError as e:
-            logger.warning(f"AST parse failed (db_id={db_id}): {e}. Fallback to sliding window.")
+            # This is expected fallback behavior (not an error)
+            logger.debug(f"AST parse failed (db_id={db_id}): {e}. Using sliding window fallback.")
             return self._chunk_sliding_window(code, db_id, label, source, metadata)
 
         chunks = []
@@ -408,8 +410,8 @@ class ChunkingService:
                             "metadata": metadata or {}
                         })
                     else:
-                        # Too large - fallback to sliding window for this function
-                        logger.debug(f"Function {node.name} too large ({len(tokens)} tokens), using sliding window")
+                        # Too large - fallback to sliding window for this function (expected behavior)
+                        logger.debug(f"Function '{node.name}' too large ({len(tokens)} tokens > {self.max_function_tokens}), using sliding window fallback")
 
                         # Reuse sliding window logic
                         sub_chunks = self._chunk_sliding_window(
@@ -462,17 +464,19 @@ class ChunkingService:
             chunk["total_chunks"] = len(chunks)
 
         if not chunks:
-            # No functions extracted - fallback to sliding window
-            logger.debug(f"No functions/classes found in code (db_id={db_id}), fallback to sliding window")
+            # No functions extracted - fallback to sliding window (expected for script-only files)
+            logger.debug(f"No functions/classes found (db_id={db_id}), using sliding window fallback")
             return self._chunk_sliding_window(code, db_id, label, source, metadata)
 
         # Count chunk types for logging
         func_count = sum(1 for c in chunks if c['chunk_type'] in ['function', 'class'])
+        module_count = sum(1 for c in chunks if c['chunk_type'] == 'module')
         fallback_count = sum(1 for c in chunks if c['chunk_type'] == 'sliding_window_fallback')
 
-        logger.debug(
-            f"Hierarchical chunking (db_id={db_id}, parent_id={parent_id[:8]}...): "
-            f"{len(chunks)} chunks ({func_count} functions/classes, {fallback_count} fallback chunks)"
+        # Log SUCCESS at INFO level (not DEBUG)
+        logger.info(
+            f"✅ Hierarchical chunking (db_id={db_id}): "
+            f"{len(chunks)} chunks → {func_count} functions/classes, {module_count} modules, {fallback_count} fallbacks"
         )
         return chunks
 
@@ -493,6 +497,12 @@ class ChunkingService:
         """
         all_chunks = []
 
+        # Track statistics
+        from collections import Counter
+        chunk_type_counter = Counter()
+        language_counter = Counter()
+        samples_processed = 0
+
         for sample in samples:
             # Use db_id field (real database ID, can be None for synthetic samples)
             # Fallback to "id" for backward compatibility
@@ -500,6 +510,7 @@ class ChunkingService:
 
             # Detect language from metadata or infer from source
             language = self._detect_language(sample)
+            language_counter[language] += 1
 
             chunks = self.chunk_code(
                 code=sample.get("content", ""),
@@ -510,8 +521,42 @@ class ChunkingService:
                 language=language
             )
             all_chunks.extend(chunks)
+            samples_processed += 1
 
-        logger.info(f"Chunked {len(samples)} samples into {len(all_chunks)} chunks")
+            # Count chunk types
+            for chunk in chunks:
+                chunk_type_counter[chunk.get("chunk_type", "unknown")] += 1
+
+        # Log comprehensive statistics
+        logger.info("=" * 60)
+        logger.info("CHUNKING STATISTICS")
+        logger.info("=" * 60)
+        logger.info(f"Samples processed: {samples_processed}")
+        logger.info(f"Total chunks created: {len(all_chunks)}")
+        logger.info(f"Average chunks per sample: {len(all_chunks) / samples_processed:.2f}")
+        logger.info("")
+        logger.info("Chunk Type Distribution:")
+        for chunk_type, count in chunk_type_counter.most_common():
+            percentage = (count / len(all_chunks)) * 100
+            logger.info(f"  {chunk_type:25s}: {count:6d} ({percentage:5.1f}%)")
+        logger.info("")
+        logger.info("Language Distribution:")
+        for lang, count in language_counter.most_common():
+            percentage = (count / samples_processed) * 100
+            logger.info(f"  {lang:25s}: {count:6d} ({percentage:5.1f}%)")
+        logger.info("=" * 60)
+
+        # Calculate success rate for hierarchical chunking
+        hierarchical_chunks = sum(count for chunk_type, count in chunk_type_counter.items()
+                                  if chunk_type in ["function", "class", "module"])
+        fallback_chunks = chunk_type_counter.get("sliding_window_fallback", 0) + chunk_type_counter.get("sliding_window", 0)
+
+        if hierarchical_chunks > 0:
+            success_rate = (hierarchical_chunks / len(all_chunks)) * 100
+            logger.info(f"✅ Hierarchical chunking success rate: {success_rate:.1f}%")
+            logger.info(f"   - Semantic chunks (function/class/module): {hierarchical_chunks}")
+            logger.info(f"   - Fallback chunks (sliding window): {fallback_chunks}")
+
         return all_chunks
 
     def _detect_language(self, sample: Dict[str, Any]) -> str:
