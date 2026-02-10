@@ -388,17 +388,17 @@ training:
 
   # BATCHING STRATEGY (Adjusted to prevent OOM)
   auto_find_batch_size: false     # Disabled to ensure accumulation works as intended
-  per_device_train_batch_size: 4  # REDUCED from 8 to fix CUDA OOM
-  per_device_eval_batch_size: 4   # REDUCED from 8
-  gradient_accumulation_steps: 8  # INCREASED from 4 (4 * 8 = 32 Effective Batch Size)
+  per_device_train_batch_size: 2  # REDUCED from 4 to fix CUDA OOM on 24GB
+  per_device_eval_batch_size: 2   # REDUCED from 4
+  gradient_accumulation_steps: 16 # INCREASED from 8 (2 * 16 = 32 Effective Batch Size)
 
   # Default on unclear prediction
   eval_default_on_unclear: "unknown"
 
   # QLoRA Configuration
   use_qlora: true
-  lora_r: 16      # Optimized for 3B
-  lora_alpha: 32  # Standard 2x ratio
+  lora_r: 8       # REDUCED from 16 to save VRAM
+  lora_alpha: 16   # Maintain 2x ratio
   lora_dropout: 0.05
   target_modules:
     - "q_proj"
@@ -426,7 +426,7 @@ training:
   lr_scheduler_type: "cosine_with_restarts" # Optimized for better convergence
 
   # Context Length (Memory optimized for 24GB GPU)
-  max_seq_length: 2048
+  max_seq_length: 1024  # REDUCED from 2048 to fix CUDA OOM
 
   # Mixed Precision Training
   fp16: false
@@ -438,7 +438,7 @@ training:
   optim: "paged_adamw_8bit"   # CHANGED to paged optimizer to offload to CPU RAM if needed
 
   # Tokenization
-  tokenizer_max_length: 2048  # Match max_seq_length
+  tokenizer_max_length: 1024  # Match max_seq_length
   tokenizer_padding: "longest"    # Dynamic padding (faster)
   tokenizer_truncation: true
 
@@ -459,7 +459,7 @@ training:
   # Model Evaluation
   eval_max_new_tokens: 32
   eval_temperature: 0.2
-  eval_batch_size: 4        # REDUCED to match training batch size
+  eval_batch_size: 2        # REDUCED to match training batch size
   eval_max_code_length: 500
 
   # Gradient Clipping
