@@ -193,14 +193,14 @@ def advanced_training_pipeline(
 
     # Step 7: Vectorize ALL augmented data to Qdrant (BEFORE balancing)
     from scriptguard.utils.logger import logger
-    logger.info(f"Vectorizing {len(augmented_data)} augmented samples to Qdrant (BEFORE balancing)...")
+    logger.info("Vectorizing augmented samples to Qdrant (BEFORE balancing)...")
 
     vectorization_result = vectorize_samples(
         data=augmented_data,  # All augmented data, not balanced subset!
         config=config,
         clear_existing=True
     )
-    logger.info(f"✓ Vectorized {len(augmented_data)} samples to Qdrant for RAG")
+    logger.info("✓ Vectorized augmented data to Qdrant for RAG")
 
     # Step 7.5: Balance dataset (AFTER vectorization)
     # This ensures RAG has full dataset while training uses balanced subset
