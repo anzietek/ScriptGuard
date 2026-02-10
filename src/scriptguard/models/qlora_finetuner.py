@@ -153,6 +153,7 @@ class QLoRAFineTuner:
             gradient_accumulation_steps=int(training_config.get("gradient_accumulation_steps", 4)),
             learning_rate=float(training_config.get("learning_rate", 2e-4)),
             weight_decay=float(training_config.get("weight_decay", 0.01)),
+            label_smoothing_factor=float(training_config.get("label_smoothing_factor", 0.0)),
             warmup_steps=int(training_config.get("warmup_steps", 100)),
             lr_scheduler_type=training_config.get("lr_scheduler_type", "linear"),
             num_train_epochs=int(training_config.get("num_epochs", 3)),

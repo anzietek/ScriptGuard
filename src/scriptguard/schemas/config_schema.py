@@ -19,6 +19,7 @@ class BalanceMethod(str, Enum):
     """Dataset balancing methods"""
     UNDERSAMPLE = "undersample"
     OVERSAMPLE = "oversample"
+    HYBRID = "hybrid"
 
 
 class EvaluationStrategy(str, Enum):
@@ -216,6 +217,8 @@ class ValidationConfig(BaseModel):
     max_length: int = Field(50000, gt=0)
     min_code_lines: int = Field(5, ge=0)
     max_comment_ratio: float = Field(0.5, ge=0.0, le=1.0)
+    deduplicate: bool = True
+    dedup_threshold: float = Field(0.85, ge=0.0, le=1.0)
 
 
 class AugmentationConfig(BaseModel):
@@ -228,6 +231,7 @@ class AugmentationConfig(BaseModel):
     balance_method: BalanceMethod = BalanceMethod.UNDERSAMPLE
     use_qdrant_patterns: bool = True
     qdrant_format_style: str = "detailed"
+    augment_after_split: bool = True
 
 
 class FeaturesConfig(BaseModel):
@@ -289,6 +293,7 @@ class TrainingConfig(BaseModel):
     weight_decay: float = Field(0.01, ge=0.0)
     warmup_steps: int = Field(100, ge=0)
     max_seq_length: int = Field(2048, gt=0)
+    label_smoothing_factor: float = Field(0.0, ge=0.0, le=1.0)
 
     # Tokenization
     tokenizer_max_length: int = Field(512, gt=0)

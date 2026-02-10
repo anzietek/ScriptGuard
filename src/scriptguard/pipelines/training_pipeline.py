@@ -134,9 +134,10 @@ def advanced_training_pipeline(
     # Step 1: Advanced data ingestion from multiple sources
     raw_data = _advanced_data_ingestion(config=config)
 
-    # Step 2: Validate samples (syntax, length, encoding)
+    # Step 2: Validate samples (syntax, length, encoding, deduplication)
     validated_data = _validate_samples(
         data=raw_data,
+        config=config,
         validate_syntax=config.get("validation", {}).get("validate_syntax", True),
         min_length=config.get("validation", {}).get("min_length", 50),
         max_length=config.get("validation", {}).get("max_length", 50000)
@@ -155,60 +156,83 @@ def advanced_training_pipeline(
     # Step 5: Analyze feature importance (informational)
     feature_analysis = analyze_feature_importance(data=featured_data)
 
-    # === CRITICAL FIX: SPLIT DATA BEFORE AUGMENTATION ===
-    # This prevents data leakage where augmented versions of test samples
-    # end up in the training set.
+    # === CRITICAL: Check augmentation strategy ===
+    augment_after_split = config.get("augmentation", {}).get("augment_after_split", True)
     test_size = config.get("training", {}).get("test_split_size", 0.1)
-    train_data_list, test_data_list, raw_test_data = split_raw_data(
-        data=featured_data,
-        test_size=test_size
-    )
 
-    # === AUGMENTATION (ONLY ON TRAIN DATA) ===
+    if augment_after_split:
+        # RECOMMENDED: Split BEFORE augmentation to prevent data leakage
+        from scriptguard.utils.logger import logger
+        logger.info("Using augment_after_split=True (prevents data leakage)")
+
+        train_data_list, test_data_list, raw_test_data = split_raw_data(
+            data=featured_data,
+            test_size=test_size
+        )
+        data_to_augment = train_data_list
+    else:
+        # LEGACY: Augment before split (NOT RECOMMENDED - risk of data leakage)
+        from scriptguard.utils.logger import logger
+        logger.warning("Using augment_after_split=False - this may cause data leakage!")
+        data_to_augment = featured_data
+
+    # === AUGMENTATION ===
 
     # Step 6: Augment malicious samples
     if config.get("augmentation", {}).get("enabled", True):
-        augmented_train_data = _augment_malicious_samples(
-            data=train_data_list,
+        augmented_data = _augment_malicious_samples(
+            data=data_to_augment,
             variants_per_sample=config.get("augmentation", {}).get("variants_per_sample", 2)
         )
     else:
-        augmented_train_data = train_data_list
+        augmented_data = data_to_augment
 
     # Step 7: Balance dataset
     if config.get("augmentation", {}).get("balance_dataset", True):
-        balanced_train_data = balance_dataset(
-            data=augmented_train_data,
+        balanced_data = balance_dataset(
+            data=augmented_data,
             target_ratio=config.get("augmentation", {}).get("target_balance_ratio", 1.0),
             method=config.get("augmentation", {}).get("balance_method", "undersample")
         )
     else:
-        balanced_train_data = augmented_train_data
+        balanced_data = augmented_data
 
     # Step 7.5: Augment with Qdrant CVE patterns (if enabled)
     if config.get("augmentation", {}).get("use_qdrant_patterns", False):
-        qdrant_augmented_train_data = augment_with_qdrant_patterns(
-            data=balanced_train_data,
+        qdrant_augmented_data = augment_with_qdrant_patterns(
+            data=balanced_data,
             config=config
         )
 
         # Validate augmentation
         augmentation_stats = validate_qdrant_augmentation(
-            data=qdrant_augmented_train_data
+            data=qdrant_augmented_data
         )
     else:
-        qdrant_augmented_train_data = balanced_train_data
+        qdrant_augmented_data = balanced_data
+
+    # === Handle split timing ===
+    if not augment_after_split:
+        # Split NOW (after augmentation) - legacy behavior
+        train_data_list, test_data_list, raw_test_data = split_raw_data(
+            data=qdrant_augmented_data,
+            test_size=test_size
+        )
+        final_train_data = train_data_list
+    else:
+        # Already split before augmentation (recommended)
+        final_train_data = qdrant_augmented_data
 
     # Step 7.6: Vectorize samples to Qdrant for Few-Shot RAG
     # CRITICAL: Only vectorize TRAINING data to avoid RAG leakage
     vectorization_result = vectorize_samples(
-        data=qdrant_augmented_train_data,
+        data=final_train_data,
         config=config,
         clear_existing=True  # Clear old vectors to ensure no test data remains
     )
 
     # Step 9: Preprocess training and test data
-    processed_train_dataset = preprocess_data(data=qdrant_augmented_train_data, config=config)
+    processed_train_dataset = preprocess_data(data=final_train_data, config=config)
     processed_test_dataset = preprocess_data(data=test_data_list, config=config)
 
     # Step 10: Train model with preprocessed evaluation dataset

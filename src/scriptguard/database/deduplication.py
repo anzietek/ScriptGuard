@@ -1,6 +1,6 @@
 """
 Deduplication Module
-SHA256-based deduplication for code samples.
+SHA256-based and Jaccard similarity deduplication for code samples.
 """
 
 import hashlib
@@ -87,3 +87,81 @@ def deduplicate_against_database(
     )
 
     return new_samples
+
+def compute_jaccard_similarity(code1: str, code2: str) -> float:
+    """
+    Compute Jaccard similarity between two code samples.
+
+    Args:
+        code1: First code string
+        code2: Second code string
+
+    Returns:
+        Similarity score between 0.0 and 1.0
+    """
+    tokens1 = set(code1.split())
+    tokens2 = set(code2.split())
+
+    intersection = tokens1.intersection(tokens2)
+    union = tokens1.union(tokens2)
+
+    if not union:
+        return 0.0
+
+    return len(intersection) / len(union)
+
+def deduplicate_with_threshold(
+    samples: List[Dict],
+    threshold: float = 0.85
+) -> List[Dict]:
+    """
+    Remove near-duplicate samples using Jaccard similarity.
+
+    Args:
+        samples: List of sample dictionaries
+        threshold: Similarity threshold (0.85 = 85% similar)
+
+    Returns:
+        Deduplicated samples
+    """
+    if threshold >= 1.0:
+        # Fall back to exact hash matching
+        logger.info("Using exact hash deduplication (threshold=1.0)")
+        return deduplicate_samples(samples)
+
+    unique_samples = []
+    duplicates_removed = 0
+
+    for i, sample in enumerate(samples):
+        content = sample.get("content", "")
+        if not content:
+            continue
+
+        is_duplicate = False
+
+        for existing in unique_samples:
+            existing_content = existing.get("content", "")
+            similarity = compute_jaccard_similarity(content, existing_content)
+
+            if similarity >= threshold:
+                is_duplicate = True
+                duplicates_removed += 1
+                logger.debug(f"Duplicate found (similarity: {similarity:.2f})")
+                break
+
+        if not is_duplicate:
+            # Add content hash for tracking
+            sample["content_hash"] = compute_hash(content)
+            unique_samples.append(sample)
+
+        # Progress logging for large datasets
+        if (i + 1) % 1000 == 0:
+            logger.info(f"Processed {i + 1}/{len(samples)} samples...")
+
+    logger.info(
+        f"Fuzzy deduplication (threshold={threshold}): "
+        f"{len(samples)} -> {len(unique_samples)} unique "
+        f"({duplicates_removed} duplicates removed)"
+    )
+
+    return unique_samples

@@ -115,6 +115,7 @@ def has_minimum_code_content(code: str, min_non_whitespace: int = 100) -> bool:
 @step
 def validate_samples(
     data: List[Dict],
+    config: Dict = None,
     validate_syntax: bool = True,
     min_length: int = 50,
     max_length: int = 50000,
@@ -125,6 +126,7 @@ def validate_samples(
 
     Args:
         data: List of code sample dictionaries
+        config: Configuration dictionary from config.yaml
         validate_syntax: Whether to validate Python syntax
         min_length: Minimum code length
         max_length: Maximum code length
@@ -230,6 +232,15 @@ def validate_samples(
     logger.info(f"Insufficient content: {stats['insufficient_content']}")
     logger.info(f"Validation pass rate: {(stats['valid'] / stats['total'] * 100):.1f}%")
     logger.info("=" * 60)
+
+    # Apply deduplication if enabled in config
+    validation_config = config.get("validation", {}) if config else {}
+
+    if validation_config.get("deduplicate", True):
+        from scriptguard.database.deduplication import deduplicate_with_threshold
+        threshold = validation_config.get("dedup_threshold", 0.85)
+        logger.info(f"Applying deduplication with threshold={threshold}")
+        valid_samples = deduplicate_with_threshold(valid_samples, threshold)
 
     return valid_samples
 

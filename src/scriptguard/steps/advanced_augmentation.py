@@ -315,7 +315,31 @@ def balance_dataset(
 
     logger.info(f"Original distribution: {len(malicious)} malicious, {len(benign)} benign")
 
-    if method == "undersample":
+    if method == "hybrid":
+        # Hybrid: Undersample majority + augment minority intelligently
+        target_size = min(len(malicious), len(benign))
+
+        # Undersample majority class to match minority
+        if len(malicious) > target_size:
+            malicious = random.sample(malicious, target_size)
+        if len(benign) > target_size:
+            benign = random.sample(benign, target_size)
+
+        logger.info(f"After undersampling: {len(malicious)} malicious, {len(benign)} benign")
+
+        # Augment to reach target balance ratio (e.g., 1.0 for 1:1)
+        target_malicious = int(target_size * target_ratio)
+
+        if len(malicious) < target_malicious:
+            augment_count = target_malicious - len(malicious)
+            logger.info(f"Augmenting {augment_count} malicious variants to reach target")
+
+            for _ in range(augment_count):
+                original = random.choice(malicious[:target_size])  # Only augment original samples
+                variant = generate_polymorphic_variant(original)
+                malicious.append(variant)
+
+    elif method == "undersample":
         # Reduce majority class
         if len(malicious) > len(benign) * target_ratio:
             # Too many malicious
