@@ -187,7 +187,23 @@ def advanced_training_pipeline(
     else:
         augmented_data = data_to_augment
 
-    # Step 7: Balance dataset
+    # === IMPORTANT: Vectorize BEFORE balancing ===
+    # RAG needs access to ALL augmented data for maximum pattern diversity
+    # Training will use balanced subset, but RAG retrieves from full dataset
+
+    # Step 7: Vectorize ALL augmented data to Qdrant (BEFORE balancing)
+    from scriptguard.utils.logger import logger
+    logger.info(f"Vectorizing {len(augmented_data)} augmented samples to Qdrant (BEFORE balancing)...")
+
+    vectorization_result = vectorize_samples(
+        data=augmented_data,  # All augmented data, not balanced subset!
+        config=config,
+        clear_existing=True
+    )
+    logger.info(f"✓ Vectorized {len(augmented_data)} samples to Qdrant for RAG")
+
+    # Step 7.5: Balance dataset (AFTER vectorization)
+    # This ensures RAG has full dataset while training uses balanced subset
     if config.get("augmentation", {}).get("balance_dataset", True):
         balanced_data = balance_dataset(
             data=augmented_data,
@@ -197,7 +213,7 @@ def advanced_training_pipeline(
     else:
         balanced_data = augmented_data
 
-    # Step 7.5: Augment with Qdrant CVE patterns (if enabled)
+    # Step 7.7: Augment with Qdrant CVE patterns (if enabled)
     if config.get("augmentation", {}).get("use_qdrant_patterns", False):
         qdrant_augmented_data = augment_with_qdrant_patterns(
             data=balanced_data,
@@ -222,14 +238,6 @@ def advanced_training_pipeline(
     else:
         # Already split before augmentation (recommended)
         final_train_data = qdrant_augmented_data
-
-    # Step 7.6: Vectorize samples to Qdrant for Few-Shot RAG
-    # CRITICAL: Only vectorize TRAINING data to avoid RAG leakage
-    vectorization_result = vectorize_samples(
-        data=final_train_data,
-        config=config,
-        clear_existing=True  # Clear old vectors to ensure no test data remains
-    )
 
     # Step 9: Preprocess training and test data
     processed_train_dataset = preprocess_data(data=final_train_data, config=config)
