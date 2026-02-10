@@ -23,120 +23,130 @@
 
 ## Slajd 0: Słowniczek — Kluczowe Pojęcia
 
-### RAG (Retrieval-Augmented Generation)
-**Definicja:** Technika łącząca LLM z zewnętrzną bazą wiedzy (vector database).
-- **Parametric knowledge:** Wiedza "zamrożona" w wagach modelu (z treningu)
-- **Non-parametric knowledge:** Wiedza pobierana dynamicznie z bazy danych (w runtime)
+### RAG (Retrieval-Augmented Generation / Generowanie Wspomagane Pobieraniem)
+**Definicja:** Technika łącząca LLM z zewnętrzną bazą wiedzy (vector database / baza wektorowa).
+- **Parametric knowledge (Wiedza parametryczna):** Wiedza "zamrożona" w wagach modelu (z treningu)
+- **Non-parametric knowledge (Wiedza nieparametryczna):** Wiedza pobierana dynamicznie z bazy danych (w runtime)
+- **Retrieval (Pobieranie):** Wyszukiwanie podobnych przykładów z bazy przed generowaniem odpowiedzi
 - **Zalety:** Model ma dostęp do aktualnych danych bez re-treningu; zmniejsza halucynacje
-- **W ScriptGuard:** Qdrant (vector store) + PostgreSQL (source of truth)
+- **W ScriptGuard:** Qdrant (vector store) + PostgreSQL (source of truth / źródło prawdy)
 
-### Wektoryzacja (Embedding)
-**Definicja:** Transformacja tekstu (kodu) na wektor liczbowy wysokowymiarowy.
-- **Embedding:** Reprezentacja semantyczna - podobny kod → podobne wektory
-- **Wymiar:** Zwykle 768 (UnixCoder) lub 1536 (OpenAI)
-- **Distance metric:** Cosine similarity (po L2 normalization = dot product)
+### Embedding (Osadzenie wektorowe) / Wektoryzacja
+**Definicja:** Transformacja tekstu (kodu) na wektor (vector) liczbowy wysokowymiarowy.
+- **Embedding (Osadzenie):** Reprezentacja semantyczna - podobny kod → podobne wektory
+- **Vector (Wektor):** Lista liczb reprezentująca znaczenie tekstu, np. [0.23, -0.45, 0.89, ...]
+- **Wymiar (Dimension):** Zwykle 768 (UnixCoder) lub 1536 (OpenAI)
+- **Distance metric (Metryka odległości):** Cosine similarity (po L2 normalization = dot product)
 - **Model w ScriptGuard:** `microsoft/unixcoder-base` (specjalizowany dla kodu)
-- **L2 Normalization:** `v_norm = v / ||v||` - zapewnia, że wszystkie wektory mają długość 1.0
+- **L2 Normalization (Normalizacja L2):** `v_norm = v / ||v||` - zapewnia, że wszystkie wektory mają długość 1.0
 
-### Chunking (Hierarchical + Sliding Window)
-**Definicja:** Podział długich dokumentów na mniejsze fragmenty (chunks).
+### Chunking (Dzielenie na fragmenty)
+**Definicja:** Podział długich dokumentów na mniejsze fragmenty (chunks / fragmenty).
 
 **Obecnie: Hybrid Strategy (Hierarchical + Sliding Window Fallback)**
 
-**Hierarchical Chunking (AST-aware) - PRIMARY:**
-- **Semantic boundaries:** Chunks po granicach funkcji/klas (nie arbitrary tokens)
-- **AST parsing:** Wykorzystuje Abstract Syntax Tree do wykrycia granic
-- **Complete units:** Każdy chunk = kompletna funkcja lub klasa
-- **Benefits:**
-  - Semantic coherence: Embeddingi reprezentują pełną logikę (nie fragmenty)
-  - Better retrieval: Few-Shot dostaje kompletne funkcje (nie mixed code)
-  - No overlap waste: Każdy token embedded exactly once
+**Hierarchical Chunking (Dzielenie hierarchiczne / AST-aware) - PRIMARY:**
+- **Semantic boundaries (Granice semantyczne):** Chunks po granicach funkcji/klas (nie arbitrary tokens / losowe pozycje tokenów)
+- **AST parsing (Parsowanie abstrakcyjnego drzewa składni):** Wykorzystuje Abstract Syntax Tree (AST) do wykrycia granic
+- **Complete units (Kompletne jednostki):** Każdy chunk = kompletna funkcja lub klasa
+- **Token:** Podstawowa jednostka tekstu dla modelu (np. słowo, symbol, operator)
+- **Benefits (Zalety):**
+  - Semantic coherence (Spójność semantyczna): Embeddingi reprezentują pełną logikę (nie fragmenty)
+  - Better retrieval (Lepsze pobieranie): Few-Shot dostaje kompletne funkcje (nie mixed code / mieszany kod)
+  - No overlap waste (Brak marnowania przez duplikację): Każdy token embedded exactly once
 - **Parametry:**
   - `max_function_tokens`: 1024 tokens (max single function)
   - `languages`: Python (ast module) - inne języki w przyszłości
-- **Fallback triggers:**
+- **Fallback triggers (Wyzwalacze awaryjne):**
   - Function >1024 tokens → sliding window for that function
-  - Syntax error (AST parse fails) → sliding window for file
+  - Syntax error (błąd składni) → sliding window for file
   - Non-Python → sliding window
 
-**Sliding Window - FALLBACK:**
-- **Token-based:** Overlapping chunks - każdy chunk zaczyna się przed końcem poprzedniego
+**Sliding Window (Okno przesuwne) - FALLBACK:**
+- **Token-based (Bazujące na tokenach):** Overlapping chunks (Nakładające się fragmenty) - każdy chunk zaczyna się przed końcem poprzedniego
+- **Overlap (Nakładanie):** Fragmenty wspólne między sąsiednimi chunkami (context preservation / zachowanie kontekstu)
 - **Parametry:**
   - `chunk_size`: 512 tokens (max model capacity)
-  - `overlap`: 64 tokens (context preservation)
-  - `stride`: 448 tokens (chunk_size - overlap)
-- **Used for:** Large functions, parse errors, non-Python code
+  - `overlap`: 64 tokens (12.5% duplikacji)
+  - `stride (krok)`: 448 tokens (chunk_size - overlap)
+- **Used for (Używane dla):** Large functions, parse errors, non-Python code
 
-**Child-Parent Architecture (reused by both strategies):**
-- `parent_id`: SHA256 hash pełnego dokumentu
-- `parent_context`: AST-extracted metadata (imports, function signatures)
-- `chunk_index`, `total_chunks`: Child tracking
+**Child-Parent Architecture (Architektura dziecko-rodzic - reused by both strategies):**
+- `parent_id`: SHA256 hash pełnego dokumentu (identyfikator dokumentu źródłowego)
+- `parent_context`: AST-extracted metadata (imports, function signatures / sygnatury funkcji)
+- `chunk_index`, `total_chunks`: Child tracking (śledzenie fragmentów potomnych)
 - Hierarchical chunking **completes** this architecture by using AST for boundaries
 
-### QLoRA (Quantized Low-Rank Adaptation)
-**Definicja:** Efektywna metoda fine-tuningu LLM z kwantyzacją i low-rank adapters.
-- **Kwantyzacja:** Model bazowy w 4-bit (NF4) zamiast 16-bit → 75% mniej VRAM
-- **LoRA (Low-Rank Adaptation):**
-  - Zamiast trenować wszystkie wagi: dodaj małe adaptery (rank decomposition)
+### QLoRA (Quantized Low-Rank Adaptation / Kwantyzowana adaptacja niskiego rangi)
+**Definicja:** Efektywna metoda fine-tuningu (dostrajania) LLM z kwantyzacją i low-rank adapters (adaptery niskiego rangi).
+- **Quantization (Kwantyzacja):** Model bazowy w 4-bit (NF4) zamiast 16-bit → 75% mniej VRAM
+- **LoRA (Low-Rank Adaptation / Adaptacja niskiego rangi):**
+  - Zamiast trenować wszystkie wagi: dodaj małe adaptery (rank decomposition / dekompozycja rangi)
   - `ΔW = B·A` gdzie `B ∈ ℝ^(d×r)`, `A ∈ ℝ^(r×k)`, `r << d`
-  - Tylko adaptery są trainable (1-2% parametrów)
+  - Tylko adaptery są trainable (trenowalne - 1-2% parametrów)
+- **Fine-tuning (Dostrajanie):** Trening modelu na specyficznym zadaniu/datasecie
+- **Adapter:** Małe dodatkowe warstwy sieci neuronowej (nie cały model)
 - **QLoRA = Quantization + LoRA:** 4-bit base + BF16 adapters
 - **Korzyści:**
   - VRAM: 12GB → 3GB (base) + 2GB (adapters) = 5GB total
   - Training speed: ~3x szybszy niż full fine-tune
-  - Modularność: Wiele adapterów (swap bez reload base)
+  - Modularność: Wiele adapterów (swap bez reload base / wymiana bez przeładowania bazowego modelu)
 
-### Augmentacja Danych
+### Data Augmentation (Augmentacja / Wzbogacanie danych)
 **Definicja:** Generowanie syntetycznych wariantów danych treningowych.
-- **Obfuscation:** Base64, Hex, ROT13, variable renaming, string splitting
-- **Polimorfizm:** Jeden malware → wiele wariantów o różnych "fingerprints"
-- **Balancing:** Oversample minority class (malicious) z wariantami
-- **Cel:** Model uczy się rozpoznawać intent, nie tylko exact syntax
+- **Obfuscation (Zaciemnianie):** Base64, Hex, ROT13, variable renaming (zmiana nazw zmiennych), string splitting (dzielenie stringów)
+- **Polymorphism (Polimorfizm):** Jeden malware → wiele wariantów o różnych "fingerprints" (odcisków palców)
+- **Balancing (Balansowanie):** Oversample minority class (nadpróbkowanie klasy mniejszościowej - malicious) z wariantami
+- **Synthetic samples (Próbki syntetyczne):** Sztucznie wygenerowane dane (nie z rzeczywistych źródeł)
+- **Cel:** Model uczy się rozpoznawać intent (intencję), nie tylko exact syntax (dokładną składnię)
 
-### Sanityzacja Kodu
+### Code Sanitization (Sanityzacja / Czyszczenie kodu)
 **Definicja:** Walidacja i czyszczenie kodu przed embeddingiem.
-- **Entropy check:** Min 3.5 bits/byte - odrzuca binarne śmieci
-- **Syntax validation:** AST parsing - odrzuca niepoprawny kod
-- **License removal:** Usuwa nagłówki (Apache, MIT) - redukuje szum
-- **Line length check:** Max 500 chars - wykrywa minifikację
-- **Cel:** Lepsze embeddingi - garbage in, garbage out
+- **Entropy check (Sprawdzanie entropii):** Min 3.5 bits/byte - odrzuca binarne śmieci
+- **Syntax validation (Walidacja składni):** AST parsing - odrzuca niepoprawny kod
+- **License removal (Usuwanie licencji):** Usuwa nagłówki (Apache, MIT) - redukuje szum (noise)
+- **Line length check:** Max 500 chars - wykrywa minifikację (minification / kompresję kodu)
+- **Cel:** Lepsze embeddingi - garbage in, garbage out (śmieci na wejściu, śmieci na wyjściu)
 
-### Reranking
-**Definicja:** Re-scoring wyników wyszukiwania dla lepszej precyzji.
-- **Bi-encoder (Qdrant):** Fast but approximate - `sim(embed(q), embed(d))`
-- **Cross-encoder (Reranker):** Slow but precise - `score(q, d)` jointly
-- **Hybrid strategy:**
-  1. Bi-encoder: 1M candidates → top 30 (fast)
-  2. Heuristic boost: Security keywords → +20% score
-  3. Cross-encoder: top 30 → final k=3 (precise)
+### Reranking (Ponowne sortowanie / Rerangowanie)
+**Definicja:** Re-scoring (ponowne punktowanie) wyników wyszukiwania dla lepszej precyzji.
+- **Bi-encoder (Koder dwufazowy - Qdrant):** Fast but approximate (szybki ale przybliżony) - `sim(embed(q), embed(d))`
+- **Cross-encoder (Koder krzyżowy - Reranker):** Slow but precise (wolny ale precyzyjny) - `score(q, d)` jointly (wspólnie)
+- **Hybrid strategy (Strategia hybrydowa):**
+  1. Bi-encoder: 1M candidates → top 30 (fast / szybkie filtrowanie)
+  2. Heuristic boost (Heurystyczne wzmocnienie): Security keywords (słowa kluczowe bezpieczeństwa) → +20% score
+  3. Cross-encoder: top 30 → final k=3 (precise / precyzyjne)
 
-### Few-Shot Learning
-**Definicja:** Model uczy się z kilku przykładów (w promptcie).
-- **Zero-shot:** Tylko instrukcja, bez przykładów
-- **Few-shot:** Instrukcja + 3-5 przykładów (MALICIOUS i BENIGN)
+### Few-Shot Learning (Uczenie z kilku przykładów)
+**Definicja:** Model uczy się z kilku przykładów (w promptcie / zapytaniu).
+- **Zero-shot (Bez przykładów):** Tylko instrukcja, bez przykładów
+- **Few-shot (Kilka przykładów):** Instrukcja + 3-5 przykładów (MALICIOUS i BENIGN)
+- **Prompt (Zapytanie):** Tekst wejściowy dla LLM zawierający instrukcję i przykłady
 - **W ScriptGuard:** RAG pobiera k=3 najbardziej podobne próbki z Qdrant
 - **Format:** "EXAMPLE 1: MALICIOUS ... EXAMPLE 2: BENIGN ..."
-- **Benefit:** Model widzi kontekst - "ten kod jest podobny do znanego malware"
+- **Benefit (Korzyść):** Model widzi kontekst - "ten kod jest podobny do znanego malware"
 
-### Constrained Decoding
-**Definicja:** Wymuszanie określonych tokenów w outputcie LLM.
-- **Problem:** LLM może generować halucynacje ("Let me explain...", "Maybe...")
-- **Rozwiązanie:** `LogitsProcessor` - manipulacja prawdopodobieństw tokenów
+### Constrained Decoding (Ograniczone dekodowanie)
+**Definicja:** Wymuszanie określonych tokenów w outputcie (wyjściu) LLM.
+- **Problem:** LLM może generować halucynacje (hallucinations / nieprawdziwe/niespójne odpowiedzi) ("Let me explain...", "Maybe...")
+- **Rozwiązanie:** `LogitsProcessor` - manipulacja prawdopodobieństw tokenów (logits)
+- **Logits:** Surowe wyniki modelu przed softmax (nie znormalizowane prawdopodobieństwa)
 - **W ScriptGuard:** Pierwszy token MUSI być "BENIGN" lub "MALICIOUS"
   ```python
   logits[other_tokens] = -inf  # Force model to choose label token
   ```
-- **Confidence:** Softmax(logits) pierwszego tokenu = calibrated probability
+- **Confidence (Pewność):** Softmax(logits) pierwszego tokenu = calibrated probability (skalibrowane prawdopodobieństwo)
 
-### Gradient Checkpointing
-**Definicja:** Trade-off: recompute activations instead of storing them.
-- **Problem:** Forward pass trzyma activations w VRAM (dla backward pass)
-- **Rozwiązanie:** Nie store, tylko recompute gdy potrzeba (backward)
-- **Trade:** 2x więcej compute, ale 50% mniej VRAM
-- **Critical:** Dla treningu LLM na consumer GPU (RTX 3090/4090)
+### Gradient Checkpointing (Punkty kontrolne gradientu)
+**Definicja:** Trade-off (kompromis): recompute activations (ponowne obliczanie aktywacji) instead of storing them (zamiast przechowywania).
+- **Problem:** Forward pass (przejście w przód) trzyma activations w VRAM (dla backward pass / przejścia wstecz)
+- **Activation (Aktywacja):** Wyniki pośrednie sieci neuronowej podczas forward pass
+- **Rozwiązanie:** Nie store (przechowuj), tylko recompute gdy potrzeba (backward)
+- **Trade (Kompromis):** 2x więcej compute (obliczeń), ale 50% mniej VRAM
+- **Critical:** Dla treningu LLM na consumer GPU (konsumencki GPU - RTX 3090/4090)
 
-### Paged Optimizer (paged_adamw_8bit)
-**Definicja:** Adam optimizer z 8-bit quantization + CPU offloading.
+### Paged Optimizer (Optimizer ze stronicowaniem - paged_adamw_8bit)
+**Definicja:** Adam optimizer z 8-bit quantization (kwantyzacją) + CPU offloading (przenoszenie do CPU).
 - **Problem:** Adam optimizer states (momentum, variance) = 2× model size w VRAM
 - **Rozwiązanie:**
   - Quantize optimizer states do 8-bit (zamiast 32-bit) → 75% mniej VRAM
