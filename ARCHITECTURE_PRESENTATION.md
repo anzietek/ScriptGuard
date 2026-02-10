@@ -918,23 +918,23 @@ flowchart TB
     end
 
     subgraph TrainingPipeline [ZenML Pipeline]
-        Ingest[Ingestia & Deduplikacja]
-        Valid[Walidacja & Sanityzacja]
-        Augment[Augmentacja (Qdrant)]
-        Vectorize[Wektoryzacja (Train Only)]
-        Train[QLoRA Fine-tuning]
+        Ingest["Ingestia & Deduplikacja"]
+        Valid["Walidacja & Sanityzacja"]
+        Augment["Augmentacja - Qdrant"]
+        Vectorize["Wektoryzacja - Train Only"]
+        Train["QLoRA Fine-tuning"]
         Eval[Ewaluacja]
     end
 
     subgraph Storage [Storage]
-        Postgres[(PostgreSQL\nPełny kod)]
-        Qdrant[(Qdrant\nWektory)]
+        Postgres[("PostgreSQL<br/>Pełny kod")]
+        Qdrant[("Qdrant<br/>Wektory")]
     end
 
     subgraph Inference [Inferencja API]
-        FastAPI[FastAPI App]
-        RAG[RAG Service]
-        LLM[LLM (Adapter)]
+        FastAPI["FastAPI App"]
+        RAG["RAG Service"]
+        LLM["LLM - Adapter"]
     end
 
     DataSources --> Ingest
@@ -946,11 +946,11 @@ flowchart TB
     Vectorize --> Qdrant
     Train --> LLM
 
-    User -->|POST /analyze| FastAPI
+    User -->|"POST /analyze"| FastAPI
     FastAPI --> RAG
     RAG -->|Search| Qdrant
     Qdrant -->|IDs| Postgres
-    Postgres -->|Full Content| RAG
+    Postgres -->|"Full Content"| RAG
     RAG -->|Context| FastAPI
     FastAPI -->|Prompt| LLM
     LLM -->|Verdict| FastAPI
@@ -1546,20 +1546,20 @@ else:
 ```mermaid
 flowchart LR
     subgraph Qdrant [Qdrant Vector Store]
-        C1[Chunk 1\ndb_id=42\nparent=a3f8]
-        C2[Chunk 2\ndb_id=42\nparent=a3f8]
-        C3[Chunk 3\ndb_id=42\nparent=a3f8]
+        C1["Chunk 1<br/>db_id=42<br/>parent=a3f8"]
+        C2["Chunk 2<br/>db_id=42<br/>parent=a3f8"]
+        C3["Chunk 3<br/>db_id=42<br/>parent=a3f8"]
     end
 
     subgraph PostgreSQL [PostgreSQL]
-        D1[Document 42\nFull Content\n1200 tokens]
+        D1["Document 42<br/>Full Content<br/>1200 tokens"]
     end
 
     Query[Query Vector] --> C2
-    C2 -->|Best Match\nScore: 0.87| Aggregate[Aggregate\nby parent_id]
-    Aggregate -->|db_id=42| Fetch[Fetch Full\nContent]
+    C2 -->|"Best Match<br/>Score: 0.87"| Aggregate["Aggregate<br/>by parent_id"]
+    Aggregate -->|db_id=42| Fetch["Fetch Full<br/>Content"]
     D1 --> Fetch
-    Fetch --> Result[Complete\nDocument]
+    Fetch --> Result["Complete<br/>Document"]
 ```
 
 ### Notatki prelegenta
