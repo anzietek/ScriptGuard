@@ -963,6 +963,168 @@ Metrics:
 ### Notatki prelegenta
 Ewaluacja z włączonym RAG (`use_fewshot_rag=True`) jest kluczowa, aby zmierzyć rzeczywistą wydajność systemu w warunkach produkcyjnych. Model bez RAG może mieć 85% accuracy, z RAG może mieć 96% (Few-Shot boost). Confidence analysis pokazuje calibration - jeśli model się myli, jest mniej pewny (0.54 vs 0.89), co pozwala na threshold-based escalation (np. conf < 0.6 → human review). W security ML, **Recall > Precision** - lepiej mieć 10 false alarms niż 1 missed malware.
 
+---
+
+## Slajd 10a: Target Metrics & Quality Goals
+
+### Production Quality Targets
+
+#### Primary Classification Metrics (with RAG)
+
+| Metric | Target | Minimum Acceptable | Baseline (without RAG) | Notes |
+|--------|--------|-------------------|----------------------|-------|
+| **Recall** | **≥ 95%** | **≥ 90%** | 85-88% | **CRITICAL** - Must catch malware |
+| **Precision** | ≥ 90% | ≥ 85% | 80-85% | Reduce false alarms |
+| **F1 Score** | ≥ 92% | ≥ 87% | 82-86% | Balanced performance |
+| **Accuracy** | ≥ 93% | ≥ 88% | 85-87% | Overall correctness |
+
+#### Confidence Calibration Targets
+
+| Metric | Target | Purpose |
+|--------|--------|---------|
+| **High Confidence (≥0.8) Precision** | ≥ 98% | Auto-action safe zone |
+| **Low Confidence (<0.6) Detection Rate** | ≥ 80% | Identify uncertain cases |
+| **Confidence Gap (Correct vs Incorrect)** | ≥ 0.20 | Model knows when it's wrong |
+
+#### RAG Quality Metrics
+
+| Metric | Target | Impact |
+|--------|--------|--------|
+| **Few-Shot Retrieval Accuracy** | ≥ 85% | Relevant examples retrieved |
+| **RAG Performance Boost** | +8-12% F1 | Improvement over no-RAG baseline |
+| **Code Samples with db_id** | ≥ 20% | Fetch-from-source availability |
+| **Hierarchical Chunking Success Rate** | ≥ 70% | Semantic coherence |
+
+### Trade-off Strategy
+
+#### Use Case: Production Malware Scanner (High Recall Priority)
+```yaml
+Configuration:
+  threshold: 0.45           # Lower threshold = higher recall
+  auto_action_threshold: 0.85  # High confidence auto-block
+  human_review_threshold: 0.60  # Mid confidence → escalate
+
+Expected Metrics:
+  Recall: 96-98%           # Catch almost all malware ✅
+  Precision: 88-92%        # ~10% false positive rate (acceptable)
+  False Negatives: 2-4%    # MINIMIZE (security critical)
+  False Positives: 8-12%   # TOLERATE (better safe than sorry)
+```
+
+#### Use Case: Code Review Assistant (Balanced)
+```yaml
+Configuration:
+  threshold: 0.60           # Balanced threshold
+  auto_action_threshold: 0.90
+  human_review_threshold: 0.70
+
+Expected Metrics:
+  Recall: 92-94%           # Still catch most threats
+  Precision: 92-95%        # Lower false alarm rate
+  False Negatives: 6-8%    # Acceptable for advisory role
+  False Positives: 5-8%    # Minimize user annoyance
+```
+
+#### Use Case: Research/Analysis (High Precision Priority)
+```yaml
+Configuration:
+  threshold: 0.75           # Higher threshold = higher precision
+  auto_action_threshold: 0.95
+  human_review_threshold: 0.80
+
+Expected Metrics:
+  Recall: 85-88%           # May miss some edge cases
+  Precision: 95-98%        # Very few false alarms ✅
+  False Negatives: 12-15%  # TOLERATE (manual review available)
+  False Positives: 2-5%    # MINIMIZE (trust is critical)
+```
+
+### Performance Benchmarks
+
+#### Comparison with Baselines
+
+| Approach | Recall | Precision | F1 | Notes |
+|----------|--------|-----------|----|----|
+| **Rule-based (YARA)** | 70-80% | 85-90% | 77-85% | High precision, limited coverage |
+| **Traditional ML (RF)** | 80-85% | 80-85% | 80-85% | Good baseline, feature engineering |
+| **Fine-tuned LLM (no RAG)** | 85-90% | 85-88% | 85-89% | Better generalization |
+| **ScriptGuard (LLM + RAG)** | **95-97%** | **90-93%** | **92-95%** | **Target performance** ✅ |
+
+#### Latency Targets
+
+| Metric | Target | Maximum Acceptable | Notes |
+|--------|--------|-------------------|-------|
+| **API Response Time (p50)** | < 500ms | < 1000ms | Average case |
+| **API Response Time (p95)** | < 1500ms | < 3000ms | Complex scripts |
+| **RAG Retrieval Time** | < 100ms | < 300ms | Qdrant + PostgreSQL |
+| **LLM Inference Time** | < 300ms | < 800ms | StarCoder2-3B + LoRA |
+
+### Monitoring & Alerting Thresholds
+
+#### Production Alerts (Trigger when)
+```yaml
+Critical:
+  - Recall drops below 90% (weekly evaluation)
+  - P95 latency exceeds 3000ms
+  - Error rate > 5%
+
+Warning:
+  - F1 score drops below 90%
+  - Confidence gap < 0.15 (calibration drift)
+  - Code samples with db_id < 15%
+  - Hierarchical chunking success rate < 60%
+```
+
+### Continuous Improvement Targets
+
+| Quarter | Goal | Metric Change |
+|---------|------|---------------|
+| **Q1 2026** | Baseline production deployment | Recall ≥ 93%, Precision ≥ 88% |
+| **Q2 2026** | RAG optimization | +3% F1 (hierarchical chunking, reranking) |
+| **Q3 2026** | Multi-language support | Maintain F1 for Python, 85%+ for JS/PowerShell |
+| **Q4 2026** | Active learning loop | +2% F1 (user feedback integration) |
+
+### Why These Targets?
+
+**Recall Priority (95%+ target):**
+- Security context: **Missing 1 malware sample = potential breach**
+- Cost of FN >> Cost of FP (false alarm vs security incident)
+- Industry standard: AV solutions target 95-99% detection rate
+
+**Precision Balance (90%+ target):**
+- 10% false positive rate = ~1 in 10 benign scripts flagged
+- Acceptable for production (human review can handle this volume)
+- Too low precision = user fatigue, ignored alerts
+
+**Confidence Calibration:**
+- High confidence (>0.85) should be **highly reliable** (98%+ precision)
+- Enables automated actions (block/quarantine) without human review
+- Low confidence (<0.6) signals uncertainty → route to security analyst
+
+**RAG Boost (8-12% F1 improvement):**
+- Few-Shot examples provide contextual guidance
+- CVE patterns help identify known attack vectors
+- Justifies RAG infrastructure complexity
+
+### Success Criteria Summary
+
+✅ **Minimum Viable Product (MVP):**
+- Recall ≥ 90%, Precision ≥ 85%, F1 ≥ 87%
+- Latency p95 < 3000ms
+- Production-ready API with monitoring
+
+✅ **Target Production Quality:**
+- Recall ≥ 95%, Precision ≥ 90%, F1 ≥ 92%
+- Latency p95 < 1500ms
+- Confidence calibration functional (gap ≥ 0.20)
+
+✅ **Exceptional Performance:**
+- Recall ≥ 97%, Precision ≥ 93%, F1 ≥ 95%
+- Latency p95 < 1000ms
+- Multi-language support with consistent quality
+
+---
+
 ```mermaid
 sequenceDiagram
     participant Pipeline
