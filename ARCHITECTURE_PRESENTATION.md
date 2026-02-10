@@ -155,6 +155,156 @@
 - **Trade-off:** Minimal accuracy loss (<0.1%), niewielki slowdown przy page swaps
 - **W ScriptGuard:** `optim: "paged_adamw_8bit"` (config.yaml)
 
+### Metryki Klasyfikacji (Classification Metrics)
+
+#### Confusion Matrix (Macierz pomyłek)
+**Definicja:** Tabela pokazująca rzeczywiste vs przewidywane etykiety.
+
+```
+                  Predicted (Przewidywane)
+                  BENIGN    MALICIOUS
+Actual   BENIGN   TN        FP          TN = True Negative (Prawdziwie negatywny)
+(Rzeczy) MALICIOUS FN       TP          FP = False Positive (Fałszywie pozytywny)
+                                         FN = False Negative (Fałszywie negatywny)
+                                         TP = True Positive (Prawdziwie pozytywny)
+```
+
+**Wyjaśnienie terminów:**
+- **TP (True Positive / Prawdziwie pozytywny):** Malicious code poprawnie rozpoznany jako malicious ✅
+- **TN (True Negative / Prawdziwie negatywny):** Benign code poprawnie rozpoznany jako benign ✅
+- **FP (False Positive / Fałszywie pozytywny):** Benign code błędnie oznaczony jako malicious ❌ (false alarm / fałszywy alarm)
+- **FN (False Negative / Fałszywie negatywny):** Malicious code błędnie oznaczony jako benign ❌ (missed detection / przeoczone zagrożenie)
+
+#### Kluczowe Metryki (Key Metrics)
+
+**1. Accuracy (Dokładność)**
+```
+Accuracy = (TP + TN) / (TP + TN + FP + FN)
+```
+- **Definicja:** Procent wszystkich poprawnych predykcji
+- **Interpretacja:** "Ile razy model miał rację?" (ogólna poprawność)
+- **W ScriptGuard:** Target ≥ 93%
+- **Polskie:** Dokładność = (Poprawne) / (Wszystkie)
+
+**2. Precision (Precyzja / Dokładność pozytywna)**
+```
+Precision = TP / (TP + FP)
+```
+- **Definicja:** Procent poprawnych spośród wszystkich przewidzianych jako malicious
+- **Interpretacja:** "Jeśli model mówi MALICIOUS, jak często ma rację?"
+- **W ScriptGuard:** Target ≥ 90% (zmniejsza false alarms / fałszywe alarmy)
+- **Polskie:** Precyzja = (Prawdziwie malicious) / (Wszystkie oznaczone jako malicious)
+- **Trade-off:** Wysoka precision = mniej false alarms, ale może przegapić malware
+
+**3. Recall (Czułość / Kompletność / Sensitivity)**
+```
+Recall = TP / (TP + FN)
+```
+- **Definicja:** Procent wykrytych malware spośród wszystkich rzeczywistych malware
+- **Interpretacja:** "Ile malware udało się złapać?"
+- **W ScriptGuard:** Target ≥ 95% (**KRYTYCZNE dla security**)
+- **Polskie:** Czułość = (Wykryte malware) / (Wszystkie rzeczywiste malware)
+- **Trade-off:** Wysoki recall = łapie więcej malware, ale więcej false alarms
+- **Inne nazwy:** Sensitivity (czułość), True Positive Rate (TPR)
+
+**4. F1 Score (Średnia harmoniczna)**
+```
+F1 = 2 × (Precision × Recall) / (Precision + Recall)
+```
+- **Definicja:** Harmonic mean (średnia harmoniczna) Precision i Recall
+- **Interpretacja:** Balans między precision a recall (nie średnia arytmetyczna!)
+- **W ScriptGuard:** Target ≥ 92%
+- **Polskie:** Wynik F1 = 2 × (Precyzja × Czułość) / (Precyzja + Czułość)
+- **Kiedy używać:** Gdy chcesz jedną metrykę reprezentującą quality
+
+**5. False Positive Rate (FPR / Współczynnik fałszywych alarmów)**
+```
+FPR = FP / (FP + TN)
+```
+- **Definicja:** Procent benign code błędnie oznaczonego jako malicious
+- **Interpretacja:** "Ile razy krzyczę 'wilk!' gdy go nie ma?"
+- **W Security ML:** FPR = 10% oznacza 1 na 10 benign samples flagged
+- **Polskie:** Wskaźnik fałszywych alarmów
+
+**6. False Negative Rate (FNR / Współczynnik przeoczeń)**
+```
+FNR = FN / (FN + TP) = 1 - Recall
+```
+- **Definicja:** Procent malware, które przeoczono (missed detection / przeoczone)
+- **Interpretacja:** "Ile groźnego malware przeszło niezauważone?"
+- **W Security ML:** FNR = 5% oznacza 1 na 20 malware missed (**KRYTYCZNE**)
+- **Polskie:** Wskaźnik przeoczeń
+
+#### Trade-off: Precision vs Recall
+
+**Security Context (Kontekst bezpieczeństwa):**
+```
+Koszt FN (missed malware) >> Koszt FP (false alarm)
+└─ 1 przeoczony malware = potencjalny breach (naruszenie)
+└─ 10 false alarms = irytujące, ale bezpieczne
+```
+
+**Strategia dla różnych use cases:**
+
+| Use Case | Priorytet | Threshold | Expected Metrics |
+|----------|-----------|-----------|------------------|
+| **Production Scanner** | **Recall** (złap wszystko) | Low (0.45) | Recall 96-98%, Precision 88-92% |
+| **Code Review Assistant** | Balanced | Medium (0.60) | Recall 92-94%, Precision 92-95% |
+| **Research/Analysis** | **Precision** (zero false alarms) | High (0.75) | Recall 85-88%, Precision 95-98% |
+
+**W ScriptGuard:**
+- **Default threshold:** 0.5 (balanced)
+- **Auto-action threshold:** 0.85 (high confidence → automatic block)
+- **Human review threshold:** 0.6 (uncertain → escalate to analyst)
+- **Philosophy:** **Recall > Precision** - lepiej 10 false alarms niż 1 missed malware
+
+#### Confidence Calibration (Kalibracja pewności)
+
+**Definicja:** Czy prawdopodobieństwo modelu odzwierciedla rzeczywistą częstość poprawności?
+
+**Metryki:**
+- **High confidence precision (≥0.8):** Czy model przy 90% confidence rzeczywiście ma rację w 90% przypadków?
+- **Confidence gap (Różnica pewności):** Czy model jest MNIEJ pewny gdy się myli?
+  ```
+  Gap = Avg(confidence | correct) - Avg(confidence | incorrect)
+  Target: ≥ 0.20  (model "wie" że się myli)
+  ```
+- **Expected Calibration Error (ECE):** Średnia różnica między confidence a accuracy w binach
+
+**W ScriptGuard:**
+- High confidence (≥0.85) → automatic action (precision ≥98%)
+- Medium confidence (0.6-0.85) → show to user with warning
+- Low confidence (<0.6) → escalate to security analyst (80% są errors)
+
+#### Przykład Obliczenia
+
+**Scenario:** 500 samples (250 benign, 250 malicious)
+
+**Confusion Matrix:**
+```
+                BENIGN  MALICIOUS
+Actual BENIGN     238      12        FP=12 (4.8% benign flagged)
+       MALICIOUS   8      242        FN=8 (3.2% malware missed)
+```
+
+**Obliczenia:**
+```
+Accuracy  = (238 + 242) / 500 = 0.96 (96%)
+Precision = 242 / (242 + 12) = 0.952 (95.2%)
+Recall    = 242 / (242 + 8) = 0.968 (96.8%)
+F1        = 2 × (0.952 × 0.968) / (0.952 + 0.968) = 0.960 (96.0%)
+
+FPR = 12 / (12 + 238) = 0.048 (4.8% false alarm rate)
+FNR = 8 / (8 + 242) = 0.032 (3.2% missed malware)
+```
+
+**Interpretacja:**
+- ✅ Model ma rację w 96% przypadków (accuracy)
+- ✅ Gdy mówi "MALICIOUS", ma rację w 95% (precision)
+- ✅ Łapie 97% malware (recall) - **KRYTYCZNE dla security**
+- ⚠️ 3.2% malware przechodzi niezauważone (FN) - do poprawy
+- ⚠️ 4.8% benign code flagged (FP) - akceptowalne
+
 ### Group-by-Length (Adaptive Batching)
 **Definicja:** Sortowanie samples w batch według długości tokenów.
 - **Problem:** Mixed-length batch → padding do max_length → waste VRAM i compute
@@ -177,6 +327,563 @@
   - `use_flash_attention_2: true` (config) - Linux only
   - Automatic fallback: `attn_implementation: "eager"` on Windows
   - Dropout forced to 0.0 (attention, residual, embedding) when flash enabled
+
+---
+
+## Dodatkowe Pojęcia Techniczne (Comprehensive Technical Terms)
+
+### Infrastruktura i Frameworki (Infrastructure & Frameworks)
+
+#### ZenML (Orkiestracja ML)
+**Definicja:** Framework orkiestracji pipeline ML - zarządza krokami, cache, artefaktami.
+- **Pipeline:** Orkiestrowany workflow składający się z kroków
+- **Step (Krok):** Pojedyncza operacja w pipeline (np. ingestion, training)
+- **Artifact (Artefakt):** Dane przekazywane między krokami (serializowane)
+- **Materializer:** Komponent serializujący/deserializujący artefakty
+- **Step Caching (Cache kroków):** Przechowywanie wyników kroków dla reużycia
+- **Cache TTL (Time-to-Live):** Czas życia cache (24h w ScriptGuard)
+- **Config-aware Invalidation:** Automatyczne unieważnienie cache przy zmianie konfiguracji
+- **W ScriptGuard:** `advanced_training_pipeline` - 10 kroków od ingestion do evaluation
+
+#### Bazy Danych (Databases)
+**PostgreSQL (Relacyjna baza danych / Relational Database)**
+- **Definicja:** SQL database - "Source of Truth" dla pełnej treści kodu
+- **CRUD Operations:** Create, Read, Update, Delete
+- **Schema (Schemat):** Definicja tabel i struktur danych
+- **Indexing (Indeksowanie):** Optymalizacja zapytań (db_id, sha256 hash)
+- **W ScriptGuard:** Przechowuje pełny kod, metadata, label - Qdrant tylko wektory
+
+**Qdrant (Baza wektorowa / Vector Database)**
+- **Definicja:** Specialized database for high-dimensional vector similarity search
+- **Collection (Kolekcja):** Named group of vectors (malware_knowledge, code_samples)
+- **Point (Punkt):** Individual vector with payload (embedding + metadata)
+- **Payload:** Metadata attached to vector (label, source, db_id, chunk_index)
+- **HNSW (Hierarchical Navigable Small World):** Index algorithm for fast search
+  - `m=16`: Connectivity parameter
+  - `ef_construct=100`: Construction-time precision
+- **Scrolling:** Iterating through large collections efficiently
+- **gRPC:** Google RPC protocol for fast communication (port 6334)
+- **Distance Metric:** Cosine similarity (after L2 norm = dot product)
+- **W ScriptGuard:** 2 collections - malware_knowledge (CVE), code_samples (Few-Shot)
+
+#### API i Web Frameworks (API & Web)
+**FastAPI (Python Web Framework)**
+- **Definicja:** Modern async web framework for APIs (based on Starlette + Pydantic)
+- **Endpoint:** API route handler (e.g., POST /analyze)
+- **Lifespan Context Manager:** Initialization and cleanup hooks (load model, connect DB)
+- **Background Tasks:** Asynchronous operations (logging, DB writes)
+- **API Key Authentication:** Request validation via X-API-Key header
+- **Response Headers:** X-Process-Time (latency tracking)
+- **Async/Await:** Asynchronous programming for concurrent requests
+
+**Uvicorn (ASGI Server / Serwer ASGI)**
+- **Definicja:** Lightning-fast ASGI server running FastAPI
+- **ASGI (Asynchronous Server Gateway Interface):** Python async web standard
+- **Workers:** Multiple process instances for load balancing
+- **W ScriptGuard:** `uvicorn src.scriptguard.api.main:app --host 0.0.0.0 --port 8000`
+
+#### Deep Learning Frameworks
+**PyTorch (Framework Deep Learning)**
+- **Definicja:** Open-source ML library - foundation dla treningu i inferencji
+- **Tensor (Tensor):** Multi-dimensional array (GPU-accelerated)
+- **Autograd:** Automatic differentiation for gradients
+- **CUDA:** NVIDIA parallel computing platform (GPU acceleration)
+- **VRAM (Video RAM / Pamięć GPU):** GPU memory for model weights and activations
+- **Expandable Segments:** Memory fragmentation prevention (CUDA setting)
+- **W ScriptGuard:** PyTorch 2.5.1 (compatibility with Unsloth)
+
+**Transformers (HuggingFace Library)**
+- **Definicja:** State-of-the-art NLP library - models, tokenizers, trainers
+- **AutoModel:** Automatic model loading by name
+- **AutoTokenizer:** Automatic tokenizer loading
+- **Trainer:** High-level training loop with logging
+- **W ScriptGuard:** `microsoft/unixcoder-base`, `bigcode/starcoder2-3b`
+
+**Unsloth (LLM Optimization Library)**
+- **Definicja:** 2-5x faster fine-tuning with 70% less memory
+- **Optimized Kernels:** Custom CUDA kernels for QLoRA
+- **Flash Attention Integration:** Built-in Flash Attention 2 support
+- **Compatibility:** Requires specific PyTorch versions (2.5.1)
+
+#### Cloud i Infrastruktura (Cloud & Infrastructure)
+**RunPod (Cloud GPU Provider / Dostawca GPU)**
+- **Definicja:** Affordable GPU cloud for ML training
+- **Pod:** Container instance with GPU (e.g., RTX 4090, A100)
+- **Volume Mount:** Persistent storage path (`/workspace`)
+- **Pod ID:** Unique identifier (tracked in config)
+- **W ScriptGuard:** Production environment (Linux + RunPod), development (Windows local)
+
+**GPU (Graphics Processing Unit / Procesor graficzny)**
+- **Definicja:** Specialized hardware for parallel computation (training, inference)
+- **Consumer GPU:** Affordable cards (RTX 3090/4090 - 24GB VRAM)
+- **Data Center GPU:** Enterprise cards (A100 - 40/80GB VRAM)
+- **Ampere Architecture:** NVIDIA GPU generation (30xx/A100) supporting Flash Attention
+- **Compute Capability:** GPU feature level (Ampere = 8.0+)
+
+---
+
+### Modele i Architektura Sieci (Models & Neural Architecture)
+
+#### Modele (Models)
+**StarCoder2-3B (Model bazowy / Base Model)**
+- **Definicja:** 3 billion parameter code LLM from BigCode project
+- **Architecture:** Transformer decoder (causal language modeling)
+- **Context Window:** 16K tokens (max_seq_length=2048 in ScriptGuard for memory)
+- **Training Data:** 600+ programming languages, GitHub repositories
+- **W ScriptGuard:** Fine-tuned with QLoRA for malware detection
+
+**UnixCoder (Code Embedding Model)**
+- **Definicja:** Multimodal pre-trained model for code (768-dim embeddings)
+- **Modality:** Understands code + natural language jointly
+- **Architecture:** Encoder-only Transformer (BERT-style)
+- **Output:** Dense embeddings for code similarity search
+- **W ScriptGuard:** `microsoft/unixcoder-base` - Qdrant vector generation
+
+**Transformer (Architektura / Architecture)**
+- **Definicja:** Neural network architecture based on self-attention mechanism
+- **Components:** Embedding layer, Attention layers, MLP layers, Output head
+- **Decoder-only:** Generates text token-by-token (causal / autoregressive)
+- **Encoder-only:** Produces embeddings (bidirectional / non-causal)
+
+#### Komponenty Sieci (Network Components)
+**Attention Layer (Warstwa uwagi / Attention Mechanism)**
+- **Definicja:** Neural layer computing relationships between tokens
+- **Query (Q):** "What am I looking for?"
+- **Key (K):** "What do I contain?"
+- **Value (V):** "What do I output?"
+- **Self-Attention:** Attention within same sequence
+- **Formula:** `Attention(Q,K,V) = softmax(QK^T / √d_k) V`
+
+**Projections (Projekcje / Linear Transformations)**
+- **q_proj (Query Projection):** Linear layer transforming hidden states to queries
+- **k_proj (Key Projection):** Linear layer transforming to keys
+- **v_proj (Value Projection):** Linear layer transforming to values
+- **o_proj (Output Projection):** Linear layer combining attention outputs
+- **W ScriptGuard:** LoRA adapters attached to q_proj, k_proj, v_proj
+
+**MLP (Multi-Layer Perceptron / Sieć wielowarstwowa)**
+- **Definicja:** Feed-forward neural network layers (after attention)
+- **gate_proj:** Gating projection (controls information flow)
+- **up_proj:** Up-projection (expands dimensionality)
+- **down_proj:** Down-projection (reduces dimensionality)
+- **Activation Function:** GeLU, SwiGLU (smooth non-linearity)
+
+**Embedding Layer (Warstwa osadzeń)**
+- **Definicja:** Converts token IDs to dense vectors (learnable lookup table)
+- **Vocabulary Size:** Number of unique tokens (e.g., 49,152 for StarCoder2)
+- **Embedding Dimension:** Vector size (e.g., 2048 for StarCoder2-3B)
+
+---
+
+### Trening i Optymalizacja (Training & Optimization)
+
+#### Podstawowe Pojęcia Treningowe (Basic Training Concepts)
+**Learning Rate (Tempo uczenia / Współczynnik uczenia)**
+- **Definicja:** Step size for parameter updates (typically 1e-4 to 5e-4 for fine-tuning)
+- **Too High:** Training diverges (loss explodes)
+- **Too Low:** Training is slow (poor convergence)
+- **W ScriptGuard:** 2e-4 (balanced for QLoRA fine-tuning)
+
+**Learning Rate Scheduler (Harmonogram tempa uczenia)**
+- **Definicja:** Strategy for adjusting learning rate during training
+- **Warmup Steps (Kroki rozgrzewki):** Gradually increase LR from 0 to max (prevents instability)
+- **Cosine with Restarts:** LR follows cosine curve, periodic resets
+- **W ScriptGuard:** 100 warmup steps, cosine decay
+
+**Batch Size (Rozmiar batcha)**
+- **Definicja:** Number of samples processed before updating weights
+- **Per-device Batch Size:** Samples per GPU (4 in ScriptGuard - memory constraint)
+- **Effective Batch Size:** True batch size after gradient accumulation (4 × 8 = 32)
+- **Trade-off:** Larger batch = more stable gradients, but more VRAM
+
+**Gradient Accumulation (Akumulacja gradientów)**
+- **Definicja:** Simulate large batch by accumulating gradients over multiple forward passes
+- **Steps:** 8 in ScriptGuard (32 effective batch size on 24GB GPU)
+- **Benefit:** Large effective batch without OOM (Out of Memory)
+- **Formula:** `effective_batch = per_device_batch × accumulation_steps × num_gpus`
+
+**Epoch (Epoka)**
+- **Definicja:** One complete pass through entire training dataset
+- **Multiple Epochs:** Model sees data multiple times (learns better)
+- **W ScriptGuard:** 3 epochs (configurable in config.yaml)
+
+**Convergence (Zbieżność)**
+- **Definicja:** Training stabilization - loss stops decreasing significantly
+- **Early Stopping:** Stop training when validation loss stops improving
+- **Overfitting (Przeuczenie):** Model memorizes training data (poor generalization)
+
+#### Regularyzacja (Regularization)
+**Dropout (Porzucanie neuronów)**
+- **Definicja:** Randomly disable neurons during training (prevents overfitting)
+- **Rate:** Probability of dropping (e.g., 0.05 = 5% neurons dropped)
+- **Inference:** Dropout disabled (all neurons active)
+- **W ScriptGuard:** lora_dropout=0.05, attention_dropout=0.0 (Flash Attention requirement)
+
+**Weight Decay (Zanik wag)**
+- **Definicja:** L2 regularization - penalizes large weights
+- **Formula:** `loss += λ × ||weights||²`
+- **W ScriptGuard:** 0.01 (prevents overfitting)
+
+#### Precyzja i Formaty (Precision & Formats)
+**BF16 (bfloat16 / Brain Float 16)**
+- **Definicja:** 16-bit floating-point format with same exponent range as FP32
+- **Advantage:** Better numerical stability than FP16 (no gradient overflow)
+- **Hardware:** Requires Ampere+ GPU (RTX 30xx, A100)
+- **W ScriptGuard:** `bf16: true` - training and evaluation
+
+**FP16 (Float16 / 16-bit Floating Point)**
+- **Definicja:** Standard 16-bit precision (8-bit exponent, 7-bit mantissa)
+- **Issue:** Can overflow with large gradients (requires gradient scaling)
+- **Alternative:** BF16 (better for LLM training)
+
+**Mixed Precision (Mieszana precyzja)**
+- **Definicja:** Combining different precisions in training (e.g., FP32 optimizer + BF16 gradients)
+- **Benefit:** Speed + memory savings without accuracy loss
+- **W ScriptGuard:** QLoRA uses 4-bit base model + BF16 adapters
+
+#### Monitorowanie Treningu (Training Monitoring)
+**Training Loss (Strata treningowa)**
+- **Definicja:** Error on training data (should decrease over time)
+- **Cross-Entropy Loss:** -log(P(correct_label)) - standard for classification
+
+**Validation Loss (Strata walidacyjna)**
+- **Definicja:** Error on validation data (early stopping indicator)
+- **Divergence:** If validation loss increases while training loss decreases → overfitting
+
+**TensorBoard (Wizualizacja treningu)**
+- **Definicja:** Tool for visualizing training metrics (loss curves, learning rate)
+- **W ScriptGuard:** Logs saved to `/workspace/logs/tensorboard`
+
+**WandB (Weights & Biases)**
+- **Definicja:** Experiment tracking platform (advanced alternative to TensorBoard)
+- **Features:** Hyperparameter search, model versioning, collaboration
+
+---
+
+### NLP i Przetwarzanie Języka (NLP & Language Processing)
+
+#### Tokenizacja (Tokenization)
+**Tokenization (Tokenizacja)**
+- **Definicja:** Breaking text into tokens (subwords, words, characters)
+- **Token:** Basic unit for model (e.g., "def", "establish", "_backdoor")
+- **Vocabulary (Słownik):** Set of all possible tokens (~50K for StarCoder2)
+- **Subword Tokenization:** Breaks rare words into frequent subwords (e.g., "unhappiness" → "un", "happiness")
+
+**Token IDs (Identyfikatory tokenów)**
+- **Definicja:** Numeric representation of tokens (model input)
+- **Special Tokens:** `<bos>` (beginning), `<eos>` (end), `<pad>` (padding)
+
+**Padding (Dopełnienie)**
+- **Definicja:** Adding dummy tokens to reach fixed sequence length
+- **Reason:** Batching requires same-length sequences
+- **Attention Mask:** Indicates which tokens are real (1) vs padding (0)
+- **Waste:** If max_length=512 but code is 100 tokens → 412 padding tokens wasted
+
+**Truncation (Obcięcie)**
+- **Definicja:** Cutting sequences exceeding maximum length
+- **max_seq_length:** Hard limit (2048 in ScriptGuard for memory)
+- **Strategy:** Truncate from left (keep end) or right (keep beginning)
+
+#### Długość Kontekstu (Context Length)
+**Context Length (Długość kontekstu)**
+- **Definicja:** Maximum tokens model can process at once
+- **StarCoder2:** 16K tokens (native capability)
+- **ScriptGuard:** 2048 tokens (reduced for 24GB GPU memory)
+- **Trade-off:** Longer context = more VRAM, slower inference
+
+**max_new_tokens (Maksymalna liczba generowanych tokenów)**
+- **Definicja:** Maximum tokens to generate in response
+- **W ScriptGuard:** 10 tokens (only need "MALICIOUS" or "BENIGN")
+
+#### Pooling i Agregacja (Pooling & Aggregation)
+**Pooling Strategy (Strategia poolowania)**
+- **Definicja:** Method to aggregate token embeddings into single vector
+- **Mean Pooling (Poolowanie średnie):** Average all token embeddings
+  ```python
+  embedding = sum(token_embeddings * attention_mask) / sum(attention_mask)
+  ```
+- **CLS Pooling:** Use only [CLS] token embedding (BERT-style)
+- **Max Pooling:** Take max value per dimension
+- **W ScriptGuard:** Mean pooling with attention mask
+
+**Attention Mask (Maska uwagi)**
+- **Definicja:** Binary mask indicating valid tokens (1) vs padding (0)
+- **Purpose:** Prevents model from attending to padding tokens
+- **Shape:** [batch_size, seq_length]
+
+---
+
+### Bezpieczeństwo i Zagrożenia (Security & Threats)
+
+#### Podstawowe Definicje (Core Definitions)
+**Malware (Złośliwe oprogramowanie)**
+- **Definicja:** Software designed to harm, exploit, or steal data
+- **Types (Typy):**
+  - **Script-based Malware:** Python, PowerShell, Bash scripts
+  - **Backdoor (Tylne drzwi):** Remote access mechanism
+  - **Ransomware:** Encrypts files, demands payment
+  - **Trojan (Koń trojański):** Disguised as legitimate software
+  - **Worm (Robak):** Self-replicating malware
+- **W ScriptGuard:** Target = script-based malware detection
+
+**Benign (Bezpieczny / Nieszkodliwy)**
+- **Definicja:** Safe, legitimate code without malicious intent
+- **Examples:** GitHub repos (django, flask, requests)
+- **False Positive (Fałszywy alarm):** Benign code incorrectly flagged as malicious
+
+#### Ataki i Exploity (Attacks & Exploits)
+**CVE (Common Vulnerabilities and Exposures / Wspólne luki i ekspozycje)**
+- **Definicja:** Standardized identifier for security vulnerabilities
+- **Format:** CVE-YYYY-NNNNN (e.g., CVE-2023-12345)
+- **Database:** NVD (National Vulnerability Database)
+- **W ScriptGuard:** CVE patterns stored in Qdrant malware_knowledge collection
+
+**NVD (National Vulnerability Database)**
+- **Definicja:** U.S. government repository of CVE data
+- **API:** Fetch recent CVEs (last 119 days in ScriptGuard)
+- **Fields:** Description, CVSS score, severity, published date
+
+**Exploit (Wykorzystanie luki)**
+- **Definicja:** Code or technique leveraging a vulnerability
+- **Exploit Pattern:** Known malicious code structure (e.g., SQL injection template)
+- **Proof-of-Concept (PoC):** Demonstration exploit code
+
+**RCE (Remote Code Execution / Zdalne wykonanie kodu)**
+- **Definicja:** Attacker executes code on victim system remotely
+- **Severity:** CRITICAL - full system compromise
+- **Examples:** `os.system(user_input)`, `eval(untrusted_data)`
+
+**Injection (Wstrzykiwanie kodu)**
+- **Definicja:** Inserting malicious code into application input
+- **Types:**
+  - **SQL Injection:** Manipulating database queries
+  - **Command Injection:** Injecting OS commands
+  - **Code Injection:** Injecting executable code (eval, exec)
+
+**C2 Server (Command and Control / Serwer kontroli)**
+- **Definicja:** Attacker infrastructure controlling compromised systems
+- **Communication:** HTTP, DNS, custom protocols
+- **Detection:** Beaconing patterns, unusual network connections
+
+**Exfiltration (Eksfiltracja / Kradzież danych)**
+- **Definicja:** Unauthorized data transfer to attacker
+- **Methods:** HTTP POST, DNS tunneling, FTP upload
+- **Indicators:** Large outbound transfers, encryption
+
+**Reverse Shell (Powłoka zwrotna)**
+- **Definicja:** Remote shell connection initiated by victim to attacker
+- **vs Forward Shell:** Bypasses firewalls (outbound allowed, inbound blocked)
+- **Code Pattern:** `socket.connect((attacker_ip, port)); subprocess.Popen("/bin/sh", ...)`
+
+#### Dane Zagrożeń (Threat Data)
+**Threat (Zagrożenie)**
+- **Definicja:** Potential security risk or attack
+- **Threat Actor (Aktor zagrożenia):** Entity conducting attack (hacker, APT group)
+- **Attack Vector (Wektor ataku):** Method of attack (phishing, exploit)
+
+**Vulnerability (Luka / Podatność)**
+- **Definicja:** Exploitable weakness in software
+- **Severity Levels (CVSS):**
+  - **CRITICAL:** 9.0-10.0
+  - **HIGH:** 7.0-8.9
+  - **MEDIUM:** 4.0-6.9
+  - **LOW:** 0.1-3.9
+
+**Vulnerability Signature (Sygnatura luki)**
+- **Definicja:** Pattern identifying specific vulnerability exploitation
+- **Example:** `exec(base64.b64decode(...))` - obfuscated code execution
+
+**Breach (Naruszenie / Incydent bezpieczeństwa)**
+- **Definicja:** Successful unauthorized access or data theft
+- **Impact:** Data loss, system compromise, reputation damage
+
+---
+
+### Źródła Danych i Repozytoria (Data Sources & Repositories)
+
+#### Repozytoria Malware (Malware Repositories)
+**MalwareBazaar (Repozytorium próbek malware)**
+- **Definicja:** Public malware sample repository (abuse.ch project)
+- **API:** REST API for downloading recent samples
+- **Tags:** Script types (.py, .ps1, .js), families (Emotet, Cobalt Strike)
+- **W ScriptGuard:** Primary malware source
+
+**VX-Underground (Archiwum malware)**
+- **Definicja:** Large collection of malware samples and papers
+- **Access:** GitHub repository (requires token)
+- **Content:** Scripts, binaries, security research
+- **W ScriptGuard:** Supplementary malware source
+
+**TheZoo (Baza danych malware)**
+- **Definicja:** Educational malware repository (GitHub-based)
+- **Purpose:** Security research and education
+- **Format:** Password-protected archives (infected)
+- **W ScriptGuard:** Script-based malware samples
+
+#### Platformy Danych (Data Platforms)
+**HuggingFace (Platforma modeli i datasetów)**
+- **Definicja:** Open-source ML ecosystem - models, datasets, Spaces
+- **Datasets API:** Python library for dataset loading
+- **Models Hub:** Pre-trained models (StarCoder2, UnixCoder)
+- **Token Authentication:** HF_TOKEN for private models/datasets
+- **W ScriptGuard:**
+  - Models: `bigcode/starcoder2-3b`, `microsoft/unixcoder-base`
+  - Datasets: malware-text-db, Powershell_Malware_Detection_Dataset
+
+**GitHub (Repozytorium kodu)**
+- **Definicja:** Version control platform hosting 200M+ repositories
+- **API:** REST/GraphQL API for code search
+- **Rate Limiting:** 5000 requests/hour with authentication
+- **W ScriptGuard:**
+  - Benign source: django, flask, requests, scikit-learn, pandas, pytorch
+  - Malware source: VX-Underground, TheZoo repos
+
+---
+
+### Zarządzanie Danymi (Data Management)
+
+#### Przetwarzanie Danych (Data Processing)
+**Sample (Próbka / Przykład)**
+- **Definicja:** Individual code example in dataset
+- **Fields:** content (code), label (benign/malicious), source, metadata
+- **Database ID (db_id):** Unique identifier in PostgreSQL
+
+**Dataset Split (Podział datasetu)**
+- **Training Set (Zbiór treningowy):** Data for model training (~70%)
+- **Validation Set (Zbiór walidacyjny):** Data for hyperparameter tuning (~15%)
+- **Test Set (Zbiór testowy):** Data for final evaluation (~15%)
+- **Unseen Data:** Test data never used in training (prevents leakage)
+
+**Data Leakage (Wyciek danych)**
+- **Definicja:** Test data contaminating training (inflated performance)
+- **Prevention:** Split BEFORE augmentation (ScriptGuard approach)
+- **Impact:** Overoptimistic metrics (model won't generalize)
+
+**Label (Etykieta)**
+- **Definicja:** Classification category (benign or malicious)
+- **Ground Truth:** True label (from human annotation or trusted source)
+- **Predicted Label:** Model output
+
+**Metadata (Metadane)**
+- **Definicja:** Additional information about sample
+- **Examples:** file_path, repository, language, timestamp, CVE_id
+- **Purpose:** Context, filtering, debugging
+
+#### Deduplikacja i Jakość (Deduplication & Quality)
+**SHA256 (Secure Hash Algorithm 256-bit / Funkcja skrótu)**
+- **Definicja:** Cryptographic hash function (unique fingerprint)
+- **Properties:** Deterministic, collision-resistant, one-way
+- **Use Cases:**
+  - Content deduplication (same code = same hash)
+  - File integrity verification
+  - parent_id generation (hash of full document)
+
+**Deduplication (Deduplikacja)**
+- **Definicja:** Removing duplicate samples from dataset
+- **Method:** SHA256 content hash comparison
+- **W ScriptGuard:** Applied after ingestion from multiple sources
+
+**Source Attribution (Atrybucja źródła)**
+- **Definicja:** Tracking where sample originated
+- **Sources:** GitHub, MalwareBazaar, VX-Underground, TheZoo, HuggingFace
+- **Purpose:** Debugging, licensing, reproducibility
+
+---
+
+### Pozostałe Kluczowe Pojęcia (Other Key Concepts)
+
+#### Architektoniczne Wzorce (Architectural Patterns)
+**Fetch-from-Source Pattern (Wzorzec pobierania ze źródła)**
+- **Definicja:** Store vectors in Qdrant, full content in PostgreSQL
+- **Reason:** Qdrant payload limit (~10KB) - large code doesn't fit
+- **Flow:**
+  1. Search Qdrant → get db_ids
+  2. Batch fetch from PostgreSQL by db_ids
+  3. Return full code content
+- **Benefit:** No truncation, full context for Few-Shot examples
+- **W ScriptGuard:** `CodeSimilarityStore.fetch_full_content_batch()`
+
+**Hybrid Strategy (Strategia hybrydowa)**
+- **Definicja:** Combining multiple approaches for best-of-both-worlds
+- **Examples:**
+  - Hierarchical + Sliding Window chunking
+  - Bi-encoder + Cross-encoder reranking
+  - RAG + Fine-tuning (parametric + non-parametric knowledge)
+
+**Graceful Fallback (Awaryjne rozwiązanie)**
+- **Definicja:** Degraded-mode operation when primary approach fails
+- **Examples:**
+  - Hierarchical chunking → Sliding Window (on syntax error)
+  - Flash Attention → Eager Attention (on Windows)
+  - Qdrant → Empty results (return empty list, don't crash)
+
+**Singleton Pattern (Wzorzec singletonu)**
+- **Definicja:** Single shared instance of resource (AppState in API)
+- **Purpose:** Avoid reloading model/DB connection per request
+- **W ScriptGuard:** `AppState` loads model once at startup
+
+#### Optymalizacje (Optimizations)
+**Batch Processing (Przetwarzanie wsadowe)**
+- **Definicja:** Processing multiple items together (GPU parallelization)
+- **Benefit:** 10-100x faster than sequential (GPU utilization)
+- **Examples:**
+  - Embedding 256 code chunks at once
+  - SQL `WHERE id IN (...)` batch fetch
+- **Trade-off:** Higher memory usage
+
+**Caching (Pamięć podręczna)**
+- **Definicja:** Storing computed results for reuse
+- **Types:**
+  - **Step Cache:** ZenML reuses step outputs
+  - **Model Cache:** HuggingFace downloads cached locally
+  - **Query Cache:** Recent searches cached in memory
+- **Invalidation:** When to clear cache (config change, data update)
+
+**Monkey-Patch (Łatka w czasie uruchomienia)**
+- **Definicja:** Runtime code modification (before imports)
+- **Use Cases:**
+  - Fake torch dtypes (int1-int7 compatibility)
+  - Disable torch.compile (Unsloth compatibility)
+  - Fix Windows Triton import
+- **W ScriptGuard:** Critical patches in `src/main.py` before ANY imports
+- **Risk:** Fragile, breaks with library updates
+
+#### Platformy (Platforms)
+**Linux (System operacyjny)**
+- **Definicja:** Unix-like OS - primary production environment
+- **Advantages:** Flash Attention 2, better GPU drivers, stable
+- **W ScriptGuard:** RunPod production (Ubuntu 22.04)
+
+**Windows (System operacyjny)**
+- **Definicja:** Microsoft OS - development environment
+- **Limitations:** No Flash Attention 2, Triton unsupported
+- **Fallbacks:** Eager attention, skip Triton imports
+- **W ScriptGuard:** Local development only
+
+#### Inne (Miscellaneous)
+**Sensitivity / TPR (Czułość / True Positive Rate)**
+- **Definicja:** Alternative names for Recall
+- **Formula:** TP / (TP + FN) - same as Recall
+- **Usage:** Medical contexts prefer "sensitivity"
+
+**Harmonic Mean (Średnia harmoniczna)**
+- **Definicja:** Type of average penalizing extreme values
+- **Formula:** `HM = n / (1/x₁ + 1/x₂ + ... + 1/xₙ)`
+- **F1 Score:** Harmonic mean of Precision and Recall
+- **Why not Arithmetic Mean:** HM prevents high P + low R from inflating score
+
+**Decision Threshold (Próg decyzyjny)**
+- **Definicja:** Confidence cutoff for classification decision
+- **Default:** 0.5 (balanced)
+- **High Threshold (0.85):** High precision (auto-action)
+- **Low Threshold (0.45):** High recall (catch all malware)
+- **Tuning:** Adjust based on use case (security favors low threshold)
+
+**Distribution Shift (Przesunięcie rozkładu)**
+- **Definicja:** Change in data distribution over time
+- **Example:** New malware families not in training data
+- **Detection:** Monitor performance metrics in production
+- **Mitigation:** Periodic retraining with new data
 
 ---
 
