@@ -1,6 +1,3 @@
-# ScriptGuard Configuration — RunPod Optimized (RTX 3090/4090/A5000 24GB VRAM)
-# Final Production Version - FIXED FOR 1:1 BALANCE & SPECIFICITY IMPROVEMENT
-
 # ============================================================================
 # PIPELINE CONFIGURATION
 # ============================================================================
@@ -32,7 +29,7 @@ api_keys:
   connection_pool_size: 10
 
 # ============================================================================
-# DATA SOURCES CONFIGURATION - EXPANDED FOR 1:1 BALANCE
+# DATA SOURCES CONFIGURATION - FIXED FOR 1:1 BALANCE & SPECIFICITY
 # ============================================================================
 data_sources:
   github:
@@ -52,45 +49,46 @@ data_sources:
       - "exploit python"
       - "payload python"
       - "data exfiltration python"
+      - "obfuscated malware python"
 
     benign_repos:
+      # Administrative & DevOps (Critical for reducing False Positives)
+      - "ansible/ansible"
+      - "saltstack/salt"
+      - "fabric/fabric"
+      - "paramiko/paramiko"
+      - "pyinstaller/pyinstaller"
       # Core Frameworks & Web
       - "django/django"
       - "pallets/flask"
       - "psf/requests"
       - "tiangolo/fastapi"
       - "aio-libs/aiohttp"
-      # System Administration & DevOps (Critical for FP prevention)
-      - "ansible/ansible"         # Uses subprocess and remote execution legally
-      - "fabric/fabric"           # SSH and remote command execution
-      - "saltstack/salt"          # Infrastructure management
-      - "pallets/click"           # CLI argument parsing
-      - "Textualize/rich"         # Terminal formatting
       # Security & Crypto (Proper legal patterns)
-      - "pyca/cryptography"       # Proper crypto implementation
+      - "pyca/cryptography"
       - "certifi/python-certifi"
       # Data Processing & Cloud
       - "scikit-learn/scikit-learn"
       - "pandas-dev/pandas"
       - "pytorch/pytorch"
-      - "boto/boto3"              # AWS SDK (heavy network operations)
+      - "boto/boto3"
 
-    max_samples_per_keyword: 400   # Increased to match benign counts
-    max_files_per_repo: 800       # Increased for better diversity
+    max_samples_per_keyword: 600
+    max_files_per_repo: 400
 
   malwarebazaar:
     enabled: true
     timeout: 60
     max_retries: 3
     tags: ["python", "script", "ransomware", "backdoor", "stealer"]
-    max_samples: 1500
+    max_samples: 2000
 
   vxunderground:
     enabled: true
     timeout: 60
     max_retries: 3
     script_types: [".py", ".ps1", ".js", ".vbs"]
-    max_samples: 1500
+    max_samples: 2000
 
   thezoo:
     enabled: true
@@ -168,7 +166,7 @@ code_embedding:
 
   score_thresholds:
     "microsoft/unixcoder-base":
-      default: 0.50  # Increased from 0.35 to reduce False Positives
+      default: 0.45  # Tuned for better recall/precision balance
 
   reranking:
     enabled: true
@@ -184,19 +182,23 @@ validation:
   skip_syntax_errors: true
   min_length: 50
   max_length: 100000
+  # Added to fix Specificity issues
+  deduplicate: true
+  dedup_threshold: 0.85
+  filter_test_leakage: true
 
 augmentation:
   enabled: true
-  variants_per_sample: 3
+  variants_per_sample: 2
   techniques: ["base64", "hex", "rename_vars", "split_strings"]
 
-  # Crucial for fixing the Specificity: 0.00 issue
   balance_dataset: true
-  target_balance_ratio: 1.0       # Force 1:1 split (50% Malicious / 50% Benign)
-  balance_method: "oversample"
+  target_balance_ratio: 1.0
+  balance_method: "hybrid"  # Improved over simple oversampling
+  augment_after_split: true # Crucial: prevents data leakage into test set
 
 # ============================================================================
-# TRAINING CONFIGURATION — OPTIMIZED FOR ANTI-OVERFITTING
+# TRAINING CONFIGURATION — OPTIMIZED FOR RTX 3090/4090 (24GB VRAM)
 # ============================================================================
 training:
   model_id: "bigcode/starcoder2-3b"
@@ -207,37 +209,38 @@ training:
   use_flash_attention_2: true
   group_by_length: true
 
-  # Batching Strategy
-  per_device_train_batch_size: 2
-  per_device_eval_batch_size: 2
-  gradient_accumulation_steps: 16
+  # Optimized Batching for 24GB
+  per_device_train_batch_size: 4
+  per_device_eval_batch_size: 4
+  gradient_accumulation_steps: 8
 
-  # QLoRA - Higher regularization to fight overfitting
+  # QLoRA - Higher regularization to fight Specificity: 0.00
   use_qlora: true
-  lora_r: 8
-  lora_alpha: 16
-  lora_dropout: 0.1                # Increased from original to generalize better
+  lora_r: 16
+  lora_alpha: 32
+  lora_dropout: 0.15
   target_modules: ["q_proj", "v_proj", "k_proj", "o_proj", "gate_proj", "up_proj", "down_proj"]
 
-  # Duration - 1 Epoch is enough for this dataset size
+  # Duration
   num_epochs: 1
 
-  # Optimizer - Conservative settings
-  learning_rate: 5e-5              # Reduced from 2e-4
-  weight_decay: 0.1                # Increased from 0.01 for better regularization
-  warmup_steps: 50
+  # Anti-overfitting measures
+  learning_rate: 4e-5
+  weight_decay: 0.15
+  label_smoothing_factor: 0.1 # Helps model distinguish "malicious-like" from "actual malware"
+  warmup_steps: 100
   lr_scheduler_type: "cosine"
   optim: "paged_adamw_8bit"
 
   # Monitoring
   evaluation_strategy: "steps"
-  eval_steps: 50                   # Frequent checks to monitor overfitting
+  eval_steps: 50
   save_steps: 50
   test_split_size: 0.2
   load_best_model_at_end: true
 
   early_stopping: true
-  early_stopping_patience: 3       # Reduced for faster cut-off
+  early_stopping_patience: 2
   metric_for_best_model: "eval_loss"
 
   bf16: true
@@ -253,7 +256,7 @@ inference:
   host: "0.0.0.0"
   port: 8000
   max_length: 2048
-  temperature: 0.1                 # Deterministic output for security auditing
+  temperature: 0.1
   top_p: 0.95
 
 logging:
