@@ -110,7 +110,7 @@ data_sources:
     enabled: true
     timeout: 45
     max_retries: 3
-    days_back: 180
+    days_back: 119
     keywords: ["script", "code execution", "command injection", "python", "malicious"]
 
   additional_hf:
@@ -124,11 +124,12 @@ data_sources:
       - rr4433/Powershell_Malware_Detection_Dataset
       - pacificsun/Malware_10k
       - cw1521/ember2018-malware-v2
+      - SubhadipPanda/Malware_Detection_System
 
     classification_datasets:
       - deepcode-ai/Malware-Prediction
       - PurCL/malware-top-100-labels
-      - RanggaAS/malware_detection
+      - PacificSun/microsoft_malware
 
 # ============================================================================
 # DATABASE & VECTOR STORE CONFIGURATION
