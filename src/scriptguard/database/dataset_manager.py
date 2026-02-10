@@ -12,6 +12,32 @@ from psycopg2.extras import execute_values, Json
 from .db_schema import get_connection, return_connection, refresh_statistics
 from .deduplication import compute_hash
 
+def sanitize_for_postgres(text: Optional[str]) -> Optional[str]:
+    """
+    Sanitize text for PostgreSQL by removing NUL bytes.
+
+    PostgreSQL does not allow NUL (0x00) characters in text fields.
+    This is common in malware samples with binary payloads.
+
+    Args:
+        text: Text to sanitize
+
+    Returns:
+        Sanitized text or None if input was None
+    """
+    if text is None:
+        return None
+
+    # Remove NUL bytes (0x00)
+    sanitized = text.replace('\x00', '')
+
+    # Log warning if NUL bytes were found
+    if len(sanitized) != len(text):
+        removed_count = len(text) - len(sanitized)
+        logger.warning(f"Removed {removed_count} NUL byte(s) from text (likely binary malware payload)")
+
+    return sanitized
+
 class DatasetManager:
     """Manages code sample database with PostgreSQL and versioning support."""
 
@@ -40,7 +66,11 @@ class DatasetManager:
         Returns:
             True if added successfully, False if duplicate
         """
-        content_hash = compute_hash(content)
+        # Sanitize content and URL to remove NUL bytes
+        content_sanitized = sanitize_for_postgres(content)
+        url_sanitized = sanitize_for_postgres(url)
+
+        content_hash = compute_hash(content_sanitized)
         conn = get_connection()
 
         try:
@@ -54,10 +84,10 @@ class DatasetManager:
                 """,
                 (
                     content_hash,
-                    content,
+                    content_sanitized,
                     label,
                     source,
-                    url,
+                    url_sanitized,
                     Json(metadata) if metadata else Json({})
                 )
             )
@@ -99,16 +129,20 @@ class DatasetManager:
         try:
             cursor = conn.cursor()
 
-            # Prepare batch data
+            # Prepare batch data with sanitization
             batch_data = []
             for sample in samples:
-                content_hash = compute_hash(sample["content"])
+                # Sanitize content and URL to remove NUL bytes
+                content_sanitized = sanitize_for_postgres(sample["content"])
+                url_sanitized = sanitize_for_postgres(sample.get("url"))
+
+                content_hash = compute_hash(content_sanitized)
                 batch_data.append((
                     content_hash,
-                    sample["content"],
+                    content_sanitized,
                     sample["label"],
                     sample["source"],
-                    sample.get("url"),
+                    url_sanitized,
                     Json(sample.get("metadata", {}))
                 ))
 
