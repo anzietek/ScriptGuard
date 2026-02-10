@@ -663,6 +663,167 @@ Parent Document Metadata (stored in all chunks):
 - parent_context: "# Imports: socket, base64 | Definitions: def establish_backdoor(), def exfiltrate_data(), class DataEncryptor"
 ```
 
+### Comparison Table: Hierarchical vs Sliding Window Chunking
+
+#### Słowniczek kluczowych terminów (Key Terms with Polish translations)
+- **Chunking** (Dzielenie) - Podział długiego kodu na mniejsze fragmenty
+- **Retrieval** (Pobieranie) - Wyszukiwanie podobnych przykładów z bazy
+- **Embedding** (Osadzenie wektorowe) - Reprezentacja kodu jako wektor numeryczny
+- **Semantic boundaries** (Granice semantyczne) - Naturalne granice w kodzie (funkcje, klasy)
+- **Token** (Token) - Podstawowa jednostka tekstu dla modelu (np. słowo, symbol)
+- **Overlap** (Nakładanie) - Fragmenty wspólne między sąsiednimi chunkami
+- **Fallback** (Awaryjne rozwiązanie) - Plan B gdy główna strategia nie działa
+- **AST** (Abstract Syntax Tree / Abstrakcyjne drzewo składni) - Reprezentacja struktury kodu
+
+#### Porównanie strategii (Strategy Comparison)
+
+| Aspekt | Hierarchical Chunking (AST-aware) | Sliding Window |
+|--------|----------------------------------|----------------|
+| **Granice chunków (Chunk boundaries)** | Granice funkcji/klas (Function/class boundaries) | Arbitrary token positions (512, 1024, etc.) |
+| **Semantic coherence (Spójność semantyczna)** | ✅ Wysoka - każdy chunk = kompletna jednostka logiczna | ❌ Niska - funkcje przecięte w połowie |
+| **Overlap (Nakładanie)** | ❌ Brak - każdy token raz | ✅ 64 tokens overlap (12.5%) |
+| **Chunk size (Rozmiar chunka)** | ⚠️ Zmienny (50-1024+ tokens) | ✅ Stały (512 tokens) |
+| **Language support (Wsparcie języków)** | ⚠️ Python only (wymaga AST parsera) | ✅ Universal (działa dla wszystkich) |
+| **Parse errors (Błędy składni)** | ⚠️ Wymaga valid syntax | ✅ Działa z invalid code |
+| **Storage efficiency (Efektywność)** | ✅ -30% chunków (brak overlap) | ❌ +30% chunków (overlap duplication) |
+| **Embedding quality (Jakość embeddingu)** | ✅ Pure logic - jedna funkcja | ⚠️ Mixed logic - kawałki wielu funkcji |
+| **Retrieval precision (Precyzja pobierania)** | ✅ +10-15% (hipoteza) | Baseline |
+| **Implementation complexity (Złożoność)** | ⚠️ Wyższa (AST parsing, edge cases) | ✅ Prosta (tokenizacja + slice) |
+| **Large functions (Duże funkcje)** | ⚠️ Wymaga fallback (>1024 tokens) | ✅ Automatic handling |
+| **Explainability (Wyjaśnialność)** | ✅ "Ta funkcja establish_backdoor()" | ⚠️ "Fragment od tokena 512 do 1024" |
+| **Training benefit (Korzyść dla treningu)** | ✅ Few-Shot = complete functions | ⚠️ Few-Shot = mixed fragments |
+
+#### Zalety i Wady (Advantages & Disadvantages)
+
+##### Hierarchical Chunking (AST-aware)
+
+**Zalety (Advantages):**
+1. ✅ **Semantic coherence (Spójność semantyczna)** - Każdy chunk to kompletna funkcja/klasa
+   - Embedding reprezentuje pełną logikę (nie fragment)
+   - Few-Shot examples są zrozumiałe dla LLM
+2. ✅ **No duplication (Brak duplikacji)** - Każdy token embedded dokładnie raz
+   - -30% storage w Qdrant
+   - -25% czasu wektoryzacji (mniej embeddingów)
+3. ✅ **Better retrieval (Lepsze pobieranie)** - Similarity search zwraca complete functions
+   - +10-15% precision (hipoteza, wymaga A/B test)
+   - Łatwiejsza interpretacja wyników
+4. ✅ **Explainability (Wyjaśnialność)** - Attribution do konkretnej funkcji
+   - "Malicious pattern found in function establish_backdoor()"
+5. ✅ **Parent-child architecture completion** - AST używany do boundaries (nie tylko metadata)
+
+**Wady (Disadvantages):**
+1. ❌ **Variable chunk sizes (Zmienne rozmiary)** - Funkcje: 50-2000+ tokens
+   - Komplikuje batching podczas embeddingu
+   - Niektóre funkcje za duże (>1024 tokens) → wymaga fallback
+2. ❌ **Language-specific (Zależność od języka)** - Tylko Python (obecnie)
+   - JavaScript, PowerShell wymagają osobnych parserów (tree-sitter)
+   - Nie działa dla wszystkich języków (np. minified JS bez AST)
+3. ❌ **Syntax errors break it (Błędy składni)** - Wymaga valid Python syntax
+   - Malformed code → fallback do sliding window
+   - ~10-20% samples może mieć syntax errors
+4. ❌ **Implementation complexity (Złożoność)** - Więcej kodu, więcej edge cases
+   - AST parsing może się wywrócić (memory, recursion)
+   - Wymaga testów dla różnych edge cases
+5. ❌ **Large functions problem (Problem dużych funkcji)** - Funkcje >1024 tokens
+   - Musi automatycznie fallbackować do sliding window
+   - ~5-10% funkcji może być za dużych
+
+##### Sliding Window Chunking
+
+**Zalety (Advantages):**
+1. ✅ **Universal (Uniwersalne)** - Działa dla wszystkich języków i formatów
+   - Python, JavaScript, PowerShell, minified code, binary strings
+2. ✅ **Simple & robust (Proste i niezawodne)** - Mało edge cases
+   - Tokenizacja + slice - zawsze działa
+   - Nie wymaga valid syntax
+3. ✅ **Predictable chunk sizes (Przewidywalne rozmiary)** - Zawsze ~512 tokens
+   - Łatwy batching
+   - Stabilna wydajność embeddingu
+4. ✅ **Context preservation (Zachowanie kontekstu)** - Overlap (64 tokens)
+   - Funkcje na boundary są w 2 chunkach
+   - Zmniejsza ryzyko utraty informacji
+5. ✅ **Battle-tested (Sprawdzone w boju)** - Standardowe podejście w RAG
+   - Wiele bibliotek (LangChain, LlamaIndex) używa tego
+
+**Wady (Disadvantages):**
+1. ❌ **Poor semantic coherence (Słaba spójność)** - Arbitrary token boundaries
+   - Funkcje przecięte w połowie
+   - Chunk = fragment A + fragment B (mixed logic)
+2. ❌ **Overlap waste (Marnowanie przez overlap)** - 12.5% duplikacji
+   - +30% storage
+   - +25% czasu wektoryzacji
+   - Ten sam kod embedded wielokrotnie
+3. ❌ **Lower retrieval quality (Niższa jakość)** - Mixed fragments
+   - Similarity search może zwrócić "koniec funkcji A + początek B"
+   - LLM dostaje incomplete context w Few-Shot
+4. ❌ **No function attribution (Brak atrybucji)** - "Fragment tokena 512-1024"
+   - Nie wiadomo która funkcja jest malicious
+   - Trudniejsze debugging
+5. ❌ **Suboptimal for code (Nieoptymalne dla kodu)** - Kod ≠ natural language
+   - Natural language: zdania mogą być przecięte
+   - Code: funkcje POWINNY być kompletne
+
+#### Kiedy używać którego? (When to use which?)
+
+##### ✅ Użyj Hierarchical Chunking gdy (Use Hierarchical when):
+
+1. **Język = Python** (obecnie jedyny wspierany z AST)
+   - 90%+ datasetu to Python → optymalne
+2. **Jakość > Prostota** (Quality > Simplicity)
+   - Chcesz najlepszego retrieval precision
+   - Masz czas na A/B testing i tuning
+3. **Explainability jest ważna** (Explainability matters)
+   - Potrzebujesz attribution do funkcji ("backdoor in function X")
+   - Regulatory requirements (security audit trails)
+4. **Training pipeline** (not inference)
+   - Few-Shot examples dla treningu
+   - Nie real-time inference (gdzie latency critical)
+5. **Dataset ma valid syntax** (Dataset has valid syntax)
+   - Code z GitHub, code review systems
+   - Nie obfuscated/malformed malware samples
+
+##### ✅ Użyj Sliding Window gdy (Use Sliding Window when):
+
+1. **Multi-language dataset** (Python + JavaScript + PowerShell + ...)
+   - Hierarchical nie wspiera wszystkich języków
+2. **Obfuscated/malformed code** (Obfuscated/malformed code)
+   - Malware samples mogą mieć invalid syntax
+   - Minified code bez whitespace
+3. **Prostota > Jakość** (Simplicity > Quality)
+   - Proof-of-concept, MVP
+   - Nie masz czasu na complex implementation
+4. **Real-time inference** (Real-time inference)
+   - Latency critical (każda ms się liczy)
+   - Sliding window = szybsze (no AST parsing overhead)
+5. **Unknown/experimental code formats** (Unknown/experimental formats)
+   - Nowe języki, DSLs, configuration files
+   - Hierarchical nie ma parsera dla tego
+
+#### ScriptGuard Strategy: Hybrid Approach (Best of Both Worlds)
+
+**Implementacja (Implementation):**
+```python
+if language == "python" and valid_syntax:
+    try:
+        chunks = hierarchical_chunking(code)  # Primary
+        if any(chunk.tokens > 1024 for chunk in chunks):
+            chunks = sliding_window_fallback(large_chunks)  # Fallback dla dużych funkcji
+    except SyntaxError:
+        chunks = sliding_window_chunking(code)  # Fallback dla syntax errors
+else:
+    chunks = sliding_window_chunking(code)  # Fallback dla non-Python
+```
+
+**Rezultat (Result):**
+- ~70-80% chunków = hierarchical (Python z valid syntax)
+- ~20-30% chunków = sliding window (large functions, errors, non-Python)
+- **Best of both worlds:** Jakość gdzie możliwe, robustness zawsze
+
+**Target Success Rate (Target Success Rate):**
+- Hierarchical success rate: **≥70%** (z datasetu)
+- Sliding window fallback: **≤30%**
+- Syntax error rate: **≤15%**
+
 ### Child-Parent Retrieval Flow
 
 ```mermaid
