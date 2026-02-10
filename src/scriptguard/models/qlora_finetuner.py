@@ -9,7 +9,7 @@ if platform.system() == "Windows":
 
 from unsloth import FastLanguageModel, UnslothTrainer
 import torch
-from transformers import TrainingArguments, DataCollatorForLanguageModeling
+from transformers import TrainingArguments, DataCollatorForLanguageModeling, EarlyStoppingCallback
 from datasets import Dataset
 from scriptguard.utils.logger import logger
 
@@ -150,6 +150,7 @@ class QLoRAFineTuner:
         training_args = TrainingArguments(
             output_dir=output_dir,
             per_device_train_batch_size=int(training_config.get("per_device_train_batch_size", training_config.get("batch_size", 4))),
+            per_device_eval_batch_size=int(training_config.get("per_device_eval_batch_size", training_config.get("batch_size", 4))),
             gradient_accumulation_steps=int(training_config.get("gradient_accumulation_steps", 4)),
             learning_rate=float(training_config.get("learning_rate", 2e-4)),
             weight_decay=float(training_config.get("weight_decay", 0.01)),
@@ -167,7 +168,10 @@ class QLoRAFineTuner:
             save_steps=int(training_config.get("save_steps", 500)),
             load_best_model_at_end=True if eval_strategy != "no" else False,
             metric_for_best_model="eval_loss" if eval_strategy != "no" else None,
-            report_to="wandb",
+            group_by_length=training_config.get("group_by_length", False),
+            tf32=training_config.get("tf32", True),
+            report_to=training_config.get("report_to", ["wandb"]),
+            run_name=training_config.get("run_name", "scriptguard-training"),
             push_to_hub=False,
         )
 
@@ -182,6 +186,17 @@ class QLoRAFineTuner:
             mlm=False,  # We're doing causal LM, not masked LM
         )
 
+        # Setup callbacks (early stopping if enabled)
+        callbacks = []
+        if training_config.get("early_stopping", False) and eval_strategy != "no":
+            early_stopping_patience = int(training_config.get("early_stopping_patience", 3))
+            early_stopping_threshold = float(training_config.get("early_stopping_threshold", 0.0))
+            callbacks.append(EarlyStoppingCallback(
+                early_stopping_patience=early_stopping_patience,
+                early_stopping_threshold=early_stopping_threshold
+            ))
+            logger.info(f"Early stopping enabled: patience={early_stopping_patience}, threshold={early_stopping_threshold}")
+
         trainer = UnslothTrainer(
             model=self.model,
             tokenizer=self.tokenizer,  # CRITICAL: Trainer needs tokenizer reference!
@@ -189,6 +204,7 @@ class QLoRAFineTuner:
             train_dataset=tokenized_dataset,
             eval_dataset=tokenized_eval_dataset,
             data_collator=data_collator,
+            callbacks=callbacks,
         )
 
         logger.info("Starting training with unsloth optimization...")
