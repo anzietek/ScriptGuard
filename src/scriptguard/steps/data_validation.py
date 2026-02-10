@@ -203,12 +203,20 @@ def validate_samples(
             logger.debug("Insufficient code content")
             continue
 
-        # Validate syntax
+        # Validate syntax (skip validation for malicious samples - they're often obfuscated)
         if validate_syntax:
             if not validate_python_syntax(content):
                 stats["invalid_syntax"] += 1
-                if skip_syntax_errors:
-                    logger.debug("Syntax error - skipping")
+
+                # Allow malicious samples with syntax errors (obfuscation is common)
+                if label == "malicious" and skip_syntax_errors:
+                    logger.debug(f"Malicious sample has syntax errors (likely obfuscated) - keeping anyway")
+                    sample["validation_warning"] = "syntax_error_malicious"
+                    # KEEP THE SAMPLE (don't continue)
+                elif skip_syntax_errors:
+                    # Skip benign samples with syntax errors
+                    preview = content[:100].replace('\n', ' ')
+                    logger.debug(f"Syntax error - skipping: {preview}... (label: {label}, source: {sample.get('source', 'unknown')})")
                     continue
                 else:
                     # Keep sample but add warning
