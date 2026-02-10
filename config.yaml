@@ -54,10 +54,17 @@ data_sources:
     benign_repos:
       # Administrative & DevOps (Critical for reducing False Positives)
       - "ansible/ansible"
+      - "ansible/ansible-runner"
       - "saltstack/salt"
       - "fabric/fabric"
       - "paramiko/paramiko"
       - "pyinstaller/pyinstaller"
+      - "pallets/click"               # CLI tools
+      - "requests/requests-oauthlib"  # OAuth (używa network calls)
+      - "psf/black"                   # Code formatter
+      - "pytest-dev/pytest"           # Testing framework
+      - "celery/celery"               # Task queue (network operations)
+
       # Core Frameworks & Web
       - "django/django"
       - "pallets/flask"
@@ -74,7 +81,7 @@ data_sources:
       - "boto/boto3"
 
     max_samples_per_keyword: 600
-    max_files_per_repo: 400
+    max_files_per_repo: 600
 
   malwarebazaar:
     enabled: true
