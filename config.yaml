@@ -71,17 +71,58 @@ data_sources:
       - "psf/requests"
       - "tiangolo/fastapi"
       - "aio-libs/aiohttp"
+      - "encode/httpx"                # Modern HTTP client
+      - "grpc/grpc"                   # gRPC framework
+      - "tornadoweb/tornado"          # Async web framework
+
       # Security & Crypto (Proper legal patterns)
       - "pyca/cryptography"
       - "certifi/python-certifi"
+      - "certbot/certbot"             # Let's Encrypt client (security tool)
+
       # Data Processing & Cloud
       - "scikit-learn/scikit-learn"
       - "pandas-dev/pandas"
       - "pytorch/pytorch"
-      - "boto/boto3"
+      - "boto/boto3"                  # AWS SDK
+      - "Azure/azure-cli"             # Azure command-line tools
+      - "aws/aws-cli"                 # AWS CLI
+      - "docker/docker-py"            # Docker SDK
+      - "kubernetes-client/python"    # Kubernetes client
 
-    max_samples_per_keyword: 600
-    max_files_per_repo: 600
+      # System & Monitoring Tools
+      - "giampaolo/psutil"            # Process and system utilities
+      - "fabric/patchwork"            # System administration tasks
+      - "supervisor/supervisor"       # Process control system
+
+      # Data Science & Workflow
+      - "apache/airflow"              # Workflow management platform
+      - "jupyter/notebook"            # Jupyter notebooks
+      - "plotly/plotly.py"            # Interactive graphing library
+      - "matplotlib/matplotlib"       # Plotting library
+      - "ipython/ipython"             # Enhanced Python shell
+
+      # Web Scraping & Automation (legitimate tools that may look suspicious)
+      - "scrapy/scrapy"               # Web scraping framework
+      - "SeleniumHQ/selenium"         # Browser automation
+      - "psf/requests-html"           # HTML parsing for requests
+      - "cobrateam/splinter"          # Browser automation tool
+
+      # Testing & Quality Assurance
+      - "robotframework/robotframework"  # Test automation framework
+      - "locustio/locust"             # Load testing tool
+      - "pytest-dev/pytest-xdist"     # Distributed testing
+      - "tox-dev/tox"                 # Test environment management
+      - "PyCQA/pylint"                # Code analysis tool
+
+      # Networking & Security Tools
+      - "certifi/python-certifi"      # SSL certificates
+      - "pypa/pip"                    # Package installer
+      - "pypa/setuptools"             # Package development
+      - "pypa/virtualenv"             # Virtual environments
+
+    max_samples_per_keyword: 1000  # Increased from 600
+    max_files_per_repo: 1000        # Increased from 600
 
   malwarebazaar:
     enabled: true
@@ -135,6 +176,14 @@ data_sources:
       - deepcode-ai/Malware-Prediction
       - PurCL/malware-top-100-labels
       - PacificSun/microsoft_malware
+
+  pypi:
+    enabled: true
+    timeout: 30
+    max_retries: 3
+    top_packages: 1000         # Number of top PyPI packages to fetch
+    max_files_per_package: 50  # Max Python files per package
+    max_samples: 5000          # Maximum total samples to collect
 
 # ============================================================================
 # DATABASE & VECTOR STORE CONFIGURATION
@@ -191,15 +240,16 @@ validation:
   max_length: 100000
   # Added to fix Specificity issues
   deduplicate: true
-  dedup_threshold: 0.85
+  dedup_threshold: 0.92  # Increased from 0.85 for less aggressive deduplication
   filter_test_leakage: true
+  allow_python2: true     # NEW: Accept Python 2 syntax for historical malware
 
 augmentation:
   enabled: true
-  variants_per_sample: 2
+  variants_per_sample: 3  # Increased from 2 for more malware variants
   techniques: ["base64", "hex", "rename_vars", "split_strings"]
 
-  balance_dataset: true
+  balance_dataset: false  # DISABLED: Using weighted loss instead to preserve all data
   target_balance_ratio: 1.0
   balance_method: "hybrid"  # Improved over simple oversampling
   augment_after_split: true # Crucial: prevents data leakage into test set
@@ -210,6 +260,15 @@ augmentation:
 training:
   model_id: "bigcode/starcoder2-3b"
   output_dir: ${MODEL_OUTPUT_DIR:-/workspace/models/scriptguard-model}
+
+  # Preprocessing - increased from 4096 to ~16K to utilize StarCoder2's 4096 token context
+  # (4096 tokens ≈ 14-16K chars for code, using safety margin of 0.95)
+  preprocess_max_chars: 16000
+  truncation_strategy: "smart"  # Options: "simple" (cut at max_chars) or "smart" (preserve critical sections)
+
+  # Class weighting for imbalanced datasets (replaces undersampling)
+  use_class_weights: true
+  class_weight_method: "sqrt_inverse"  # Options: "inverse_frequency" or "sqrt_inverse" (gentler)
 
   device: cuda
   gradient_checkpointing: true

@@ -4,6 +4,7 @@ from datasets import Dataset
 from scriptguard.utils.logger import logger
 from scriptguard.utils.prompts import format_training_prompt
 from scriptguard.materializers.dataset_materializer import HuggingFaceDatasetMaterializer
+from scriptguard.preprocessing.smart_truncator import smart_truncate, simple_truncate
 
 @step(output_materializers=HuggingFaceDatasetMaterializer)
 def preprocess_data(
@@ -24,6 +25,7 @@ def preprocess_data(
     # Avoid creating extremely long single examples that dominate batches/memory.
     # Uses tokenizer_max_length as a reasonable proxy; can be overridden.
     max_chars = training_cfg.get("preprocess_max_chars", training_cfg.get("tokenizer_max_length", 512) * 8)
+    truncation_strategy = training_cfg.get("truncation_strategy", "simple")  # "simple" or "smart"
 
     # Log label distribution BEFORE preprocessing
     label_counts = {}
@@ -83,7 +85,10 @@ def preprocess_data(
             continue
 
         if isinstance(max_chars, int) and max_chars > 0 and len(content) > max_chars:
-            content = content[:max_chars]
+            if truncation_strategy == "smart":
+                content = smart_truncate(content, max_chars)
+            else:
+                content = simple_truncate(content, max_chars)
             truncated += 1
 
         # Use centralized prompt formatting

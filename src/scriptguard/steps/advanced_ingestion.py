@@ -17,6 +17,7 @@ from ..data_sources import (
     TheZooDataSource
 )
 from ..data_sources.additional_hf_datasets import AdditionalHFDatasets
+from ..data_sources.pypi_packages import PyPIDataSource
 from ..database import DatasetManager, deduplicate_samples
 from ..monitoring import DatasetStatistics
 
@@ -261,6 +262,28 @@ def advanced_data_ingestion(config: dict) -> List[Dict]:
 
         except Exception as e:
             logger.error(f"Additional HF datasets failed: {e}")
+
+    # PyPI Packages Data Source
+    if config.get("data_sources", {}).get("pypi", {}).get("enabled", False):
+        logger.info("Fetching benign data from PyPI packages...")
+        pypi_config = config["data_sources"]["pypi"]
+
+        try:
+            pypi_source = PyPIDataSource(
+                timeout=pypi_config.get("timeout", 30),
+                max_retries=pypi_config.get("max_retries", 3)
+            )
+
+            benign_samples = pypi_source.fetch_samples(
+                top_n=pypi_config.get("top_packages", 1000),
+                max_files_per_package=pypi_config.get("max_files_per_package", 50),
+                max_total_samples=pypi_config.get("max_samples", 5000)
+            )
+            all_samples.extend(benign_samples)
+            logger.info(f"Fetched {len(benign_samples)} benign samples from PyPI")
+
+        except Exception as e:
+            logger.error(f"PyPI data source failed: {e}")
 
     logger.info(f"Total samples collected: {len(all_samples)}")
 

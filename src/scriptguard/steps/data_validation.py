@@ -5,21 +5,25 @@ Validates code syntax, filters invalid samples, and performs quality checks.
 
 import ast
 import warnings
+import re
 from scriptguard.utils.logger import logger
 from scriptguard.schemas import CodeSample, validate_data_batch, ValidatedCodeSample
 from typing import Dict, List
 from zenml import step
 
-def validate_python_syntax(code: str) -> bool:
+def validate_python_syntax(code: str, allow_python2: bool = True) -> bool:
     """
     Validate Python code syntax using AST parsing.
+    Supports both Python 3 and optionally Python 2 syntax patterns.
 
     Args:
         code: Python code string
+        allow_python2: If True, accept Python 2 syntax patterns
 
     Returns:
         True if valid syntax, False otherwise
     """
+    # First, try Python 3 syntax validation
     try:
         # Suppress SyntaxWarning for invalid escape sequences in analyzed code
         with warnings.catch_warnings():
@@ -27,6 +31,23 @@ def validate_python_syntax(code: str) -> bool:
             ast.parse(code)
         return True
     except SyntaxError:
+        # If Python 3 fails and Python 2 support is enabled, check for Python 2 patterns
+        if not allow_python2:
+            return False
+
+        # Detect common Python 2 syntax patterns
+        python2_patterns = [
+            re.compile(r'\bprint\s+[^(]'),  # print without parentheses
+            re.compile(r'except\s+\w+\s*,\s*\w+:'),  # except E, e:
+            re.compile(r'<>'),  # != operator in Python 2
+            re.compile(r'\bexec\s+'),  # exec statement (not function)
+        ]
+
+        for pattern in python2_patterns:
+            if pattern.search(code):
+                logger.debug("Python 2 syntax detected - accepting sample")
+                return True
+
         return False
     except Exception:
         return False
@@ -205,7 +226,11 @@ def validate_samples(
 
         # Validate syntax (skip validation for malicious samples - they're often obfuscated)
         if validate_syntax:
-            if not validate_python_syntax(content):
+            # Get allow_python2 from config (default: True for historical malware)
+            validation_config = config.get("validation", {}) if config else {}
+            allow_python2 = validation_config.get("allow_python2", True)
+
+            if not validate_python_syntax(content, allow_python2=allow_python2):
                 stats["invalid_syntax"] += 1
 
                 # Allow malicious samples with syntax errors (obfuscation is common)
