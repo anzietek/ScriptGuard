@@ -238,11 +238,18 @@ validation:
   skip_syntax_errors: true
   min_length: 50
   max_length: 100000
-  # Added to fix Specificity issues
+
+  # Deduplication settings
   deduplicate: true
   dedup_threshold: 0.92  # Increased from 0.85 for less aggressive deduplication
+
+  # Two-stage deduplication config (prevents silent crashes at scale)
+  dedup_exact_first: true      # Fast hash-based pre-filter (removes ~90% duplicates)
+  dedup_batch_size: 1000       # Batch size for fuzzy matching (controls memory)
+  dedup_max_memory_mb: 500     # Memory limit before GC trigger
+
   filter_test_leakage: true
-  allow_python2: true     # NEW: Accept Python 2 syntax for historical malware
+  allow_python2: true     # Accept Python 2 syntax for historical malware
 
 augmentation:
   enabled: true

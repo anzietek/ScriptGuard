@@ -270,10 +270,26 @@ def validate_samples(
     validation_config = config.get("validation", {}) if config else {}
 
     if validation_config.get("deduplicate", True):
-        from scriptguard.database.deduplication import deduplicate_with_threshold
+        from scriptguard.database.deduplication import deduplicate_samples
+
         threshold = validation_config.get("dedup_threshold", 0.85)
-        logger.info(f"Applying deduplication with threshold={threshold}")
-        valid_samples = deduplicate_with_threshold(valid_samples, threshold)
+        enable_exact = validation_config.get("dedup_exact_first", True)
+        batch_size = validation_config.get("dedup_batch_size", 1000)
+        max_memory_mb = validation_config.get("dedup_max_memory_mb", 500)
+
+        logger.info(
+            f"Applying two-stage deduplication "
+            f"(exact={enable_exact}, threshold={threshold}, batch_size={batch_size})"
+        )
+
+        valid_samples = deduplicate_samples(
+            samples=valid_samples,
+            threshold=threshold,
+            enable_exact=enable_exact,
+            enable_fuzzy=True,
+            batch_size=batch_size,
+            max_memory_mb=max_memory_mb
+        )
 
     return valid_samples
 

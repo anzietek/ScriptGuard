@@ -45,6 +45,7 @@ loguru>=0.7.0
 # Utilities
 py7zr>=1.1.0
 pyzipper>=0.3.6
+psutil>=5.9.0  # Memory monitoring for deduplication
 
 # Testing
 pytest>=9.0.2
