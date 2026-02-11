@@ -21,8 +21,8 @@ def load_raw_config(config_path: str = "config.yaml") -> Dict[str, Any]:
     """
     if not os.path.exists(config_path):
         raise FileNotFoundError(f"Configuration file not found: {config_path}")
-        
-    with open(config_path, 'r') as f:
+
+    with open(config_path, 'r', encoding='utf-8') as f:
         config = yaml.safe_load(f)
 
     def convert_type(value: str):

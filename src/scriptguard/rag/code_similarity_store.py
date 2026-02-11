@@ -220,7 +220,7 @@ class CodeSimilarityStore:
         """
         try:
             if os.path.exists(config_path):
-                with open(config_path, 'r') as f:
+                with open(config_path, 'r', encoding='utf-8') as f:
                     config = yaml.safe_load(f)
 
                 def substitute_env_vars(obj):

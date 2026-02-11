@@ -161,7 +161,7 @@ def load_config(config_path: str = "config.yaml") -> dict:
 
     Supports syntax: ${ENV_VAR:-default_value} or ${ENV_VAR}
     """
-    with open(config_path, 'r') as f:
+    with open(config_path, 'r', encoding='utf-8') as f:
         config = yaml.safe_load(f)
 
     def convert_type(value: str):
