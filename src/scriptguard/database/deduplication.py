@@ -202,13 +202,103 @@ def deduplicate_with_threshold(
 
     return unique_samples
 
+def deduplicate_with_minhash_lsh(
+    samples: List[Dict],
+    threshold: float = 0.85,
+    num_perm: int = 128
+) -> List[Dict]:
+    """
+    Remove near-duplicate samples using MinHash LSH.
+    Fast O(n) algorithm for large-scale deduplication.
+
+    Args:
+        samples: List of sample dictionaries
+        threshold: Jaccard similarity threshold (0.0-1.0)
+        num_perm: Number of permutations (higher = more accurate, slower)
+                  128 = 95% accuracy, 256 = 98% accuracy
+
+    Returns:
+        Deduplicated samples
+    """
+    try:
+        from datasketch import MinHash, MinHashLSH
+    except ImportError:
+        logger.warning(
+            "datasketch not installed. Falling back to exact deduplication. "
+            "Install with: pip install datasketch>=1.6.0"
+        )
+        return deduplicate_exact(samples)
+
+    if not samples:
+        return samples
+
+    logger.info(
+        f"Starting MinHash LSH deduplication with threshold={threshold}, "
+        f"num_perm={num_perm}"
+    )
+
+    # Create LSH index
+    lsh = MinHashLSH(threshold=threshold, num_perm=num_perm)
+
+    # Track unique samples and their MinHash signatures
+    unique_samples = []
+    duplicates_removed = 0
+
+    for i, sample in enumerate(samples):
+        content = sample.get("content", "")
+        if not content:
+            continue
+
+        # Create MinHash signature for this sample
+        m = MinHash(num_perm=num_perm)
+        tokens = content.split()
+
+        if not tokens:
+            continue
+
+        for token in tokens:
+            m.update(token.encode('utf-8'))
+
+        # Query LSH index for similar samples
+        similar_indices = lsh.query(m)
+
+        if similar_indices:
+            # Found similar sample(s) - this is a duplicate
+            duplicates_removed += 1
+            logger.debug(
+                f"Sample {i} is similar to {len(similar_indices)} existing samples"
+            )
+        else:
+            # No similar samples found - this is unique
+            sample_id = f"sample_{len(unique_samples)}"
+            lsh.insert(sample_id, m)
+
+            # Add content hash for compatibility
+            sample["content_hash"] = compute_hash(content)
+            unique_samples.append(sample)
+
+        # Progress logging
+        if (i + 1) % 1000 == 0:
+            logger.info(
+                f"Processed {i + 1}/{len(samples)} samples "
+                f"({len(unique_samples)} unique, {duplicates_removed} duplicates)"
+            )
+
+    logger.info(
+        f"MinHash LSH deduplication: {len(samples)} -> {len(unique_samples)} samples "
+        f"({duplicates_removed} duplicates removed, threshold={threshold})"
+    )
+
+    return unique_samples
+
 def deduplicate_samples(
     samples: List[Dict],
     threshold: float = 0.85,
     enable_exact: bool = True,
     enable_fuzzy: bool = True,
     batch_size: int = 1000,
-    max_memory_mb: int = 500
+    max_memory_mb: int = 500,
+    method: str = "auto"
 ) -> List[Dict]:
     """
     Two-stage deduplication: exact hash + fuzzy matching.
@@ -218,26 +308,55 @@ def deduplicate_samples(
         threshold: Fuzzy similarity threshold
         enable_exact: Use fast exact deduplication first
         enable_fuzzy: Use fuzzy matching after exact
-        batch_size: Batch size for fuzzy matching
-        max_memory_mb: Memory limit for fuzzy matching
+        batch_size: Batch size for fuzzy matching (Jaccard only)
+        max_memory_mb: Memory limit (Jaccard only)
+        method: Fuzzy deduplication method:
+            - "auto": Use MinHash LSH if n >= 1000, else Jaccard
+            - "minhash_lsh": Use MinHash LSH (fast, ~95% accuracy)
+            - "jaccard": Use batched Jaccard (slow, 100% accuracy)
+            - "exact": Only exact hash dedup (fastest, misses near-duplicates)
 
     Returns:
         Deduplicated samples
     """
     logger.info(f"Starting two-stage deduplication on {len(samples)} samples...")
 
-    # Stage 1: Exact deduplication (fast, removes ~90% duplicates)
+    # Stage 1: Exact deduplication (fast, removes exact duplicates)
+    initial_count = len(samples)
     if enable_exact:
         samples = deduplicate_exact(samples)
+        exact_removed = initial_count - len(samples)
+        logger.info(f"Exact dedup removed {exact_removed} duplicates")
 
-    # Stage 2: Fuzzy deduplication (slower, catches near-duplicates)
+    # Stage 2: Fuzzy deduplication (catches near-duplicates)
     if enable_fuzzy and len(samples) > 0:
-        samples = deduplicate_with_threshold(
-            samples,
-            threshold=threshold,
-            batch_size=batch_size,
-            max_memory_mb=max_memory_mb
-        )
+        # Auto-select method based on dataset size
+        if method == "auto":
+            if len(samples) >= 1000:
+                method = "minhash_lsh"
+                logger.info("Auto-selected MinHash LSH (dataset >= 1000 samples)")
+            else:
+                method = "jaccard"
+                logger.info("Auto-selected Jaccard (dataset < 1000 samples)")
+
+        # Apply fuzzy deduplication
+        if method == "minhash_lsh":
+            samples = deduplicate_with_minhash_lsh(
+                samples,
+                threshold=threshold,
+                num_perm=128
+            )
+        elif method == "jaccard":
+            samples = deduplicate_with_threshold(
+                samples,
+                threshold=threshold,
+                batch_size=batch_size,
+                max_memory_mb=max_memory_mb
+            )
+        elif method == "exact":
+            logger.info("Skipping fuzzy deduplication (method='exact')")
+        else:
+            logger.warning(f"Unknown method '{method}', skipping fuzzy deduplication")
 
     logger.info(f"✓ Final deduplicated dataset: {len(samples)} samples")
     return samples

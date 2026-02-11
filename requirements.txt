@@ -46,6 +46,7 @@ loguru>=0.7.0
 py7zr>=1.1.0
 pyzipper>=0.3.6
 psutil>=5.9.0  # Memory monitoring for deduplication
+datasketch>=1.6.0  # MinHash LSH for fast near-duplicate detection
 
 # Testing
 pytest>=9.0.2

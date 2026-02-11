@@ -274,12 +274,15 @@ def validate_samples(
 
         threshold = validation_config.get("dedup_threshold", 0.85)
         enable_exact = validation_config.get("dedup_exact_first", True)
+        method = validation_config.get("dedup_method", "auto")
+
+        # Jaccard fallback settings
         batch_size = validation_config.get("dedup_batch_size", 1000)
         max_memory_mb = validation_config.get("dedup_max_memory_mb", 500)
 
         logger.info(
             f"Applying two-stage deduplication "
-            f"(exact={enable_exact}, threshold={threshold}, batch_size={batch_size})"
+            f"(method={method}, threshold={threshold})"
         )
 
         valid_samples = deduplicate_samples(
@@ -287,6 +290,7 @@ def validate_samples(
             threshold=threshold,
             enable_exact=enable_exact,
             enable_fuzzy=True,
+            method=method,
             batch_size=batch_size,
             max_memory_mb=max_memory_mb
         )

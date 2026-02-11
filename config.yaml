@@ -243,10 +243,20 @@ validation:
   deduplicate: true
   dedup_threshold: 0.92  # Increased from 0.85 for less aggressive deduplication
 
-  # Two-stage deduplication config (prevents silent crashes at scale)
-  dedup_exact_first: true      # Fast hash-based pre-filter (removes ~90% duplicates)
-  dedup_batch_size: 1000       # Batch size for fuzzy matching (controls memory)
-  dedup_max_memory_mb: 500     # Memory limit before GC trigger
+  # Deduplication method selection
+  dedup_method: "auto"          # Options: "auto", "minhash_lsh", "jaccard", "exact"
+                                # auto = MinHash LSH if n >= 1000, else Jaccard
+
+  # Two-stage deduplication config
+  dedup_exact_first: true       # Fast hash-based pre-filter (removes ~90% duplicates)
+
+  # MinHash LSH settings (only used if method = "minhash_lsh" or "auto")
+  dedup_minhash_num_perm: 128   # Higher = more accurate (128, 256, 512)
+                                # 128 = 95% accuracy, 256 = 98%, 512 = 99%
+
+  # Jaccard fallback settings (only used if method = "jaccard")
+  dedup_batch_size: 1000        # Batch size for fuzzy matching (controls memory)
+  dedup_max_memory_mb: 500      # Memory limit before GC trigger
 
   filter_test_leakage: true
   allow_python2: true     # Accept Python 2 syntax for historical malware
