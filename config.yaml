@@ -60,7 +60,7 @@ data_sources:
       - "paramiko/paramiko"
       - "pyinstaller/pyinstaller"
       - "pallets/click"               # CLI tools
-      - "requests/requests-oauthlib"  # OAuth (używa network calls)
+      - "requests/requests-oauthlib"  # OAuth (uses network calls)
       - "psf/black"                   # Code formatter
       - "pytest-dev/pytest"           # Testing framework
       - "celery/celery"               # Task queue (network operations)
