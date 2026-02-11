@@ -209,6 +209,12 @@ qdrant:
 # ============================================================================
 code_embedding:
   model: "microsoft/unixcoder-base"
+
+  # Chunking strategy selection
+  chunking_strategy: "hierarchical"  # Options: "hierarchical", "sliding_window"
+                                      # hierarchical = AST-based function extraction (recommended)
+                                      # sliding_window = token-based fixed-size chunks
+
   fewshot:
     enabled: true
     k: 3
