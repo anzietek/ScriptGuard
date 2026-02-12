@@ -83,6 +83,10 @@ if env_dev:
     load_dotenv(env_dev, override=True)
     logger.info(f"Loaded .env.dev from {env_dev}")
 
+# Set ZenML active project to 'default'
+os.environ["ZENML_ACTIVE_PROJECT_NAME"] = "default"
+os.environ["ZENML_ACTIVE_WORKSPACE_NAME"] = "default"
+
 # Disable transformers lazy loading (fixes Python 3.13 Ctrl+C issues)
 os.environ["TRANSFORMERS_NO_ADVISORY_WARNINGS"] = "1"
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
