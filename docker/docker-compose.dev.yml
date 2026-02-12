@@ -58,7 +58,7 @@ services:
       - "8237:8080"  # Dashboard UI (internal port 8080)
     environment:
       - ZENML_STORE_URL=sqlite:////zenml/.zenconfig/local_stores/default_zen_store/zenml.db
-      - ZENML_DEFAULT_PROJECT_NAME=scriptguard
+      - ZENML_DEFAULT_PROJECT_NAME=default
     volumes:
       - zenml_dev_data:/zenml/.zenconfig
     healthcheck:
