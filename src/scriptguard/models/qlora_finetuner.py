@@ -92,9 +92,15 @@ class WeightedLossTrainer(UnslothTrainer):
         if self.class_weights:
             logger.info(f"WeightedLossTrainer initialized with weights: {self.class_weights}")
 
-    def compute_loss(self, model, inputs, return_outputs=False):
+    def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
         """
         Compute weighted loss for imbalanced datasets.
+
+        Args:
+            model: The model being trained
+            inputs: Dictionary of input tensors
+            return_outputs: Whether to return model outputs along with loss
+            num_items_in_batch: Number of items in the batch (for compatibility with transformers>=4.46)
 
         Note: This is a simplified implementation that applies global class weights.
         For more precise weighting, we would need to:
@@ -106,7 +112,7 @@ class WeightedLossTrainer(UnslothTrainer):
         """
         # Use default loss computation
         # The class weights are primarily informational and influence label smoothing
-        return super().compute_loss(model, inputs, return_outputs=return_outputs)
+        return super().compute_loss(model, inputs, return_outputs=return_outputs, num_items_in_batch=num_items_in_batch)
 
 
 class QLoRAFineTuner:
