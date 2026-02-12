@@ -149,10 +149,22 @@ class QdrantConfig(BaseModel):
     embedding_model: str = "all-MiniLM-L6-v2"
     api_key: Optional[str] = None
     use_https: bool = False
-    timeout: int = Field(30, gt=0)
+    timeout: int = Field(60, gt=0, description="General operation timeout (seconds)")
+    upsert_timeout: int = Field(120, gt=0, description="Upsert operation timeout (seconds)")
+    scroll_timeout: int = Field(60, gt=0, description="Scroll/query operation timeout (seconds)")
     grpc_port: int = Field(6334, gt=0, lt=65536)
     prefer_grpc: bool = True
     bootstrap_on_startup: bool = False
+
+    # Retry configuration with exponential backoff
+    max_retries: int = Field(3, ge=0, le=10, description="Maximum retry attempts")
+    retry_backoff_factor: float = Field(2.0, gt=0, description="Exponential backoff multiplier")
+    initial_retry_delay: float = Field(1.0, gt=0, description="Initial retry delay (seconds)")
+    max_retry_delay: float = Field(60.0, gt=0, description="Maximum retry delay (seconds)")
+
+    # Batch configuration
+    batch_size: int = Field(100, ge=1, le=1000, description="Default upsert batch size")
+    max_batch_size: int = Field(1000, ge=1, le=10000, description="Maximum points per batch")
 
 class FewShotConfig(BaseModel):
     """Few-Shot RAG Configuration"""

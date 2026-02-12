@@ -44,7 +44,11 @@ class CodeSimilarityStore:
         chunk_overlap: int = 64,
         api_key: Optional[str] = None,
         use_https: bool = False,
-        config_path: Optional[str] = None
+        config_path: Optional[str] = None,
+        timeout: int = 60,
+        upsert_timeout: int = 120,
+        max_retries: int = 3,
+        retry_backoff: float = 2.0
     ):
         """
         Initialize Code Similarity Store with enhanced embedding, chunking, and reranking.
@@ -65,12 +69,21 @@ class CodeSimilarityStore:
             api_key: Optional API key for Qdrant Cloud
             use_https: Use HTTPS connection
             config_path: Path to configuration file
+            timeout: Timeout for Qdrant operations (seconds)
+            upsert_timeout: Timeout for upsert operations (seconds)
+            max_retries: Maximum number of retry attempts
+            retry_backoff: Exponential backoff factor for retries
         """
         self.host = host or os.getenv("QDRANT_HOST", "localhost")
         self.port = port or int(os.getenv("QDRANT_PORT", "6333"))
         self.collection_name = collection_name
         self.enable_chunking = enable_chunking
         self.embedding_model = embedding_model
+
+        # Store retry configuration
+        self.max_retries = max_retries
+        self.retry_backoff = retry_backoff
+        self.upsert_timeout = upsert_timeout
 
         # Get API key - prioritize parameter, fallback to env var, normalize empty strings to None
         self._api_key = api_key if api_key else os.getenv("QDRANT_API_KEY")
@@ -82,6 +95,8 @@ class CodeSimilarityStore:
         logger.info(f"  Port: {self.port}")
         logger.info(f"  Collection: {self.collection_name}")
         logger.info(f"  Chunking: {'enabled' if enable_chunking else 'disabled'}")
+        logger.info(f"  Timeout: {timeout}s (Upsert: {upsert_timeout}s)")
+        logger.info(f"  Max Retries: {max_retries}")
         if self._api_key:
             logger.info(f"  API Key: ***{self._api_key[-8:]}")
             logger.info("  Auth: Enabled")
@@ -112,14 +127,19 @@ class CodeSimilarityStore:
             logger.info(f"    - Fallback threshold: {self.fallback_threshold}")
             logger.info(f"    - Min per label: {self.min_per_label}")
 
-        # Initialize Qdrant client
+        # Initialize Qdrant client with timeout
         if self._api_key:
             self.client = QdrantClient(
                 url=f"{'https' if use_https else 'http'}://{self.host}:{self.port}",
-                api_key=self._api_key
+                api_key=self._api_key,
+                timeout=timeout
             )
         else:
-            self.client = QdrantClient(host=self.host, port=self.port)
+            self.client = QdrantClient(host=self.host, port=self.port, timeout=timeout)
+
+        # Initialize retry statistics tracking
+        from scriptguard.utils.retry_utils import RetryStats
+        self.retry_stats = RetryStats()
 
         # Initialize embedding service
         self.embedding_service = EmbeddingService(
@@ -364,6 +384,88 @@ class CodeSimilarityStore:
             logger.error(f"Failed to encode code: {e}")
             raise
 
+    def _encode_batch(self, batch_texts: List[str], batch_idx: int):
+        """
+        Encode batch with retry logic (handles transient GPU OOM).
+
+        Args:
+            batch_texts: List of text strings to encode
+            batch_idx: Batch index for logging
+
+        Returns:
+            Embeddings array
+
+        Raises:
+            Exception: If encoding fails after all retries
+        """
+        from scriptguard.utils.retry_utils import retry_with_backoff
+
+        @retry_with_backoff(
+            max_retries=2,  # Fewer retries for embedding (GPU may be OOM)
+            backoff_factor=1.5,
+            exceptions=(Exception,)
+        )
+        def _do_encode():
+            return self.embedding_service.encode(
+                batch_texts,
+                batch_size=len(batch_texts),
+                show_progress=False
+            )
+
+        try:
+            return _do_encode()
+        except Exception as e:
+            logger.error(f"Failed to encode batch {batch_idx} after retries: {e}")
+            raise
+
+    def _upsert_batch_with_retry(
+        self,
+        batch_points: List,
+        batch_num: int,
+        total_batches: int
+    ) -> bool:
+        """
+        Upsert a single batch with retry logic.
+
+        Args:
+            batch_points: List of PointStruct objects to upsert
+            batch_num: Current batch number (1-indexed)
+            total_batches: Total number of batches
+
+        Returns:
+            True if successful, False if failed after all retries
+        """
+        from scriptguard.utils.retry_utils import retry_with_backoff
+
+        @retry_with_backoff(
+            max_retries=self.max_retries,
+            backoff_factor=self.retry_backoff,
+            exceptions=(Exception,),
+            on_retry=lambda e, attempt: logger.warning(
+                f"Batch {batch_num}/{total_batches} retry {attempt}/{self.max_retries}: {e}"
+            )
+        )
+        def _do_upsert():
+            self.client.upsert(
+                collection_name=self.collection_name,
+                points=batch_points,
+                wait=True  # Wait for completion
+            )
+            return True
+
+        try:
+            _do_upsert()
+            logger.info(f"✓ Batch {batch_num}/{total_batches}: {len(batch_points)} points")
+            self.retry_stats.record_attempt("upsert_batch", True, 0)
+            return True
+
+        except Exception as e:
+            logger.error(
+                f"❌ Batch {batch_num}/{total_batches} FAILED after {self.max_retries} retries: {e}"
+            )
+            self.retry_stats.record_attempt("upsert_batch", False, self.max_retries)
+            return False
+
     def upsert_code_samples(self, samples: List[Dict[str, Any]], batch_size: int = 32):
         """
         Upsert code samples to Qdrant with BATCH EMBEDDING for 3x+ speedup.
@@ -542,16 +644,12 @@ class CodeSimilarityStore:
             if not batch_texts:
                 continue
 
-            # BATCH ENCODE - All chunks in this batch computed together (GPU efficient)
+            # BATCH ENCODE with retry - All chunks in this batch computed together (GPU efficient)
             try:
-                embeddings = self.embedding_service.encode(
-                    batch_texts,
-                    batch_size=len(batch_texts),  # Process all at once
-                    show_progress=False
-                )
+                embeddings = self._encode_batch(batch_texts, batch_idx // batch_size + 1)
             except Exception as e:
-                logger.error(f"Failed to encode batch {batch_idx // batch_size + 1}: {e}")
-                continue
+                logger.error(f"Failed to encode batch {batch_idx // batch_size + 1} after retries: {e}")
+                continue  # Skip batch but log it
 
             # Create Qdrant points for this batch
             for chunk, embedding in zip(valid_chunks, embeddings):
@@ -599,21 +697,46 @@ class CodeSimilarityStore:
 
         upload_batch_size = 100  # Qdrant upload batch size
         total_upload_batches = (len(all_points) + upload_batch_size - 1) // upload_batch_size
+        failed_batches = []
+
+        logger.info(f"Uploading {len(all_points)} points in {total_upload_batches} batches with retry support")
 
         for i in range(0, len(all_points), upload_batch_size):
             batch_points = all_points[i:i + upload_batch_size]
+            batch_num = i // upload_batch_size + 1
 
-            try:
-                self.client.upsert(
-                    collection_name=self.collection_name,
-                    points=batch_points
-                )
-                logger.info(
-                    f"✓ Upload batch {i // upload_batch_size + 1}/{total_upload_batches}: "
-                    f"{len(batch_points)} points"
-                )
-            except Exception as e:
-                logger.error(f"Failed to upsert batch {i // upload_batch_size + 1}: {e}")
+            success = self._upsert_batch_with_retry(batch_points, batch_num, total_upload_batches)
+
+            if not success:
+                failed_batches.append((batch_num, batch_points))
+
+        # Report results
+        if failed_batches:
+            logger.error(
+                f"⚠️ {len(failed_batches)}/{total_upload_batches} batches failed permanently. "
+                f"Lost {sum(len(b[1]) for b in failed_batches)} points."
+            )
+            logger.error(f"Failed batch numbers: {[b[0] for b in failed_batches]}")
+        else:
+            logger.info(f"✓ All {total_upload_batches} batches uploaded successfully")
+
+        # Print retry statistics
+        stats = self.retry_stats.get_summary()
+        logger.info("=" * 60)
+        logger.info("VECTORIZATION RETRY STATISTICS")
+        logger.info("=" * 60)
+        logger.info(f"Total Attempts: {stats['total_attempts']}")
+        logger.info(f"Total Retries: {stats['total_retries']}")
+        logger.info(f"Total Failures: {stats['total_failures']}")
+        logger.info(f"Success Rate: {stats['success_rate']}")
+        logger.info("=" * 60)
+
+        # WARNING: Alert if >5% failure rate
+        if stats['total_failures'] > stats['total_attempts'] * 0.05:
+            logger.warning(
+                f"⚠️ HIGH FAILURE RATE: {stats['total_failures']} / "
+                f"{stats['total_attempts']} batches failed permanently."
+            )
 
         logger.info(f"✓ Code sample synchronization complete: {len(all_points)} points indexed")
 

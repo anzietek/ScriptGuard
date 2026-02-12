@@ -206,6 +206,21 @@ qdrant:
   embedding_model: "all-MiniLM-L6-v2"
   prefer_grpc: true
 
+  # Production timeouts (seconds)
+  timeout: 60                    # General operations timeout
+  upsert_timeout: 120           # Upsert operations timeout (larger batches need more time)
+  scroll_timeout: 60            # Query/scroll operations timeout
+
+  # Retry configuration with exponential backoff
+  max_retries: 3
+  retry_backoff_factor: 2.0
+  initial_retry_delay: 1.0
+  max_retry_delay: 60.0
+
+  # Batch configuration
+  batch_size: 100               # Default upsert batch size
+  max_batch_size: 1000         # Maximum points per batch (prevents OOM)
+
 # ============================================================================
 # CODE EMBEDDING & RAG CONFIGURATION
 # ============================================================================

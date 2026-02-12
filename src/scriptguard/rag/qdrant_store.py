@@ -28,7 +28,10 @@ class QdrantStore:
         collection_name: str = "malware_knowledge",
         embedding_model: str = "all-MiniLM-L6-v2",
         api_key: Optional[str] = None,
-        use_https: bool = False
+        use_https: bool = False,
+        timeout: int = 60,
+        max_retries: int = 3,
+        retry_backoff: float = 2.0
     ):
         """
         Initialize Qdrant RAG store.
@@ -40,11 +43,18 @@ class QdrantStore:
             embedding_model: Sentence transformer model name
             api_key: Optional API key for Qdrant Cloud
             use_https: Use HTTPS connection
+            timeout: Timeout for Qdrant operations (seconds)
+            max_retries: Maximum number of retry attempts
+            retry_backoff: Exponential backoff factor for retries
         """
         self.host = host or os.getenv("QDRANT_HOST", "localhost")
         self.port = port or int(os.getenv("QDRANT_PORT", "6333"))
         self.collection_name = collection_name
         self.embedding_model_name = embedding_model
+
+        # Store retry configuration
+        self.max_retries = max_retries
+        self.retry_backoff = retry_backoff
 
         # Get API key - prioritize parameter, fallback to env var, normalize empty strings to None
         self._api_key = api_key if api_key else os.getenv("QDRANT_API_KEY")
@@ -55,6 +65,8 @@ class QdrantStore:
         logger.info(f"  Host: {self.host}")
         logger.info(f"  Port: {self.port}")
         logger.info(f"  Collection: {self.collection_name}")
+        logger.info(f"  Timeout: {timeout}s")
+        logger.info(f"  Max Retries: {max_retries}")
         if self._api_key:
             logger.info(f"  API Key: ***{self._api_key[-8:]}")
             logger.info("  Auth: Enabled")
@@ -62,14 +74,19 @@ class QdrantStore:
             logger.warning("  Auth: Disabled (no API key)")
             logger.warning("  Set QDRANT_API_KEY in .env if authentication is required")
 
-        # Initialize client
+        # Initialize client with timeout
         if self._api_key:
             self.client = QdrantClient(
                 url=f"{'https' if use_https else 'http'}://{self.host}:{self.port}",
-                api_key=self._api_key
+                api_key=self._api_key,
+                timeout=timeout
             )
         else:
-            self.client = QdrantClient(host=self.host, port=self.port)
+            self.client = QdrantClient(host=self.host, port=self.port, timeout=timeout)
+
+        # Initialize retry statistics tracking
+        from scriptguard.utils.retry_utils import RetryStats
+        self.retry_stats = RetryStats()
 
         # Initialize embedding model
         logger.info(f"Loading embedding model: {self.embedding_model_name}")
@@ -139,9 +156,9 @@ class QdrantStore:
         """Generate deterministic ID from content."""
         return hashlib.md5(content.encode()).hexdigest()
 
-    def upsert_vulnerabilities(self, vulnerabilities: List[Dict[str, Any]]):
+    def upsert_vulnerabilities(self, vulnerabilities: List[Dict[str, Any]], batch_size: int = 100):
         """
-        Upsert vulnerability data.
+        Upsert vulnerability data with retry logic and batching.
 
         Args:
             vulnerabilities: List of vulnerability dictionaries with:
@@ -151,9 +168,14 @@ class QdrantStore:
                 - type: str (optional)
                 - pattern: str (optional)
                 - metadata: dict (optional)
+            batch_size: Number of points to upsert per batch
         """
         if not vulnerabilities:
             return
+
+        from scriptguard.utils.retry_utils import retry_with_backoff
+
+        logger.info(f"Upserting {len(vulnerabilities)} vulnerabilities with retry support")
 
         points = []
         for vuln in vulnerabilities:
@@ -186,16 +208,51 @@ class QdrantStore:
                 )
             )
 
-        # Batch upsert
-        try:
-            self.client.upsert(
-                collection_name=self.collection_name,
-                points=points
+        # Batch upsert with retry logic
+        total_batches = (len(points) + batch_size - 1) // batch_size
+        failed_batches = []
+
+        for i in range(0, len(points), batch_size):
+            batch = points[i:i + batch_size]
+            batch_num = i // batch_size + 1
+
+            logger.info(f"Processing batch {batch_num}/{total_batches} ({len(batch)} vulnerabilities)")
+
+            @retry_with_backoff(
+                max_retries=self.max_retries,
+                backoff_factor=self.retry_backoff,
+                exceptions=(Exception,),
+                on_retry=lambda e, attempt: logger.warning(
+                    f"Batch {batch_num}/{total_batches} retry {attempt}/{self.max_retries}: {e}"
+                )
             )
-            logger.info(f"Upserted {len(points)} vulnerability records")
-        except Exception as e:
-            logger.error(f"Failed to upsert vulnerabilities: {e}")
-            raise
+            def _upsert_batch():
+                self.client.upsert(
+                    collection_name=self.collection_name,
+                    points=batch
+                )
+
+            try:
+                _upsert_batch()
+                logger.info(f"✓ Batch {batch_num}/{total_batches} uploaded successfully")
+                self.retry_stats.record_attempt("upsert_vulnerabilities", True, 0)
+            except Exception as e:
+                logger.error(f"❌ Batch {batch_num}/{total_batches} FAILED after {self.max_retries} retries: {e}")
+                self.retry_stats.record_attempt("upsert_vulnerabilities", False, self.max_retries)
+                failed_batches.append(batch_num)
+
+        # Report results
+        if failed_batches:
+            logger.error(
+                f"⚠️ {len(failed_batches)}/{total_batches} batches failed permanently. "
+                f"Failed batch numbers: {failed_batches}"
+            )
+        else:
+            logger.info(f"✓ All {total_batches} batches uploaded successfully")
+
+        # Log retry statistics
+        stats = self.retry_stats.get_summary()
+        logger.info(f"Retry Statistics: Success Rate: {stats['success_rate']}, Total Retries: {stats['total_retries']}")
 
     def upsert_malware_patterns(self, patterns: List[Dict[str, Any]]):
         """

@@ -12,6 +12,9 @@ from psycopg2.extras import execute_values, Json
 from .db_schema import get_connection, return_connection, refresh_statistics
 from .deduplication import compute_hash
 
+# Maximum batch size to prevent OOM errors
+MAX_BATCH_SIZE = 10000
+
 def sanitize_for_postgres(text: Optional[str]) -> Optional[str]:
     """
     Sanitize text for PostgreSQL by removing NUL bytes.
@@ -121,6 +124,28 @@ class DatasetManager:
         """
         if not samples:
             return {"added": 0, "duplicates": 0, "total": 0}
+
+        # Validate batch size and split if necessary
+        if len(samples) > MAX_BATCH_SIZE:
+            logger.warning(f"Batch size {len(samples)} > {MAX_BATCH_SIZE}, splitting...")
+
+            chunks = [samples[i:i + MAX_BATCH_SIZE]
+                      for i in range(0, len(samples), MAX_BATCH_SIZE)]
+
+            total_added = 0
+            total_duplicates = 0
+
+            for i, chunk in enumerate(chunks):
+                logger.info(f"Processing chunk {i+1}/{len(chunks)}: {len(chunk)} samples")
+                result = self.add_samples_batch(chunk)
+                total_added += result["added"]
+                total_duplicates += result["duplicates"]
+
+            return {
+                "added": total_added,
+                "duplicates": total_duplicates,
+                "total": len(samples)
+            }
 
         conn = get_connection()
         added = 0
