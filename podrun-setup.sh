@@ -170,6 +170,7 @@ setup_tunnel() {
         -L 5432:127.0.0.1:5432 \
         -L 6333:127.0.0.1:6333 \
         -L 5050:127.0.0.1:5050 \
+        -L 8237:127.0.0.1:8237 \
         $REMOTE_USER@$REMOTE_IP
 
     # Wait for connection
@@ -184,6 +185,7 @@ setup_tunnel() {
         print_success "Tunnel ESTABLISHED."
         echo "   - Postgres: localhost:5432 -> Remote:5432"
         echo "   - Qdrant:   localhost:6333 -> Remote:6333"
+        echo "   - ZenML:    localhost:8237 -> Remote:8237"
     else
         print_error "Failed to establish tunnel. Check your key and try again."
         exit 1
@@ -235,6 +237,33 @@ init_zenml() {
     else
         print_success "ZenML Server is already running."
     fi
+
+    # Set active project to 'default' (Community Edition compatible)
+    print_info "Configuring ZenML project..."
+    uv run python -c "
+from zenml.client import Client
+try:
+    client = Client()
+    current_project = client.active_project.name
+    if current_project != 'default':
+        print(f'  Switching from {current_project} to default project...')
+        # Get default project
+        projects = client.list_projects()
+        default_project = None
+        for p in projects.items:
+            if p.name == 'default':
+                default_project = p
+                break
+        if default_project:
+            client.set_active_project(default_project.id)
+            print('  [OK] Active project: default')
+        else:
+            print('  [WARNING] Default project not found, using current project')
+    else:
+        print('  [OK] Already using default project')
+except Exception as e:
+    print(f'  [WARNING] Could not set project: {e}')
+" 2>/dev/null || print_warning "Could not configure ZenML project (server may still be starting)"
 }
 
 check_services() {
