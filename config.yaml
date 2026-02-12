@@ -272,6 +272,11 @@ augmentation:
   variants_per_sample: 3  # Increased from 2 for more malware variants
   techniques: ["base64", "hex", "rename_vars", "split_strings"]
 
+  # Qdrant-based augmentation (few-shot code samples + CVE patterns)
+  use_qdrant_patterns: true  # Retrieve similar code samples from Qdrant vector store
+  max_qdrant_samples: 1000   # Maximum samples to fetch from Qdrant collections
+  qdrant_score_threshold: 0.45  # Minimum similarity score for retrieved samples
+
   balance_dataset: false  # DISABLED: Using weighted loss + augmentation to preserve all data
   target_balance_ratio: 1.0
   balance_method: "hybrid"  # Improved over simple oversampling
