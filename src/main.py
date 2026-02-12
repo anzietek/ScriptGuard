@@ -315,7 +315,7 @@ def main():
     try:
         run = advanced_training_pipeline.with_options(
             config_path=zenml_config_path  # Load cache settings from env or default
-        )(
+        ).run(
             config=config,
             model_id=model_id
         )
