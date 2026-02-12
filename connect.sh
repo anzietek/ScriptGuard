@@ -16,6 +16,7 @@ echo "Opening local ports:"
 echo -e " \033[32m[Postgres] 127.0.0.1:5432 -> Server:5432\033[0m" # Green
 echo -e " \033[32m[Qdrant]   127.0.0.1:6333 -> Server:6333\033[0m" # Green
 echo -e " \033[32m[PgAdmin]  127.0.0.1:5050 -> Server:5050\033[0m" # Green
+echo -e " \033[32m[ZenML]    127.0.0.1:8237 -> Server:8237\033[0m" # Green
 echo ""
 echo -e "\033[33mWARNING: Do not close this window. Minimize it.\033[0m" # Yellow
 echo ""
@@ -28,7 +29,7 @@ if [ ! -f "$KEY_PATH" ]; then
 fi
 
 # Start SSH with Key
-ssh -i "$KEY_PATH" -N -L 5432:127.0.0.1:5432 -L 6333:127.0.0.1:6333 -L 5050:127.0.0.1:5050 $USER@$SERVER_IP
+ssh -i "$KEY_PATH" -N -L 5432:127.0.0.1:5432 -L 6333:127.0.0.1:6333 -L 5050:127.0.0.1:5050 -L 8237:127.0.0.1:8237 $USER@$SERVER_IP
 
 # Exit message
 echo ""

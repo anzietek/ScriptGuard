@@ -227,9 +227,35 @@ install_dependencies() {
 
 init_zenml() {
     print_info "Initializing ZenML..."
+
+    # Initialize ZenML client configuration (creates .zen directory)
     [ ! -d ".zen" ] && uv run zenml init
 
-    # FIXED: This check now relies on 'lsof' which is guaranteed to be installed
+    # Load ZenML mode from environment (default: local)
+    ZENML_MODE="${ZENML_MODE:-local}"
+    ZENML_URL="${ZENML_SERVER_URL:-http://localhost:8237}"
+
+    case "$ZENML_MODE" in
+        remote)
+            print_info "ZenML Mode: REMOTE (connecting to VPS server)"
+            init_zenml_remote
+            ;;
+        local)
+            print_info "ZenML Mode: LOCAL (starting server on RunPod)"
+            init_zenml_local
+            ;;
+        *)
+            print_error "Invalid ZENML_MODE: $ZENML_MODE (must be 'local' or 'remote')"
+            exit 1
+            ;;
+    esac
+
+    # Configure active project (common for both modes)
+    configure_zenml_project
+}
+
+init_zenml_local() {
+    # Start local ZenML server (current behavior)
     if ! lsof -Pi :8237 -sTCP:LISTEN -t >/dev/null ; then
         nohup uv run zenml up --host 0.0.0.0 --port 8237 > logs/zenml_server.log 2>&1 &
         sleep 5
@@ -237,7 +263,48 @@ init_zenml() {
     else
         print_success "ZenML Server is already running."
     fi
+}
 
+init_zenml_remote() {
+    # Connect to remote ZenML server on VPS
+    print_info "Checking connection to remote ZenML server..."
+
+    MAX_RETRIES=10
+    RETRY_COUNT=0
+
+    while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
+        if curl --max-time 5 -s "${ZENML_URL}/health" > /dev/null 2>&1; then
+            print_success "Remote ZenML server is accessible at ${ZENML_URL}"
+            break
+        else
+            RETRY_COUNT=$((RETRY_COUNT + 1))
+            if [ $RETRY_COUNT -lt $MAX_RETRIES ]; then
+                print_warning "ZenML server not ready, retrying ($RETRY_COUNT/$MAX_RETRIES)..."
+                sleep 3
+            else
+                print_error "Cannot connect to remote ZenML server at ${ZENML_URL}"
+                print_error "Please ensure:"
+                print_error "  1. SSH tunnel is active (check: pgrep -f 'ssh.*$REMOTE_IP')"
+                print_error "  2. ZenML server running on VPS: ssh deployer@$REMOTE_IP 'docker ps | grep zenml'"
+                print_error "  3. Port 8237 is forwarded in tunnel"
+                print_error ""
+                print_warning "Falling back to local mode..."
+                init_zenml_local
+                return
+            fi
+        fi
+    done
+
+    # Connect to remote server
+    print_info "Connecting to remote ZenML server..."
+    uv run zenml connect --url "${ZENML_URL}" --no-verify-ssl || {
+        print_warning "Failed to connect, but will proceed (may auto-connect on first pipeline run)"
+    }
+
+    print_success "ZenML client configured for remote server at ${ZENML_URL}"
+}
+
+configure_zenml_project() {
     # Set active project to 'default' (Community Edition compatible)
     print_info "Configuring ZenML project..."
     uv run python -c "
@@ -247,7 +314,6 @@ try:
     current_project = client.active_project.name
     if current_project != 'default':
         print(f'  Switching from {current_project} to default project...')
-        # Get default project
         projects = client.list_projects()
         default_project = None
         for p in projects.items:
@@ -263,7 +329,7 @@ try:
         print('  [OK] Already using default project')
 except Exception as e:
     print(f'  [WARNING] Could not set project: {e}')
-" 2>/dev/null || print_warning "Could not configure ZenML project (server may still be starting)"
+" 2>/dev/null || print_warning "Could not configure ZenML project (will auto-configure on first run)"
 }
 
 check_services() {

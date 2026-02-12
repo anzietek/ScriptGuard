@@ -94,6 +94,44 @@ services:
           cpus: '0.5'
           memory: 512M
 
+  # --- ZenML Server (ML Pipeline Dashboard) ---
+  zenml:
+    image: zenmldocker/zenml-server:latest
+    container_name: scriptguard-zenml
+    environment:
+      # PostgreSQL backend for production reliability
+      - ZENML_STORE_URL=postgresql://${POSTGRES_USER:-scriptguard}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-scriptguard}
+      - ZENML_DEFAULT_PROJECT_NAME=default
+      - ZENML_SERVER_AUTO_ACTIVATE=true
+      - ZENML_LOGGING_VERBOSITY=INFO
+    ports:
+      # Localhost binding only (access via SSH tunnel)
+      - "127.0.0.1:8237:8080"
+    volumes:
+      - zenml_data:/zenml/.zenconfig
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:8080/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 20s
+    networks:
+      - scriptguard-network
+    restart: unless-stopped
+    profiles:
+      - with-zenml
+    deploy:
+      resources:
+        limits:
+          cpus: '1'
+          memory: 1G
+        reservations:
+          cpus: '0.5'
+          memory: 512M
+
 volumes:
   postgres_data:
     driver: local
@@ -115,6 +153,12 @@ volumes:
       device: ${DATA_PATH:-/var/lib/scriptguard}/qdrant-snapshots
   pgadmin_data:
     driver: local
+  zenml_data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ${DATA_PATH:-/var/lib/scriptguard}/zenml
 
 networks:
   scriptguard-network:
