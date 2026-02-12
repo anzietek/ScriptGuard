@@ -9,6 +9,7 @@ import zipfile
 import requests
 from typing import List, Dict, Optional
 from scriptguard.utils.logger import logger
+from scriptguard.utils.data_quality_filter import is_valid_source_code, log_rejection_stats
 
 
 class PyPIDataSource:
@@ -218,6 +219,8 @@ class PyPIDataSource:
         samples = []
         packages_processed = 0
         packages_successful = 0
+        rejection_counts = {}  # Track rejection reasons for stats
+        total_fetched = 0
 
         for package_name in packages:
             if len(samples) >= max_total_samples:
@@ -248,8 +251,18 @@ class PyPIDataSource:
 
             packages_successful += 1
 
-            # Convert to samples
+            # Convert to samples with quality filtering
             for i, content in enumerate(py_files):
+                total_fetched += 1
+
+                # Early quality filter - reject binary/garbage before pipeline
+                is_valid, rejection_reason = is_valid_source_code(content, ".py")
+
+                if not is_valid:
+                    logger.debug(f"Rejected {package_name} file {i}: {rejection_reason}")
+                    rejection_counts[rejection_reason] = rejection_counts.get(rejection_reason, 0) + 1
+                    continue
+
                 # Safe metadata extraction
                 info = package_info.get("info", {}) if package_info else {}
                 version = info.get("version", "unknown") if info else "unknown"
@@ -278,9 +291,12 @@ class PyPIDataSource:
                     f"{packages_successful} successful, {len(samples)} samples collected"
                 )
 
+        # Log rejection statistics
+        log_rejection_stats(total_fetched, rejection_counts)
+
         logger.info(
             f"✓ PyPI collection complete: {packages_processed} packages processed, "
-            f"{packages_successful} successful, {len(samples)} samples collected"
+            f"{packages_successful} successful, {len(samples)} clean samples collected (filtered {total_fetched - len(samples)} low-quality)"
         )
 
         return samples
