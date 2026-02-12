@@ -10,6 +10,7 @@ import requests
 from typing import List, Dict, Optional
 from scriptguard.utils.logger import logger
 from scriptguard.utils.data_quality_filter import is_valid_source_code, log_rejection_stats
+from scriptguard.utils.retry_utils import retry_with_backoff, RetryStats
 
 
 class PyPIDataSource:
@@ -23,16 +24,24 @@ class PyPIDataSource:
     PYPI_API_BASE = "https://pypi.org/pypi"
     TOP_PACKAGES_URL = "https://hugovk.github.io/top-pypi-packages/top-pypi-packages-30-days.min.json"
 
-    def __init__(self, timeout: int = 30, max_retries: int = 3):
+    def __init__(self, config: Optional[Dict] = None):
         """
         Initialize PyPI data source.
 
         Args:
-            timeout: Request timeout in seconds
-            max_retries: Maximum number of retry attempts
+            config: Configuration dictionary with retry/timeout settings
         """
-        self.timeout = timeout
-        self.max_retries = max_retries
+        self.config = config or {}
+
+        # Read configuration with fallback defaults
+        source_config = self.config.get("data_sources", {}).get("pypi", {})
+        self.timeout = source_config.get("timeout", 30)
+        self.max_retries = source_config.get("max_retries", 3)
+        self.retry_backoff_factor = source_config.get("retry_backoff_factor", 2.0)
+
+        # Initialize retry statistics tracking
+        self.retry_stats = RetryStats()
+
         self.session = requests.Session()
         self.session.headers.update({
             "User-Agent": "ScriptGuard-Training-Pipeline/1.0"
@@ -74,7 +83,7 @@ class PyPIDataSource:
 
     def get_package_info(self, package_name: str) -> Optional[Dict]:
         """
-        Get package metadata from PyPI JSON API.
+        Get package metadata from PyPI JSON API with retry logic.
 
         Args:
             package_name: Name of the package
@@ -82,19 +91,33 @@ class PyPIDataSource:
         Returns:
             Package metadata dict or None
         """
-        try:
+        @retry_with_backoff(
+            max_retries=self.max_retries,
+            backoff_factor=self.retry_backoff_factor,
+            initial_delay=1.0,
+            exceptions=(requests.exceptions.Timeout, requests.exceptions.RequestException),
+            on_retry=lambda e, attempt: setattr(self, '_last_retry_count', attempt)
+        )
+        def _do_request():
             url = f"{self.PYPI_API_BASE}/{package_name}/json"
             response = self.session.get(url, timeout=self.timeout)
             response.raise_for_status()
             return response.json()
 
+        try:
+            self._last_retry_count = 0
+            result = _do_request()
+            self.retry_stats.record_attempt("get_package_info", True, self._last_retry_count)
+            return result
         except Exception as e:
-            logger.debug(f"Failed to get info for {package_name}: {e}")
+            retry_count = getattr(self, '_last_retry_count', self.max_retries)
+            self.retry_stats.record_attempt("get_package_info", False, retry_count)
+            logger.debug(f"Failed to get info for {package_name} after retries: {e}")
             return None
 
     def download_source_dist(self, package_name: str, package_info: Dict) -> Optional[bytes]:
         """
-        Download source distribution (sdist) for a package.
+        Download source distribution (sdist) for a package with retry logic.
 
         Args:
             package_name: Name of the package
@@ -103,40 +126,53 @@ class PyPIDataSource:
         Returns:
             Binary content of source distribution or None
         """
-        try:
-            # Safety check
-            if not package_info or not isinstance(package_info, dict):
-                logger.debug(f"Invalid package_info for {package_name}")
-                return None
+        # Safety check
+        if not package_info or not isinstance(package_info, dict):
+            logger.debug(f"Invalid package_info for {package_name}")
+            return None
 
-            # Get latest version
-            latest_version = package_info.get("info", {}).get("version")
-            if not latest_version:
-                return None
+        # Get latest version
+        latest_version = package_info.get("info", {}).get("version")
+        if not latest_version:
+            return None
 
-            # Find source distribution URL
-            urls = package_info.get("urls", [])
-            source_url = None
+        # Find source distribution URL
+        urls = package_info.get("urls", [])
+        source_url = None
 
-            for url_info in urls:
-                # Prefer .tar.gz source distributions
-                if url_info.get("packagetype") == "sdist":
-                    source_url = url_info.get("url")
-                    break
+        for url_info in urls:
+            # Prefer .tar.gz source distributions
+            if url_info.get("packagetype") == "sdist":
+                source_url = url_info.get("url")
+                break
 
-            if not source_url:
-                logger.debug(f"No source dist found for {package_name}")
-                return None
+        if not source_url:
+            logger.debug(f"No source dist found for {package_name}")
+            return None
 
-            # Download
+        @retry_with_backoff(
+            max_retries=self.max_retries,
+            backoff_factor=self.retry_backoff_factor,
+            initial_delay=1.0,
+            exceptions=(requests.exceptions.Timeout, requests.exceptions.RequestException),
+            on_retry=lambda e, attempt: setattr(self, '_last_download_retry', attempt)
+        )
+        def _do_download():
             logger.debug(f"Downloading source dist for {package_name}...")
             response = self.session.get(source_url, timeout=self.timeout * 2)
             response.raise_for_status()
-
             return response.content
 
+        try:
+            self._last_download_retry = 0
+            result = _do_download()
+            retry_count = getattr(self, '_last_download_retry', 0)
+            self.retry_stats.record_attempt("download_source_dist", True, retry_count)
+            return result
         except Exception as e:
-            logger.debug(f"Failed to download source for {package_name}: {e}")
+            retry_count = getattr(self, '_last_download_retry', self.max_retries)
+            self.retry_stats.record_attempt("download_source_dist", False, retry_count)
+            logger.debug(f"Failed to download source for {package_name} after retries: {e}")
             return None
 
     def extract_python_files(

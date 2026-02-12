@@ -64,6 +64,7 @@ class GitHubSourceConfig(BaseModel):
     max_files_per_repo: int = Field(50, gt=0)
     timeout: int = Field(30, gt=0)
     max_retries: int = Field(3, ge=0)
+    retry_backoff_factor: float = Field(2.0, gt=0)
 
 
 class MalwareBazaarConfig(BaseModel):
@@ -73,6 +74,7 @@ class MalwareBazaarConfig(BaseModel):
     max_samples: int = Field(100, gt=0)
     timeout: int = Field(60, gt=0)
     max_retries: int = Field(3, ge=0)
+    retry_backoff_factor: float = Field(2.0, gt=0)
 
 
 class HuggingFaceConfig(BaseModel):
@@ -82,6 +84,7 @@ class HuggingFaceConfig(BaseModel):
     max_samples: int = Field(10000, gt=0)
     timeout: int = Field(120, gt=0)
     max_retries: int = Field(3, ge=0)
+    retry_backoff_factor: float = Field(2.0, gt=0)
 
 
 class CVEFeedsConfig(BaseModel):
@@ -91,16 +94,49 @@ class CVEFeedsConfig(BaseModel):
     keywords: List[str] = Field(default_factory=list)
     timeout: int = Field(45, gt=0)
     max_retries: int = Field(3, ge=0)
+    retry_backoff_factor: float = Field(2.0, gt=0)
 
 class AdditionalHFConfig(BaseModel):
     """Additional HuggingFace datasets configuration"""
     enabled: bool = True
     timeout: int = Field(120, gt=0)
     max_retries: int = Field(3, ge=0)
+    retry_backoff_factor: float = Field(2.0, gt=0)
     max_samples_per_dataset: int = Field(200, gt=0)
     malware_datasets: List[str] = Field(default_factory=list)
     classification_datasets: List[str] = Field(default_factory=list)
     url_datasets: List[str] = Field(default_factory=list)
+
+
+class VXUndergroundConfig(BaseModel):
+    """VX-Underground data source configuration"""
+    enabled: bool = True
+    script_types: List[str] = Field(default_factory=lambda: [".py", ".ps1", ".js", ".vbs"])
+    max_samples: int = Field(50, gt=0)
+    timeout: int = Field(30, gt=0)
+    max_retries: int = Field(3, ge=0)
+    retry_backoff_factor: float = Field(2.0, gt=0)
+
+
+class TheZooConfig(BaseModel):
+    """TheZoo data source configuration"""
+    enabled: bool = True
+    script_types: List[str] = Field(default_factory=lambda: [".py", ".ps1", ".js", ".vbs", ".sh"])
+    max_samples: int = Field(50, gt=0)
+    timeout: int = Field(30, gt=0)
+    max_retries: int = Field(3, ge=0)
+    retry_backoff_factor: float = Field(2.0, gt=0)
+
+
+class PyPIConfig(BaseModel):
+    """PyPI packages data source configuration"""
+    enabled: bool = True
+    top_packages: int = Field(1000, gt=0)
+    max_files_per_package: int = Field(50, gt=0)
+    max_samples: int = Field(5000, gt=0)
+    timeout: int = Field(30, gt=0)
+    max_retries: int = Field(3, ge=0)
+    retry_backoff_factor: float = Field(2.0, gt=0)
 
 
 class DataSourcesConfig(BaseModel):
@@ -109,8 +145,9 @@ class DataSourcesConfig(BaseModel):
     malwarebazaar: MalwareBazaarConfig = Field(default_factory=MalwareBazaarConfig)
     huggingface: HuggingFaceConfig = Field(default_factory=HuggingFaceConfig)
     cve_feeds: CVEFeedsConfig = Field(default_factory=CVEFeedsConfig)
-    vxunderground: Optional[Dict[str, Any]] = None # Placeholder for now
-    thezoo: Optional[Dict[str, Any]] = None # Placeholder for now
+    vxunderground: VXUndergroundConfig = Field(default_factory=VXUndergroundConfig)
+    thezoo: TheZooConfig = Field(default_factory=TheZooConfig)
+    pypi: PyPIConfig = Field(default_factory=PyPIConfig)
     additional_hf: AdditionalHFConfig = Field(default_factory=AdditionalHFConfig)
 
 

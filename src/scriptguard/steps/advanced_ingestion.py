@@ -71,7 +71,8 @@ def advanced_data_ingestion(config: dict) -> List[Dict]:
 
         try:
             github_source = GitHubDataSource(
-                api_token=config.get("api_keys", {}).get("github_token")
+                api_token=config.get("api_keys", {}).get("github_token"),
+                config=config
             )
 
             # Fetch malicious samples
@@ -92,6 +93,14 @@ def advanced_data_ingestion(config: dict) -> List[Dict]:
                 all_samples.extend(benign_samples)
                 logger.info(f"Fetched {len(benign_samples)} benign samples from GitHub")
 
+            # Log retry statistics
+            stats = github_source.retry_stats.get_summary()
+            logger.info(f"  GitHub retry stats: {stats['total_attempts']} attempts, {stats['total_retries']} retries, {stats['success_rate']} success rate")
+            if stats['total_failures'] > 0 and stats['total_attempts'] > 0:
+                failure_rate = stats['total_failures'] / stats['total_attempts']
+                if failure_rate > 0.1:  # >10% failure rate
+                    logger.warning(f"⚠️ GitHub high failure rate: {failure_rate:.1%}")
+
         except Exception as e:
             logger.error(f"GitHub data source failed: {e}")
 
@@ -103,7 +112,7 @@ def advanced_data_ingestion(config: dict) -> List[Dict]:
         try:
             # Get API key from config or environment
             mb_api_key = config.get("api_keys", {}).get("malwarebazaar_api_key")
-            mb_source = MalwareBazaarDataSource(api_key=mb_api_key)
+            mb_source = MalwareBazaarDataSource(api_key=mb_api_key, config=config)
 
             malicious_samples = mb_source.fetch_malicious_samples(
                 tags=mb_config.get("tags"),
@@ -111,6 +120,14 @@ def advanced_data_ingestion(config: dict) -> List[Dict]:
             )
             all_samples.extend(malicious_samples)
             logger.info(f"Fetched {len(malicious_samples)} samples from MalwareBazaar")
+
+            # Log retry statistics
+            stats = mb_source.retry_stats.get_summary()
+            logger.info(f"  MalwareBazaar retry stats: {stats['total_attempts']} attempts, {stats['total_retries']} retries, {stats['success_rate']} success rate")
+            if stats['total_failures'] > 0 and stats['total_attempts'] > 0:
+                failure_rate = stats['total_failures'] / stats['total_attempts']
+                if failure_rate > 0.1:
+                    logger.warning(f"⚠️ MalwareBazaar high failure rate: {failure_rate:.1%}")
 
         except Exception as e:
             logger.error(f"MalwareBazaar data source failed: {e}")
@@ -122,7 +139,7 @@ def advanced_data_ingestion(config: dict) -> List[Dict]:
 
         try:
             github_token = config.get("api_keys", {}).get("github_token")
-            vx_source = VXUndergroundDataSource(github_token=github_token)
+            vx_source = VXUndergroundDataSource(github_token=github_token, config=config)
 
             malicious_samples = vx_source.fetch_malicious_samples(
                 script_types=vx_config.get("script_types", [".py", ".ps1", ".js", ".vbs"]),
@@ -130,6 +147,14 @@ def advanced_data_ingestion(config: dict) -> List[Dict]:
             )
             all_samples.extend(malicious_samples)
             logger.info(f"Fetched {len(malicious_samples)} samples from VX-Underground")
+
+            # Log retry statistics
+            stats = vx_source.retry_stats.get_summary()
+            logger.info(f"  VX-Underground retry stats: {stats['total_attempts']} attempts, {stats['total_retries']} retries, {stats['success_rate']} success rate")
+            if stats['total_failures'] > 0 and stats['total_attempts'] > 0:
+                failure_rate = stats['total_failures'] / stats['total_attempts']
+                if failure_rate > 0.1:
+                    logger.warning(f"⚠️ VX-Underground high failure rate: {failure_rate:.1%}")
 
         except Exception as e:
             logger.error(f"VX-Underground data source failed: {e}")
@@ -141,7 +166,7 @@ def advanced_data_ingestion(config: dict) -> List[Dict]:
 
         try:
             github_token = config.get("api_keys", {}).get("github_token")
-            zoo_source = TheZooDataSource(github_token=github_token)
+            zoo_source = TheZooDataSource(github_token=github_token, config=config)
 
             malicious_samples = zoo_source.fetch_malicious_samples(
                 script_types=zoo_config.get("script_types", [".py", ".ps1", ".js", ".vbs", ".sh"]),
@@ -149,6 +174,14 @@ def advanced_data_ingestion(config: dict) -> List[Dict]:
             )
             all_samples.extend(malicious_samples)
             logger.info(f"Fetched {len(malicious_samples)} samples from TheZoo")
+
+            # Log retry statistics
+            stats = zoo_source.retry_stats.get_summary()
+            logger.info(f"  TheZoo retry stats: {stats['total_attempts']} attempts, {stats['total_retries']} retries, {stats['success_rate']} success rate")
+            if stats['total_failures'] > 0 and stats['total_attempts'] > 0:
+                failure_rate = stats['total_failures'] / stats['total_attempts']
+                if failure_rate > 0.1:
+                    logger.warning(f"⚠️ TheZoo high failure rate: {failure_rate:.1%}")
 
         except Exception as e:
             logger.error(f"TheZoo data source failed: {e}")
@@ -161,7 +194,7 @@ def advanced_data_ingestion(config: dict) -> List[Dict]:
         try:
             # Get HuggingFace token from config
             hf_token = config.get("api_keys", {}).get("huggingface_token")
-            hf_source = HuggingFaceDataSource(token=hf_token)
+            hf_source = HuggingFaceDataSource(token=hf_token, config=config)
 
             benign_samples = hf_source.fetch_benign_samples(
                 max_samples=hf_config.get("max_samples", 10000),
@@ -169,6 +202,14 @@ def advanced_data_ingestion(config: dict) -> List[Dict]:
             )
             all_samples.extend(benign_samples)
             logger.info(f"Fetched {len(benign_samples)} samples from Hugging Face")
+
+            # Log retry statistics
+            stats = hf_source.retry_stats.get_summary()
+            logger.info(f"  HuggingFace retry stats: {stats['total_attempts']} attempts, {stats['total_retries']} retries, {stats['success_rate']} success rate")
+            if stats['total_failures'] > 0 and stats['total_attempts'] > 0:
+                failure_rate = stats['total_failures'] / stats['total_attempts']
+                if failure_rate > 0.1:
+                    logger.warning(f"⚠️ HuggingFace high failure rate: {failure_rate:.1%}")
 
         except Exception as e:
             logger.error(f"Hugging Face data source failed: {e}")
@@ -182,7 +223,7 @@ def advanced_data_ingestion(config: dict) -> List[Dict]:
             # Get NVD API key from env or config
             nvd_api_key = os.getenv("NVD_API_KEY") or config.get("api_keys", {}).get("nvd_api_key")
 
-            cve_source = CVEFeedSource(api_key=nvd_api_key)
+            cve_source = CVEFeedSource(api_key=nvd_api_key, config=config)
 
             # 1. Add CVE patterns to Qdrant malware_knowledge collection
             logger.info("Adding CVE data to Qdrant malware_knowledge collection...")
@@ -194,7 +235,10 @@ def advanced_data_ingestion(config: dict) -> List[Dict]:
                     host=qdrant_config.get("host", "localhost"),
                     port=qdrant_config.get("port", 6333),
                     collection_name="malware_knowledge",
-                    embedding_model=qdrant_config.get("embedding_model", "all-MiniLM-L6-v2")
+                    embedding_model=qdrant_config.get("embedding_model", "all-MiniLM-L6-v2"),
+                    timeout=qdrant_config.get("timeout", 60),
+                    max_retries=qdrant_config.get("max_retries", 3),
+                    retry_backoff=qdrant_config.get("retry_backoff_factor", 2.0)
                 )
 
                 # Fetch real CVE data from NVD
@@ -218,9 +262,15 @@ def advanced_data_ingestion(config: dict) -> List[Dict]:
                             "published": cve.get("published")
                         })
 
-                    # Add to Qdrant
+                    # Add to Qdrant with retry support
                     store.upsert_vulnerabilities(cve_data)
-                    logger.info(f"✓ Added {len(cve_data)} CVEs to Qdrant malware_knowledge")
+
+                    # Log retry statistics
+                    stats = store.retry_stats.get_summary()
+                    logger.info(f"✓ Added {len(cve_data)} CVEs (Retries: {stats['total_retries']})")
+
+                    if stats['total_failures'] > 0:
+                        logger.warning(f"⚠️ {stats['total_failures']} CVE batches failed permanently")
                 else:
                     logger.warning("No CVEs fetched from NVD")
 
@@ -231,6 +281,14 @@ def advanced_data_ingestion(config: dict) -> List[Dict]:
             exploit_samples = cve_source.get_exploit_pattern_samples()
             all_samples.extend(exploit_samples)
             logger.info(f"Generated {len(exploit_samples)} samples from CVE patterns")
+
+            # Log retry statistics
+            stats = cve_source.retry_stats.get_summary()
+            logger.info(f"  CVE Feeds retry stats: {stats['total_attempts']} attempts, {stats['total_retries']} retries, {stats['success_rate']} success rate")
+            if stats['total_failures'] > 0 and stats['total_attempts'] > 0:
+                failure_rate = stats['total_failures'] / stats['total_attempts']
+                if failure_rate > 0.1:
+                    logger.warning(f"⚠️ CVE Feeds high failure rate: {failure_rate:.1%}")
 
         except Exception as e:
             logger.error(f"CVE feeds data source failed: {e}")
@@ -248,7 +306,7 @@ def advanced_data_ingestion(config: dict) -> List[Dict]:
                 "classification_datasets": additional_config.get("classification_datasets", []),
                 "url_datasets": additional_config.get("url_datasets", []),
             }
-            additional_source = AdditionalHFDatasets(token=hf_token, datasets_config=datasets_config)
+            additional_source = AdditionalHFDatasets(token=hf_token, config=config)
 
             max_per_dataset = additional_config.get("max_samples_per_dataset", 50)
 
@@ -260,6 +318,14 @@ def advanced_data_ingestion(config: dict) -> List[Dict]:
             all_samples.extend(additional_samples)
             logger.info(f"Fetched {len(additional_samples)} samples from additional HF datasets")
 
+            # Log retry statistics
+            stats = additional_source.retry_stats.get_summary()
+            logger.info(f"  Additional HF retry stats: {stats['total_attempts']} attempts, {stats['total_retries']} retries, {stats['success_rate']} success rate")
+            if stats['total_failures'] > 0 and stats['total_attempts'] > 0:
+                failure_rate = stats['total_failures'] / stats['total_attempts']
+                if failure_rate > 0.1:
+                    logger.warning(f"⚠️ Additional HF high failure rate: {failure_rate:.1%}")
+
         except Exception as e:
             logger.error(f"Additional HF datasets failed: {e}")
 
@@ -269,10 +335,7 @@ def advanced_data_ingestion(config: dict) -> List[Dict]:
         pypi_config = config["data_sources"]["pypi"]
 
         try:
-            pypi_source = PyPIDataSource(
-                timeout=pypi_config.get("timeout", 30),
-                max_retries=pypi_config.get("max_retries", 3)
-            )
+            pypi_source = PyPIDataSource(config=config)
 
             benign_samples = pypi_source.fetch_samples(
                 top_n=pypi_config.get("top_packages", 1000),
@@ -282,8 +345,48 @@ def advanced_data_ingestion(config: dict) -> List[Dict]:
             all_samples.extend(benign_samples)
             logger.info(f"Fetched {len(benign_samples)} benign samples from PyPI")
 
+            # Log retry statistics
+            stats = pypi_source.retry_stats.get_summary()
+            logger.info(f"  PyPI retry stats: {stats['total_attempts']} attempts, {stats['total_retries']} retries, {stats['success_rate']} success rate")
+            if stats['total_failures'] > 0 and stats['total_attempts'] > 0:
+                failure_rate = stats['total_failures'] / stats['total_attempts']
+                if failure_rate > 0.1:
+                    logger.warning(f"⚠️ PyPI high failure rate: {failure_rate:.1%}")
+
         except Exception as e:
             logger.error(f"PyPI data source failed: {e}")
+
+    # Aggregate retry statistics summary
+    logger.info("=" * 80)
+    logger.info("DATA SOURCE RETRY STATISTICS")
+    logger.info("=" * 80)
+
+    # Collect stats from all sources (handle cases where sources weren't initialized)
+    source_stats = []
+    if config.get("data_sources", {}).get("github", {}).get("enabled", False) and 'github_source' in locals():
+        source_stats.append(("GitHub", github_source.retry_stats.get_summary()))
+    if config.get("data_sources", {}).get("malwarebazaar", {}).get("enabled", False) and 'mb_source' in locals():
+        source_stats.append(("MalwareBazaar", mb_source.retry_stats.get_summary()))
+    if config.get("data_sources", {}).get("vxunderground", {}).get("enabled", False) and 'vx_source' in locals():
+        source_stats.append(("VX-Underground", vx_source.retry_stats.get_summary()))
+    if config.get("data_sources", {}).get("thezoo", {}).get("enabled", False) and 'zoo_source' in locals():
+        source_stats.append(("TheZoo", zoo_source.retry_stats.get_summary()))
+    if config.get("data_sources", {}).get("huggingface", {}).get("enabled", False) and 'hf_source' in locals():
+        source_stats.append(("HuggingFace", hf_source.retry_stats.get_summary()))
+    if config.get("data_sources", {}).get("cve_feeds", {}).get("enabled", False) and 'cve_source' in locals():
+        source_stats.append(("CVE Feeds", cve_source.retry_stats.get_summary()))
+    if config.get("data_sources", {}).get("additional_hf", {}).get("enabled", False) and 'additional_source' in locals():
+        source_stats.append(("Additional HF", additional_source.retry_stats.get_summary()))
+    if config.get("data_sources", {}).get("pypi", {}).get("enabled", False) and 'pypi_source' in locals():
+        source_stats.append(("PyPI", pypi_source.retry_stats.get_summary()))
+
+    for source_name, stats in source_stats:
+        logger.info(
+            f"{source_name:20s} | Attempts: {stats['total_attempts']:4d} | "
+            f"Retries: {stats['total_retries']:3d} | Success: {stats['success_rate']}"
+        )
+
+    logger.info("=" * 80)
 
     logger.info(f"Total samples collected: {len(all_samples)}")
 

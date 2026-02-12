@@ -4,6 +4,7 @@ Loads benign code samples from Hugging Face datasets.
 """
 
 from scriptguard.utils.logger import logger
+from scriptguard.utils.retry_utils import retry_with_backoff, RetryStats
 from typing import List, Dict, Optional
 from datetime import datetime
 import os
@@ -11,14 +12,25 @@ import os
 class HuggingFaceDataSource:
     """Hugging Face datasets integration for benign code samples."""
 
-    def __init__(self, token: Optional[str] = None):
+    def __init__(self, token: Optional[str] = None, config: Optional[Dict] = None):
         """
         Initialize Hugging Face data source.
 
         Args:
             token: HuggingFace token for accessing gated datasets
+            config: Configuration dictionary with retry/timeout settings
         """
         self.token = token or os.getenv("HUGGINGFACE_TOKEN")
+        self.config = config or {}
+
+        # Read configuration with fallback defaults
+        source_config = self.config.get("data_sources", {}).get("huggingface", {})
+        self.timeout = source_config.get("timeout", 120)
+        self.max_retries = source_config.get("max_retries", 3)
+        self.retry_backoff_factor = source_config.get("retry_backoff_factor", 2.0)
+
+        # Initialize retry statistics tracking
+        self.retry_stats = RetryStats()
 
         try:
             from datasets import load_dataset
@@ -59,25 +71,37 @@ class HuggingFaceDataSource:
 
         logger.info(f"Loading dataset: {dataset_name} (language: {language})")
 
-        try:
-            # Security: trust_remote_code disabled by default (supply-chain risk)
-            trust_remote = os.getenv("SCRIPTGUARD_TRUST_DATASET_CODE", "false").lower() == "true"
+        # Security: trust_remote_code disabled by default (supply-chain risk)
+        trust_remote = os.getenv("SCRIPTGUARD_TRUST_DATASET_CODE", "false").lower() == "true"
 
-            if trust_remote:
-                logger.warning(
-                    f"⚠️  SECURITY WARNING: trust_remote_code=True for dataset '{dataset_name}'. "
-                    "This allows arbitrary code execution from the dataset repository. "
-                    "Only enable for trusted datasets."
-                )
+        if trust_remote:
+            logger.warning(
+                f"⚠️  SECURITY WARNING: trust_remote_code=True for dataset '{dataset_name}'. "
+                "This allows arbitrary code execution from the dataset repository. "
+                "Only enable for trusted datasets."
+            )
 
+        @retry_with_backoff(
+            max_retries=self.max_retries,
+            backoff_factor=self.retry_backoff_factor,
+            initial_delay=2.0,  # Longer delay for large datasets
+            exceptions=(Exception,),  # Catch all HF exceptions
+            on_retry=lambda e, attempt: setattr(self, '_last_retry_count', attempt)
+        )
+        def _load_dataset():
             # Load dataset with streaming for large datasets
-            dataset = self.load_dataset(
+            return self.load_dataset(
                 dataset_name,
                 split=split,
                 streaming=True,
                 trust_remote_code=trust_remote,
                 token=self.token  # Add token for gated datasets
             )
+
+        try:
+            self._last_retry_count = 0
+            dataset = _load_dataset()
+            self.retry_stats.record_attempt("load_dataset", True, self._last_retry_count)
 
             samples = []
             count = 0
@@ -132,7 +156,9 @@ class HuggingFaceDataSource:
             return samples
 
         except Exception as e:
-            logger.error(f"Failed to load dataset {dataset_name}: {e}")
+            retry_count = getattr(self, '_last_retry_count', self.max_retries)
+            self.retry_stats.record_attempt("load_dataset", False, retry_count)
+            logger.error(f"Failed to load dataset {dataset_name} after retries: {e}")
             return []
 
     def load_the_stack_dataset(

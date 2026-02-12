@@ -88,7 +88,11 @@ def vectorize_samples(
         enable_chunking=enable_chunking,
         chunk_overlap=chunk_overlap,
         api_key=qdrant_config.get("api_key"),  # CRITICAL: Pass API key for connection consistency
-        use_https=qdrant_config.get("use_https", False)
+        use_https=qdrant_config.get("use_https", False),
+        timeout=qdrant_config.get("timeout", 60),
+        upsert_timeout=qdrant_config.get("upsert_timeout", 120),
+        max_retries=qdrant_config.get("max_retries", 3),
+        retry_backoff=qdrant_config.get("retry_backoff_factor", 2.0)
     )
 
     # Log connection information for diagnostics

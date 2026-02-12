@@ -4,6 +4,7 @@ Fetches CVE data and exploit patterns from NVD (National Vulnerability Database)
 """
 
 from scriptguard.utils.logger import logger
+from scriptguard.utils.retry_utils import retry_with_backoff, RetryStats
 import requests
 from typing import List, Dict, Optional
 from datetime import datetime, timedelta
@@ -13,94 +14,91 @@ class CVEFeedSource:
 
     NVD_API_URL = "https://services.nvd.nist.gov/rest/json/cves/2.0"
 
-    def __init__(self, api_key: Optional[str] = None):
+    def __init__(self, api_key: Optional[str] = None, config: Optional[Dict] = None):
         """
         Initialize CVE feed source.
 
         Args:
             api_key: NVD API key (optional, increases rate limit)
+            config: Configuration dictionary with retry/timeout settings
         """
         self.api_key = api_key
+        self.config = config or {}
         self.headers = {}
         if api_key:
             self.headers["apiKey"] = api_key
 
-    def _make_request(self, params: Dict, retry_count: int = 3) -> Optional[Dict]:
+        # Read configuration with fallback defaults
+        source_config = self.config.get("data_sources", {}).get("cve_feeds", {})
+        self.timeout = source_config.get("timeout", 45)
+        self.max_retries = source_config.get("max_retries", 3)
+        self.retry_backoff_factor = source_config.get("retry_backoff_factor", 2.0)
+
+        # Initialize retry statistics tracking
+        self.retry_stats = RetryStats()
+
+    def _make_request(self, params: Dict) -> Optional[Dict]:
         """
-        Make request to NVD API with retry logic.
+        Make request to NVD API with exponential backoff retry logic.
 
         Args:
             params: Query parameters
-            retry_count: Number of retries on failure
 
         Returns:
             JSON response or None on error
         """
-        import time
+        @retry_with_backoff(
+            max_retries=self.max_retries,
+            backoff_factor=self.retry_backoff_factor,
+            initial_delay=1.0,
+            exceptions=(requests.exceptions.Timeout, requests.exceptions.RequestException, ValueError),
+            on_retry=lambda e, attempt: setattr(self, '_last_retry_count', attempt)
+        )
+        def _do_request():
+            # Create a new session for each request to avoid connection reuse issues
+            # This fixes the 404 error when used with httpx (from QdrantStore)
+            session = requests.Session()
+            session.headers.update(self.headers)
 
-        for attempt in range(retry_count):
-            try:
-                # Create a new session for each request to avoid connection reuse issues
-                # This fixes the 404 error when used with httpx (from QdrantStore)
-                session = requests.Session()
-                session.headers.update(self.headers)
+            response = session.get(
+                self.NVD_API_URL,
+                params=params,
+                timeout=self.timeout
+            )
 
-                response = session.get(
-                    self.NVD_API_URL,
-                    params=params,
-                    timeout=30
-                )
+            session.close()
 
-                session.close()
+            if response.status_code == 200:
+                try:
+                    return response.json()
+                except ValueError as json_error:
+                    logger.error(f"Failed to parse JSON response: {json_error}")
+                    raise  # Retry JSON parse errors
 
-                if response.status_code == 200:
-                    try:
-                        return response.json()
-                    except ValueError as json_error:
-                        logger.error(f"Failed to parse JSON response: {json_error}")
-                        if attempt < retry_count - 1:
-                            time.sleep(2 ** attempt)  # Exponential backoff
-                            continue
-                        return None
+            elif response.status_code == 403:
+                logger.error("NVD API rate limit exceeded or access forbidden")
+                raise Exception("Rate limit exceeded (403)")  # Don't retry rate limits
 
-                elif response.status_code == 403:
-                    logger.error("NVD API rate limit exceeded or access forbidden")
-                    return None
+            elif response.status_code == 404:
+                logger.error(f"NVD API returned 404")
+                logger.error(f"URL: {response.url}")
+                # 404 might be temporary, retry with backoff
+                raise Exception("Not found (404)")
 
-                elif response.status_code == 404:
-                    logger.error(f"NVD API returned 404")
-                    logger.error(f"URL: {response.url}")
+            else:
+                logger.error(f"NVD API error: {response.status_code}")
+                raise Exception(f"HTTP {response.status_code}")
 
-                    # 404 might be temporary, retry with backoff
-                    if attempt < retry_count - 1:
-                        logger.info(f"Retrying after {2 ** attempt} seconds...")
-                        time.sleep(2 ** attempt)
-                        continue
-                    return None
-
-                else:
-                    logger.error(f"NVD API error: {response.status_code}")
-
-                    if attempt < retry_count - 1:
-                        time.sleep(2 ** attempt)
-                        continue
-                    return None
-
-            except requests.exceptions.Timeout:
-                logger.error(f"Request timeout (attempt {attempt + 1}/{retry_count})")
-                if attempt < retry_count - 1:
-                    time.sleep(2 ** attempt)
-                    continue
-                return None
-
-            except requests.exceptions.RequestException as e:
-                logger.error(f"Request failed: {e} (attempt {attempt + 1}/{retry_count})")
-                if attempt < retry_count - 1:
-                    time.sleep(2 ** attempt)
-                    continue
-                return None
-
-        return None
+        try:
+            self._last_retry_count = 0
+            result = _do_request()
+            self.retry_stats.record_attempt("api_request", True, self._last_retry_count)
+            return result
+        except Exception as e:
+            retry_count = getattr(self, '_last_retry_count', self.max_retries)
+            self.retry_stats.record_attempt("api_request", False, retry_count)
+            logger.error(f"NVD API request failed after retries: {e}")
+            return None
 
     def fetch_recent_cves(
         self,

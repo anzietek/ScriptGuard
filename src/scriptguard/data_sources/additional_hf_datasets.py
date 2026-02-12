@@ -4,6 +4,7 @@ Uses REAL datasets from HuggingFace Hub
 """
 
 from scriptguard.utils.logger import logger
+from scriptguard.utils.retry_utils import retry_with_backoff, RetryStats
 from datasets import load_dataset
 from typing import List, Dict, Optional
 import random
@@ -12,16 +13,28 @@ import os
 class AdditionalHFDatasets:
     """Integration for additional malware datasets from HuggingFace."""
 
-    def __init__(self, token: Optional[str] = None, datasets_config: Optional[Dict] = None):
+    def __init__(self, token: Optional[str] = None, config: Optional[Dict] = None):
         """
         Initialize dataset loader.
 
         Args:
             token: HuggingFace token for accessing datasets
-            datasets_config: Configuration dict with dataset names to try
+            config: Configuration dictionary with retry/timeout settings and dataset names
         """
         self.token = token or os.getenv("HUGGINGFACE_TOKEN")
-        self.datasets_config = datasets_config or {}
+        self.config = config or {}
+
+        # Read configuration with fallback defaults
+        source_config = self.config.get("data_sources", {}).get("additional_hf", {})
+        self.timeout = source_config.get("timeout", 120)
+        self.max_retries = source_config.get("max_retries", 3)
+        self.retry_backoff_factor = source_config.get("retry_backoff_factor", 2.0)
+
+        # Dataset configuration (for backward compatibility, accept old datasets_config)
+        self.datasets_config = source_config
+
+        # Initialize retry statistics tracking
+        self.retry_stats = RetryStats()
 
         if self.token:
             logger.info("HuggingFace token configured for additional datasets")
@@ -59,9 +72,21 @@ class AdditionalHFDatasets:
             datasets_to_try = [(name, "Generic") for name in datasets_to_try]
 
         for dataset_name, dataset_type in datasets_to_try:
+            @retry_with_backoff(
+                max_retries=self.max_retries,
+                backoff_factor=self.retry_backoff_factor,
+                initial_delay=2.0,  # Longer delay for large datasets
+                exceptions=(Exception,),  # Catch all HF exceptions
+                on_retry=lambda e, attempt: setattr(self, '_last_retry_count', attempt)
+            )
+            def _load_dataset():
+                return load_dataset(dataset_name, split=split, streaming=True, token=self.token)
+
             try:
                 logger.info(f"Trying dataset: {dataset_name}")
-                dataset = load_dataset(dataset_name, split=split, streaming=True, token=self.token)
+                self._last_retry_count = 0
+                dataset = _load_dataset()
+                self.retry_stats.record_attempt("load_dataset", True, self._last_retry_count)
 
                 samples = []
                 for i, item in enumerate(dataset):
@@ -99,7 +124,9 @@ class AdditionalHFDatasets:
                     return samples
 
             except Exception as e:
-                logger.warning(f"Dataset {dataset_name} failed: {e}")
+                retry_count = getattr(self, '_last_retry_count', self.max_retries)
+                self.retry_stats.record_attempt("load_dataset", False, retry_count)
+                logger.warning(f"Dataset {dataset_name} failed after retries: {e}")
                 continue
 
         # If all fail, use fallback
@@ -220,7 +247,9 @@ for root, dirs, files in os.walk("/"):
                     return samples
 
             except Exception as e:
-                logger.warning(f"Dataset {dataset_name} failed: {e}")
+                retry_count = getattr(self, '_last_retry_count', self.max_retries)
+                self.retry_stats.record_attempt("load_dataset", False, retry_count)
+                logger.warning(f"Dataset {dataset_name} failed after retries: {e}")
                 continue
 
         logger.info("All classification datasets failed, using fallback")
@@ -304,7 +333,9 @@ for root, dirs, files in os.walk("/"):
                     return samples
 
             except Exception as e:
-                logger.warning(f"Dataset {dataset_name} failed: {e}")
+                retry_count = getattr(self, '_last_retry_count', self.max_retries)
+                self.retry_stats.record_attempt("load_dataset", False, retry_count)
+                logger.warning(f"Dataset {dataset_name} failed after retries: {e}")
                 continue
 
         logger.info("All URL datasets failed, generating fallback C2 samples")

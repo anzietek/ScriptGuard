@@ -5,6 +5,7 @@ Fetches malware samples from TheZoo GitHub repository.
 
 from scriptguard.utils.logger import logger
 from scriptguard.utils.archive_extractor import extract_scripts_from_archive
+from scriptguard.utils.retry_utils import retry_with_backoff, RetryStats
 import requests
 from typing import List, Dict, Optional
 from datetime import datetime
@@ -16,44 +17,62 @@ class TheZooDataSource:
     GITHUB_API = "https://api.github.com"
     THEZOO_REPO = "ytisf/theZoo"
 
-    def __init__(self, github_token: Optional[str] = None):
+    def __init__(self, github_token: Optional[str] = None, config: Optional[Dict] = None):
         """
         Initialize TheZoo data source.
 
         Args:
             github_token: GitHub token for higher rate limits
+            config: Configuration dictionary with retry/timeout settings
         """
         self.github_token = github_token
+        self.config = config or {}
         self.headers = {"Accept": "application/vnd.github+json"}
         if github_token:
             self.headers["Authorization"] = f"Bearer {github_token}"
             logger.info("TheZoo: GitHub token configured")
 
+        # Read configuration with fallback defaults
+        source_config = self.config.get("data_sources", {}).get("thezoo", {})
+        self.timeout = source_config.get("timeout", 30)
+        self.max_retries = source_config.get("max_retries", 3)
+        self.retry_backoff_factor = source_config.get("retry_backoff_factor", 2.0)
+
+        # Initialize retry statistics tracking
+        self.retry_stats = RetryStats()
+
     def _make_request(self, url: str) -> Optional[Dict]:
-        """Make GET request to GitHub API."""
-        max_retries = 3
-        for attempt in range(max_retries):
-            try:
-                response = requests.get(url, headers=self.headers, timeout=30)
-                if response.status_code == 200:
-                    return response.json()
-                elif response.status_code == 403:
-                    logger.error("GitHub rate limit exceeded")
-                    return None
-                elif response.status_code == 404:
-                    return None
+        """Make GET request to GitHub API with retry logic."""
+        @retry_with_backoff(
+            max_retries=self.max_retries,
+            backoff_factor=self.retry_backoff_factor,
+            initial_delay=1.0,
+            exceptions=(requests.exceptions.Timeout, requests.exceptions.RequestException),
+            on_retry=lambda e, attempt: setattr(self, '_last_retry_count', attempt)
+        )
+        def _do_request():
+            response = requests.get(url, headers=self.headers, timeout=self.timeout)
 
-                if attempt < max_retries - 1:
-                    time.sleep(2)
+            if response.status_code == 200:
+                return response.json()
+            elif response.status_code == 403:
+                logger.error("GitHub rate limit exceeded (TheZoo uses GitHub)")
+                raise Exception("Rate limit exceeded")
+            elif response.status_code == 404:
+                return None  # Not found, don't retry
+            else:
+                raise Exception(f"HTTP {response.status_code}")
 
-            except requests.exceptions.Timeout:
-                if attempt < max_retries - 1:
-                    time.sleep(2)
-                    continue
-            except Exception as e:
-                logger.error(f"Request failed: {e}")
-                return None
-        return None
+        try:
+            self._last_retry_count = 0
+            result = _do_request()
+            self.retry_stats.record_attempt("api_request", True, self._last_retry_count)
+            return result
+        except Exception as e:
+            retry_count = getattr(self, '_last_retry_count', self.max_retries)
+            self.retry_stats.record_attempt("api_request", False, retry_count)
+            logger.error(f"TheZoo request failed after retries: {e}")
+            return None
 
     def _search_scripts_in_path(self, path: str, extensions: List[str], max_samples: int, depth: int = 0) -> List[Dict]:
         """Search for script files in repository path."""
@@ -96,7 +115,7 @@ class TheZooDataSource:
                                 })
                                 if len(samples) >= max_samples:
                                     break
-                        time.sleep(0.5)
+                        time.sleep(0.2)  # Brief rate limiting
 
             elif item.get("type") == "dir" and len(samples) < max_samples:
                 samples.extend(self._search_scripts_in_path(item["path"], extensions, max_samples - len(samples), depth + 1))
@@ -182,7 +201,7 @@ class TheZooDataSource:
                     logger.info(f"Exploring directory: {item['name']}")
                     samples = self._search_scripts_in_path(item["path"], script_types, max_samples - len(all_samples), depth=0)
                     all_samples.extend(samples)
-                    time.sleep(1)
+                    time.sleep(0.5)  # Rate limiting between directories
 
         logger.info(f"Fetched {len(all_samples)} samples from TheZoo")
         return all_samples[:max_samples]

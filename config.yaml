@@ -38,6 +38,7 @@ data_sources:
     fetch_benign: true
     timeout: 30
     max_retries: 3
+    retry_backoff_factor: 2.0
 
     malicious_keywords:
       - "reverse-shell python"
@@ -128,6 +129,7 @@ data_sources:
     enabled: true
     timeout: 60
     max_retries: 3
+    retry_backoff_factor: 2.0
     tags: ["python", "script", "ransomware", "backdoor", "stealer"]
     max_samples: 2000
 
@@ -135,6 +137,7 @@ data_sources:
     enabled: true
     timeout: 60
     max_retries: 3
+    retry_backoff_factor: 2.0
     script_types: [".py", ".ps1", ".js", ".vbs"]
     max_samples: 2000
 
@@ -142,6 +145,7 @@ data_sources:
     enabled: true
     timeout: 60
     max_retries: 3
+    retry_backoff_factor: 2.0
     script_types: [".py", ".ps1", ".js", ".vbs", ".sh"]
     max_samples: 1000
 
@@ -149,6 +153,7 @@ data_sources:
     enabled: false
     timeout: 120
     max_retries: 3
+    retry_backoff_factor: 2.0
     datasets: ["codeparrot/github-code"]
     max_samples: 20000
 
@@ -156,6 +161,7 @@ data_sources:
     enabled: true
     timeout: 45
     max_retries: 3
+    retry_backoff_factor: 2.0
     days_back: 119
     keywords: ["script", "code execution", "command injection", "python", "malicious"]
 
@@ -163,6 +169,7 @@ data_sources:
     enabled: true
     timeout: 120
     max_retries: 3
+    retry_backoff_factor: 2.0
     max_samples_per_dataset: 400
 
     malware_datasets:
@@ -181,6 +188,7 @@ data_sources:
     enabled: true
     timeout: 30
     max_retries: 3
+    retry_backoff_factor: 2.0
     top_packages: 1000         # Number of top PyPI packages to fetch
     max_files_per_package: 50  # Max Python files per package
     max_samples: 5000          # Maximum total samples to collect

@@ -5,6 +5,7 @@ Fetches malicious and benign code samples from GitHub repositories.
 
 import time
 from scriptguard.utils.logger import logger
+from scriptguard.utils.retry_utils import retry_with_backoff, RetryStats
 from typing import List, Dict, Optional
 import requests
 from datetime import datetime
@@ -14,20 +15,31 @@ class GitHubDataSource:
 
     BASE_URL = "https://api.github.com"
 
-    def __init__(self, api_token: Optional[str] = None):
+    def __init__(self, api_token: Optional[str] = None, config: Optional[Dict] = None):
         """
         Initialize GitHub data source.
 
         Args:
             api_token: GitHub Personal Access Token (optional but recommended)
+            config: Configuration dictionary with retry/timeout settings
         """
         self.api_token = api_token
+        self.config = config or {}
         self.headers = {
             "Accept": "application/vnd.github+json",
             "X-GitHub-Api-Version": "2022-11-28"
         }
         if api_token:
             self.headers["Authorization"] = f"Bearer {api_token}"
+
+        # Read configuration with fallback defaults
+        source_config = self.config.get("data_sources", {}).get("github", {})
+        self.timeout = source_config.get("timeout", 30)
+        self.max_retries = source_config.get("max_retries", 3)
+        self.retry_backoff_factor = source_config.get("retry_backoff_factor", 2.0)
+
+        # Initialize retry statistics tracking
+        self.retry_stats = RetryStats()
 
         self.rate_limit_remaining = None
         self.rate_limit_reset = None
@@ -58,7 +70,7 @@ class GitHubDataSource:
 
     def _make_request(self, url: str, params: Optional[Dict] = None) -> Optional[Dict]:
         """
-        Make authenticated request with rate limiting.
+        Make authenticated request with rate limiting and retry logic.
 
         Args:
             url: API endpoint URL
@@ -67,25 +79,52 @@ class GitHubDataSource:
         Returns:
             JSON response or None on error
         """
+        # Check rate limit BEFORE attempting request
         if not self._check_rate_limit():
-            logger.error("Rate limit exceeded and cannot wait")
+            logger.error("GitHub rate limit exceeded and cannot wait")
             return None
 
-        try:
-            response = requests.get(url, headers=self.headers, params=params, timeout=30)
+        @retry_with_backoff(
+            max_retries=self.max_retries,
+            backoff_factor=self.retry_backoff_factor,
+            initial_delay=1.0,
+            exceptions=(requests.exceptions.Timeout, requests.exceptions.RequestException),
+            on_retry=lambda e, attempt: setattr(self, '_last_retry_count', attempt)
+        )
+        def _do_request():
+            response = requests.get(
+                url,
+                headers=self.headers,
+                params=params,
+                timeout=self.timeout
+            )
+
+            # Update rate limit tracking
             self._update_rate_limit(response)
 
             if response.status_code == 200:
                 return response.json()
             elif response.status_code == 403:
-                logger.error("API rate limit exceeded or access forbidden")
+                # GitHub rate limit hit - don't retry
+                logger.error("GitHub API rate limit exceeded (403)")
+                raise Exception("Rate limit exceeded")  # Will be caught, no retry
+            elif response.status_code == 404:
+                # Not found - don't retry
                 return None
             else:
-                logger.error(f"GitHub API error: {response.status_code} - {response.text}")
-                return None
+                # Other errors - retry
+                logger.warning(f"GitHub API returned status {response.status_code}")
+                raise Exception(f"HTTP {response.status_code}")
 
-        except requests.exceptions.RequestException as e:
-            logger.error(f"Request failed: {e}")
+        try:
+            self._last_retry_count = 0
+            result = _do_request()
+            self.retry_stats.record_attempt("api_request", True, self._last_retry_count)
+            return result
+        except Exception as e:
+            retry_count = getattr(self, '_last_retry_count', self.max_retries)
+            self.retry_stats.record_attempt("api_request", False, retry_count)
+            logger.error(f"GitHub API request failed after retries: {e}")
             return None
 
     def search_repositories(
@@ -252,8 +291,8 @@ class GitHubDataSource:
                     }
                 })
 
-            # Rate limiting: wait between keywords
-            time.sleep(2)
+            # Rate limiting: short pause between keywords to avoid overwhelming API
+            time.sleep(0.5)
 
         logger.info(f"Fetched {len(all_samples)} malicious samples from GitHub")
         return all_samples
@@ -316,7 +355,7 @@ class GitHubDataSource:
                         }
                     })
 
-            time.sleep(2)  # Rate limiting
+            time.sleep(0.5)  # Rate limiting: short pause between repos
 
         logger.info(f"Fetched {len(all_samples)} benign samples from GitHub")
         return all_samples
