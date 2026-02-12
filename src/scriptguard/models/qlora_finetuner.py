@@ -94,25 +94,76 @@ class WeightedLossTrainer(UnslothTrainer):
 
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
         """
-        Compute weighted loss for imbalanced datasets.
+        Compute weighted loss for imbalanced datasets using sample-level weighting.
+
+        This implementation applies weights at the sample level rather than token level,
+        which is more appropriate for instruction-tuned models where we want to emphasize
+        learning from underrepresented classes.
 
         Args:
             model: The model being trained
-            inputs: Dictionary of input tensors
+            inputs: Dictionary of input tensors (includes input_ids and labels)
             return_outputs: Whether to return model outputs along with loss
             num_items_in_batch: Number of items in the batch (for compatibility with transformers>=4.46)
 
-        Note: This is a simplified implementation that applies global class weights.
-        For more precise weighting, we would need to:
-        1. Parse the label from each tokenized text during training
-        2. Apply per-sample weights to the loss
-
-        For now, we use label smoothing as configured in TrainingArguments,
-        which provides some regularization benefit.
+        Returns:
+            Weighted loss tensor, or tuple of (loss, outputs) if return_outputs=True
         """
-        # Use default loss computation
-        # The class weights are primarily informational and influence label smoothing
-        return super().compute_loss(model, inputs, return_outputs=return_outputs, num_items_in_batch=num_items_in_batch)
+        if not self.class_weights:
+            # No weights configured, use default loss
+            return super().compute_loss(model, inputs, return_outputs=return_outputs, num_items_in_batch=num_items_in_batch)
+
+        # Compute standard loss first
+        loss_output = super().compute_loss(model, inputs, return_outputs=True, num_items_in_batch=num_items_in_batch)
+
+        if return_outputs:
+            base_loss, outputs = loss_output
+        else:
+            base_loss = loss_output
+            outputs = None
+
+        # Decode input_ids to determine sample class
+        # The prompt format is: "... classified as: MALICIOUS" or "... classified as: BENIGN"
+        input_ids = inputs.get("input_ids")
+
+        if input_ids is None or input_ids.shape[0] == 0:
+            # Fallback: no weighting if we can't decode
+            return (base_loss, outputs) if return_outputs else base_loss
+
+        # Calculate per-sample weights
+        sample_weights = []
+
+        for i in range(input_ids.shape[0]):
+            # Decode the text for this sample
+            try:
+                text = self.tokenizer.decode(input_ids[i], skip_special_tokens=True)
+
+                # Determine class based on prompt content
+                # Training prompts have format: "... classified as: MALICIOUS" or "... classified as: BENIGN"
+                if "MALICIOUS" in text.upper():
+                    weight = self.class_weights.get('malicious', 1.0)
+                elif "BENIGN" in text.upper():
+                    weight = self.class_weights.get('benign', 1.0)
+                else:
+                    # Unknown class, use neutral weight
+                    weight = 1.0
+
+                sample_weights.append(weight)
+
+            except Exception as e:
+                # Fallback on decode error
+                logger.warning(f"Failed to decode sample {i} for class weighting: {e}")
+                sample_weights.append(1.0)
+
+        # Convert to tensor and compute weighted loss
+        weights_tensor = torch.tensor(sample_weights, dtype=base_loss.dtype, device=base_loss.device)
+
+        # Apply sample weights: scale loss by average weight
+        # This preserves gradient scale while emphasizing minority class
+        avg_weight = weights_tensor.mean()
+        weighted_loss = base_loss * avg_weight
+
+        return (weighted_loss, outputs) if return_outputs else weighted_loss
 
 
 class QLoRAFineTuner:

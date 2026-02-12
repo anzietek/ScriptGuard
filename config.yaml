@@ -272,7 +272,7 @@ augmentation:
   variants_per_sample: 3  # Increased from 2 for more malware variants
   techniques: ["base64", "hex", "rename_vars", "split_strings"]
 
-  balance_dataset: false  # DISABLED: Using weighted loss instead to preserve all data
+  balance_dataset: false  # DISABLED: Using weighted loss + augmentation to preserve all data
   target_balance_ratio: 1.0
   balance_method: "hybrid"  # Improved over simple oversampling
   augment_after_split: true # Crucial: prevents data leakage into test set
@@ -290,6 +290,7 @@ training:
   truncation_strategy: "smart"  # Options: "simple" (cut at max_chars) or "smart" (preserve critical sections)
 
   # Class weighting for imbalanced datasets (replaces undersampling)
+  # Uses sample-level weighting to emphasize minority class during training
   use_class_weights: true
   class_weight_method: "sqrt_inverse"  # Options: "inverse_frequency" or "sqrt_inverse" (gentler)
 
