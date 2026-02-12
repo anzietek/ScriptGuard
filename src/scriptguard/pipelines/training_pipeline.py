@@ -204,28 +204,27 @@ def advanced_training_pipeline(
 
     # Step 7.5: Balance dataset (AFTER vectorization)
     # This ensures RAG has full dataset while training uses balanced subset
-    if config.get("augmentation", {}).get("balance_dataset", True):
-        balanced_data = balance_dataset(
-            data=augmented_data,
-            target_ratio=config.get("augmentation", {}).get("target_balance_ratio", 1.0),
-            method=config.get("augmentation", {}).get("balance_method", "undersample")
-        )
-    else:
-        balanced_data = augmented_data
+    # NOTE: Step always called - internal logic checks config.augmentation.balance_dataset
+    logger.info(f"Calling balance_dataset step (enabled={config.get('augmentation', {}).get('balance_dataset', True)})...")
+    balanced_data = balance_dataset(
+        data=augmented_data,
+        config=config
+    )
 
-    # Step 7.7: Augment with Qdrant CVE patterns (if enabled)
-    if config.get("augmentation", {}).get("use_qdrant_patterns", False):
-        qdrant_augmented_data = augment_with_qdrant_patterns(
-            data=balanced_data,
-            config=config
-        )
+    # Step 7.7: Augment with Qdrant CVE patterns
+    # NOTE: Step always called - internal logic checks config.augmentation.use_qdrant_patterns
+    logger.info(f"Calling augment_with_qdrant_patterns step (enabled={config.get('augmentation', {}).get('use_qdrant_patterns', False)})...")
+    qdrant_augmented_data = augment_with_qdrant_patterns(
+        data=balanced_data,
+        config=config
+    )
 
-        # Validate augmentation
-        augmentation_stats = validate_qdrant_augmentation(
-            data=qdrant_augmented_data
-        )
-    else:
-        qdrant_augmented_data = balanced_data
+    # Step 7.8: Validate Qdrant augmentation
+    logger.info("Calling validate_qdrant_augmentation step...")
+    augmentation_stats = validate_qdrant_augmentation(
+        data=qdrant_augmented_data,
+        config=config
+    )
 
     # === Handle split timing ===
     if not augment_after_split:

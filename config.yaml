@@ -200,6 +200,8 @@ database:
 qdrant:
   host: ${QDRANT_HOST:-localhost}
   port: ${QDRANT_PORT:-6333}
+  api_key: ${QDRANT_API_KEY:-}  # API key for authentication (optional for local, required for cloud)
+  use_https: false  # Disable SSL for local Qdrant instance
   collection_name: "malware_knowledge"
   embedding_model: "all-MiniLM-L6-v2"
   prefer_grpc: true

@@ -523,13 +523,15 @@ def _create_sample_from_pattern(
 
 @step
 def validate_qdrant_augmentation(
-    data: List[Dict[str, Any]]
+    data: List[Dict[str, Any]],
+    config: Dict[str, Any] = None
 ) -> Dict[str, Any]:
     """
     Validate the augmented dataset and return statistics.
 
     Args:
         data: Augmented dataset
+        config: Configuration dictionary (optional, not used in validation)
 
     Returns:
         Statistics about the augmentation

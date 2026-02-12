@@ -296,23 +296,37 @@ def apply_obfuscation_techniques(
 @step
 def balance_dataset(
     data: List[Dict],
-    target_ratio: float = 1.0,
-    method: str = "undersample"
+    config: Dict = None
 ) -> List[Dict]:
     """
     Balance dataset by adjusting class distribution.
 
     Args:
         data: List of code samples
-        target_ratio: Target ratio of malicious to benign (1.0 = equal)
-        method: "undersample" or "oversample"
+        config: Configuration dictionary (checked for augmentation.balance_dataset)
 
     Returns:
-        Balanced dataset
+        Balanced dataset (or original data if balancing disabled)
     """
+    # Check if balancing is enabled
+    if config:
+        augmentation_config = config.get("augmentation", {})
+        if not augmentation_config.get("balance_dataset", True):
+            logger.info("Dataset balancing disabled in config. Skipping.")
+            return data
+
+        # Extract parameters from config
+        target_ratio = augmentation_config.get("target_balance_ratio", 1.0)
+        method = augmentation_config.get("balance_method", "undersample")
+    else:
+        # Fallback defaults if no config provided
+        target_ratio = 1.0
+        method = "undersample"
+
     malicious = [s for s in data if s.get("label") == "malicious"]
     benign = [s for s in data if s.get("label") == "benign"]
 
+    logger.info(f"Balancing dataset: {len(malicious)} malicious, {len(benign)} benign (method={method}, ratio={target_ratio})")
     logger.info(f"Original distribution: {len(malicious)} malicious, {len(benign)} benign")
 
     if method == "hybrid":
