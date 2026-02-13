@@ -304,30 +304,24 @@ init_zenml_remote() {
         fi
     done
 
-    # Connect to remote server with authentication
+    # Connect to remote server with modern authentication
     print_info "Connecting to remote ZenML server..."
 
-    # Build connection command with optional authentication
-    CONNECT_CMD="uv run zenml connect --url \"${ZENML_URL}\" --no-verify-ssl"
-
-    # Add authentication if credentials are provided
-    if [ ! -z "${ZENML_USERNAME:-}" ]; then
-        print_info "Using ZenML authentication (user: ${ZENML_USERNAME})"
-        CONNECT_CMD="$CONNECT_CMD --username \"${ZENML_USERNAME}\""
-
-        # Add password if provided (may be empty for default user)
-        if [ ! -z "${ZENML_PASSWORD:-}" ]; then
-            CONNECT_CMD="$CONNECT_CMD --password \"${ZENML_PASSWORD}\""
-        fi
+    # Use zenml login with API key (recommended for non-interactive environments)
+    if [ ! -z "${ZENML_API_KEY:-}" ]; then
+        print_info "Using ZenML service account API key authentication"
+        uv run zenml login "${ZENML_URL}" --api-key "${ZENML_API_KEY}" --no-verify-ssl || {
+            print_warning "API key authentication failed, but will proceed"
+        }
     else
-        print_warning "No ZenML credentials found in .env (ZENML_USERNAME/ZENML_PASSWORD)"
-        print_warning "Attempting connection without authentication..."
-    fi
+        print_warning "No ZENML_API_KEY found in .env"
+        print_warning "Attempting basic connection (may require interactive login)..."
 
-    # Execute connection
-    eval $CONNECT_CMD || {
-        print_warning "Failed to connect, but will proceed (may auto-connect on first pipeline run)"
-    }
+        # Fallback to basic login (will prompt for credentials if needed)
+        uv run zenml login "${ZENML_URL}" --no-verify-ssl || {
+            print_warning "Failed to connect, but will proceed (may auto-connect on first pipeline run)"
+        }
+    fi
 
     print_success "ZenML client configured for remote server at ${ZENML_URL}"
 }
