@@ -105,7 +105,16 @@ check_system_tools() {
 }
 
 load_env() {
-    if [ -f .env ]; then set -a; source .env; set +a; fi
+    # Load environment variables (prioritize .env.podrun for RunPod environment)
+    if [ -f .env.podrun ]; then
+        print_info "Loading .env.podrun (RunPod configuration)"
+        set -a; source .env.podrun; set +a
+    elif [ -f .env ]; then
+        print_info "Loading .env"
+        set -a; source .env; set +a
+    else
+        print_warning "No .env file found"
+    fi
 }
 
 check_uv() {
@@ -379,6 +388,9 @@ main() {
     check_uv
     create_directories
     setup_env_file
+
+    # Load environment variables EARLY (before init_zenml needs ZENML_MODE)
+    load_env
 
     # Setup SSH Tunnel BEFORE syncing deps
     setup_tunnel
