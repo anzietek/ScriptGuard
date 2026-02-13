@@ -310,7 +310,12 @@ init_zenml_remote() {
     # Use zenml login with API key (recommended for non-interactive environments)
     if [ ! -z "${ZENML_API_KEY:-}" ]; then
         print_info "Using ZenML service account API key authentication"
-        uv run zenml login "${ZENML_URL}" --api-key "${ZENML_API_KEY}" --no-verify-ssl || {
+
+        # Set API key as environment variable (zenml login reads it automatically)
+        export ZENML_API_KEY="${ZENML_API_KEY}"
+
+        # Connect to server (API key is picked up from environment)
+        uv run zenml login "${ZENML_URL}" --no-verify-ssl || {
             print_warning "API key authentication failed, but will proceed"
         }
     else
