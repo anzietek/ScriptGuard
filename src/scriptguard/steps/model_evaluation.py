@@ -186,7 +186,8 @@ def evaluate_model(
     rag_enable_reranking = fewshot_config.get("enable_reranking", True)
 
     # Legacy fallback for max_code_length
-    max_code_length = rag_max_code_length or eval_config.get("eval_max_code_length", 500)
+    # Default should match training preprocess_max_chars to avoid train/eval mismatch
+    max_code_length = rag_max_code_length or eval_config.get("eval_max_code_length", 6000)
 
     logger.info(f"Few-Shot RAG Configuration:")
     logger.info(f"  Enabled: {use_fewshot_rag}")
@@ -308,6 +309,10 @@ def evaluate_model(
     format_errors = 0
     unclear_predictions = []
 
+    # Pre-compute eval tokenizer max length from config (match training)
+    eval_max_length = training_config.get("tokenizer_max_length", 2048)
+    logger.info(f"Eval tokenizer max_length: {eval_max_length}")
+
     logger.info("Running inference on test set...")
 
     for i, sample in enumerate(test_dataset):
@@ -372,8 +377,8 @@ def evaluate_model(
             # Standard prompt without RAG
             prompt = format_inference_prompt(code=code, max_code_length=max_code_length)
 
-        # Tokenize
-        inputs = tokenizer(prompt, return_tensors="pt", truncation=True, max_length=512)
+        # Tokenize - use tokenizer_max_length from config to match training
+        inputs = tokenizer(prompt, return_tensors="pt", truncation=True, max_length=eval_max_length)
         # CRITICAL: Convert to model's device AND dtype to prevent dtype mismatch
         inputs = {k: v.to(device=model.device, dtype=model.dtype if v.dtype.is_floating_point else v.dtype)
                   for k, v in inputs.items()}
