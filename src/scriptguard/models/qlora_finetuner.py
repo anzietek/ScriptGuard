@@ -133,7 +133,7 @@ class WeightedLossTrainer(UnslothTrainer):
         for i in range(input_ids.shape[0]):
             # Decode the text for this sample
             try:
-                text = self.tokenizer.decode(input_ids[i], skip_special_tokens=True)
+                text = self.processing_class.decode(input_ids[i], skip_special_tokens=True)
 
                 # Determine class based on prompt content
                 # Training prompts have format: "... classified as: MALICIOUS" or "... classified as: BENIGN"
@@ -352,7 +352,7 @@ class QLoRAFineTuner:
             # Use custom trainer with class weights
             trainer = WeightedLossTrainer(
                 model=self.model,
-                tokenizer=self.tokenizer,
+                processing_class=self.tokenizer,
                 args=training_args,
                 train_dataset=tokenized_dataset,
                 eval_dataset=tokenized_eval_dataset,
@@ -364,7 +364,7 @@ class QLoRAFineTuner:
             # Use standard trainer
             trainer = UnslothTrainer(
                 model=self.model,
-                tokenizer=self.tokenizer,  # CRITICAL: Trainer needs tokenizer reference!
+                processing_class=self.tokenizer,  # Trainer needs processing_class reference!
                 args=training_args,
                 train_dataset=tokenized_dataset,
                 eval_dataset=tokenized_eval_dataset,
