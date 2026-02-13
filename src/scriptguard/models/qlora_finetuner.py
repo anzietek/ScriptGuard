@@ -113,14 +113,11 @@ class WeightedLossTrainer(UnslothTrainer):
             # No weights configured, use default loss
             return super().compute_loss(model, inputs, return_outputs=return_outputs, num_items_in_batch=num_items_in_batch)
 
-        # Compute standard loss first
+        # Compute standard loss first (always request outputs for proper unpacking)
         loss_output = super().compute_loss(model, inputs, return_outputs=True, num_items_in_batch=num_items_in_batch)
 
-        if return_outputs:
-            base_loss, outputs = loss_output
-        else:
-            base_loss = loss_output
-            outputs = None
+        # Always unpack since parent was called with return_outputs=True
+        base_loss, outputs = loss_output
 
         # Decode input_ids to determine sample class
         # The prompt format is: "... classified as: MALICIOUS" or "... classified as: BENIGN"
@@ -154,6 +151,10 @@ class WeightedLossTrainer(UnslothTrainer):
                 # Fallback on decode error
                 logger.warning(f"Failed to decode sample {i} for class weighting: {e}")
                 sample_weights.append(1.0)
+
+        # Ensure base_loss is a tensor (defensive check)
+        if isinstance(base_loss, tuple):
+            base_loss = base_loss[0]
 
         # Convert to tensor and compute weighted loss
         weights_tensor = torch.tensor(sample_weights, dtype=base_loss.dtype, device=base_loss.device)
