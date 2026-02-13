@@ -99,8 +99,8 @@ services:
     image: zenmldocker/zenml-server:latest
     container_name: scriptguard-zenml
     environment:
-      # PostgreSQL backend for production reliability
-      - ZENML_STORE_URL=postgresql://${POSTGRES_USER:-scriptguard}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-scriptguard}
+      # SQLite backend - simpler and works out-of-the-box
+      - ZENML_STORE_URL=sqlite:////zenml/.zenconfig/zenml.db
       - ZENML_DEFAULT_PROJECT_NAME=default
       - ZENML_SERVER_AUTO_ACTIVATE=true
       - ZENML_LOGGING_VERBOSITY=INFO
@@ -109,9 +109,6 @@ services:
       - "127.0.0.1:8237:8080"
     volumes:
       - zenml_data:/zenml/.zenconfig
-    depends_on:
-      postgres:
-        condition: service_healthy
     healthcheck:
       test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:8080/health || exit 1"]
       interval: 30s

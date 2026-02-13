@@ -295,9 +295,28 @@ init_zenml_remote() {
         fi
     done
 
-    # Connect to remote server
+    # Connect to remote server with authentication
     print_info "Connecting to remote ZenML server..."
-    uv run zenml connect --url "${ZENML_URL}" --no-verify-ssl || {
+
+    # Build connection command with optional authentication
+    CONNECT_CMD="uv run zenml connect --url \"${ZENML_URL}\" --no-verify-ssl"
+
+    # Add authentication if credentials are provided
+    if [ ! -z "${ZENML_USERNAME:-}" ]; then
+        print_info "Using ZenML authentication (user: ${ZENML_USERNAME})"
+        CONNECT_CMD="$CONNECT_CMD --username \"${ZENML_USERNAME}\""
+
+        # Add password if provided (may be empty for default user)
+        if [ ! -z "${ZENML_PASSWORD:-}" ]; then
+            CONNECT_CMD="$CONNECT_CMD --password \"${ZENML_PASSWORD}\""
+        fi
+    else
+        print_warning "No ZenML credentials found in .env (ZENML_USERNAME/ZENML_PASSWORD)"
+        print_warning "Attempting connection without authentication..."
+    fi
+
+    # Execute connection
+    eval $CONNECT_CMD || {
         print_warning "Failed to connect, but will proceed (may auto-connect on first pipeline run)"
     }
 

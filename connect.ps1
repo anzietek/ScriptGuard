@@ -12,7 +12,8 @@ Write-Host "Auth:   Private Key ($KeyPath)"
 Write-Host ""
 Write-Host "Opening local ports:"
 Write-Host " [Postgres] 127.0.0.1:5432 -> Server:5432" -ForegroundColor Green
-Write-Host " [Qdrant]   127.0.0.1:6333 -> Server:6333" -ForegroundColor Green
+Write-Host " [Qdrant]   127.0.0.1:6333 -> Server:6333 (HTTP)" -ForegroundColor Green
+Write-Host " [Qdrant]   127.0.0.1:6334 -> Server:6334 (gRPC)" -ForegroundColor Green
 Write-Host " [PgAdmin]  127.0.0.1:5050 -> Server:5050" -ForegroundColor Green
 Write-Host " [ZenML]    127.0.0.1:8237 -> Server:8237" -ForegroundColor Green
 Write-Host ""
@@ -29,7 +30,7 @@ if (-Not (Test-Path $KeyPath)) {
 
 # Start SSH with Key
 # -i specifies the identity file (key)
-ssh -i $KeyPath -N -L 5432:127.0.0.1:5432 -L 6333:127.0.0.1:6333 -L 5050:127.0.0.1:5050 -L 8237:127.0.0.1:8237 $User@$ServerIP
+ssh -i $KeyPath -N -L 5432:127.0.0.1:5432 -L 6333:127.0.0.1:6333 -L 6334:127.0.0.1:6334 -L 5050:127.0.0.1:5050 -L 8237:127.0.0.1:8237 $User@$ServerIP
 
 # Prevent window from closing immediately on error
 Write-Host ""
