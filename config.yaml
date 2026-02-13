@@ -314,9 +314,10 @@ training:
   model_id: "bigcode/starcoder2-3b"
   output_dir: ${MODEL_OUTPUT_DIR:-/workspace/models/scriptguard-model}
 
-  # Preprocessing - increased from 4096 to ~16K to utilize StarCoder2's 4096 token context
-  # (4096 tokens ≈ 14-16K chars for code, using safety margin of 0.95)
-  preprocess_max_chars: 16000
+  # Preprocessing - MUST be aligned with tokenizer_max_length to prevent label truncation
+  # 2048 tokens ≈ 7000 chars for code, minus ~100 chars prompt overhead = ~6500 safe limit
+  # Previously 16000 which caused silent label loss at tokenizer level
+  preprocess_max_chars: 6500
   truncation_strategy: "smart"  # Options: "simple" (cut at max_chars) or "smart" (preserve critical sections)
 
   # Tokenizer max length - MUST be large enough to fit full prompt + label
@@ -345,13 +346,13 @@ training:
   lora_dropout: 0.15
   target_modules: ["q_proj", "v_proj", "k_proj", "o_proj", "gate_proj", "up_proj", "down_proj"]
 
-  # Duration
-  num_epochs: 3
+  # Duration - increased from 3, model now actually learns classification with fixed tokenizer
+  num_epochs: 5
 
   # Anti-overfitting measures
   learning_rate: 4e-5
   weight_decay: 0.15
-  label_smoothing_factor: 0.1 # Helps model distinguish "malicious-like" from "actual malware"
+  label_smoothing_factor: 0.05 # Reduced from 0.1 - too aggressive for binary classification via causal LM
   warmup_steps: 100
   lr_scheduler_type: "cosine"
   optim: "paged_adamw_8bit"
@@ -364,7 +365,7 @@ training:
   load_best_model_at_end: true
 
   early_stopping: true
-  early_stopping_patience: 2
+  early_stopping_patience: 3  # Increased from 2 - gives model more time to converge
   metric_for_best_model: "eval_loss"
 
   bf16: true
