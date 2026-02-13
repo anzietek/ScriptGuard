@@ -304,31 +304,25 @@ init_zenml_remote() {
         fi
     done
 
-    # Connect to remote server with modern authentication
-    print_info "Connecting to remote ZenML server..."
+    # Configure ZenML client via environment variables (NO zenml login needed)
+    print_info "Configuring ZenML client for automatic authentication..."
 
-    # Use zenml login with API key (recommended for non-interactive environments)
-    if [ ! -z "${ZENML_API_KEY:-}" ]; then
-        print_info "Using ZenML service account API key authentication"
-
-        # Set API key as environment variable (zenml login reads it automatically)
-        export ZENML_API_KEY="${ZENML_API_KEY}"
-
-        # Connect to server (API key is picked up from environment)
-        uv run zenml login "${ZENML_URL}" --no-verify-ssl || {
-            print_warning "API key authentication failed, but will proceed"
-        }
-    else
-        print_warning "No ZENML_API_KEY found in .env"
-        print_warning "Attempting basic connection (may require interactive login)..."
-
-        # Fallback to basic login (will prompt for credentials if needed)
-        uv run zenml login "${ZENML_URL}" --no-verify-ssl || {
-            print_warning "Failed to connect, but will proceed (may auto-connect on first pipeline run)"
-        }
+    # Verify API key is available
+    if [ -z "${ZENML_API_KEY:-}" ]; then
+        print_error "ZENML_API_KEY not found in environment"
+        print_error "Please ensure .env.podrun contains valid ZENML_API_KEY"
+        return 1
     fi
 
+    # Export environment variables that ZenML Client reads
+    export ZENML_STORE_URL="${ZENML_URL}"
+    export ZENML_STORE_API_KEY="${ZENML_API_KEY}"
+
+    # Alternative variable names (ZenML supports both)
+    export ZENML_SERVER_URL="${ZENML_URL}"
+
     print_success "ZenML client configured for remote server at ${ZENML_URL}"
+    print_info "Authentication will use API key from environment (no browser needed)"
 }
 
 configure_zenml_project() {
