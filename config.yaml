@@ -342,7 +342,7 @@ training:
   target_modules: ["q_proj", "v_proj", "k_proj", "o_proj", "gate_proj", "up_proj", "down_proj"]
 
   # Duration
-  num_epochs: 1
+  num_epochs: 3
 
   # Anti-overfitting measures
   learning_rate: 4e-5
@@ -356,7 +356,7 @@ training:
   evaluation_strategy: "steps"
   eval_steps: 50
   save_steps: 50
-  test_split_size: 0.2
+  test_split_size: 0.1
   load_best_model_at_end: true
 
   early_stopping: true
