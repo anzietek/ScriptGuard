@@ -41,6 +41,7 @@ class PipelineConfig(BaseModel):
 class APIKeysConfig(BaseModel):
     """API keys configuration"""
     github_token: Optional[str] = None
+    vx_github_token: Optional[str] = None
     nvd_api_key: Optional[str] = None
     malwarebazaar_api_key: Optional[str] = None
     huggingface_token: Optional[str] = None

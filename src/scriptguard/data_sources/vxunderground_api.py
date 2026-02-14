@@ -22,15 +22,36 @@ class VXUndergroundDataSource:
         Initialize VX-Underground data source.
 
         Args:
-            github_token: GitHub token for higher rate limits
-            config: Configuration dictionary with retry/timeout settings
+            github_token: Default GitHub token (fallback)
+            config: Configuration dictionary potentially containing specific vx_github_token
         """
-        self.github_token = github_token
         self.config = config or {}
+
+        # TOKEN PRIORITY LOGIC:
+        # 1. Check if a dedicated token for VX (vx_github_token) exists in config
+        # 2. If not, use the general token passed in arguments (github_token)
+
+        api_keys = self.config.get("api_keys", {})
+        specific_token = api_keys.get("vx_github_token")
+
+        # Select token: dedicated > general argument > None
+        self.github_token = specific_token if specific_token else github_token
+
         self.headers = {"Accept": "application/vnd.github+json"}
-        if github_token:
-            self.headers["Authorization"] = f"Bearer {github_token}"
-            logger.info("VX-Underground: GitHub token configured")
+
+        if self.github_token:
+            # Mask token in logs for security
+            masked_token = f"{self.github_token[:4]}...{self.github_token[-4:]}" if len(
+                self.github_token) > 8 else "***"
+
+            if specific_token:
+                logger.info(f"VX-Underground: Using DEDICATED GitHub token ({masked_token})")
+            else:
+                logger.info(f"VX-Underground: Using SHARED GitHub token ({masked_token})")
+
+            self.headers["Authorization"] = f"Bearer {self.github_token}"
+        else:
+            logger.warning("VX-Underground: No GitHub token provided! Rate limits will be very low (60/hr).")
 
         # Read configuration with fallback defaults
         source_config = self.config.get("data_sources", {}).get("vxunderground", {})

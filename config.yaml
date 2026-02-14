@@ -18,6 +18,7 @@ pipeline:
 # ============================================================================
 api_keys:
   github_token: ${GITHUB_API_TOKEN}
+  vx_github_token: ${VXUNDERGROUND_GITHUB_TOKEN}
   nvd_api_key: ${NVD_API_KEY}
   malwarebazaar_api_key: ${MALWAREBAZAAR_API_KEY}
   huggingface_token: ${HUGGINGFACE_TOKEN}
