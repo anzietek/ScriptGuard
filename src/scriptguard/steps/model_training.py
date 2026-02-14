@@ -24,7 +24,48 @@ def train_model(
         Path to trained adapter
     """
     logger.info(f"Starting QLoRA fine-tuning for model: {model_id}")
+    # --- FIX START: FORCE BALANCE (CORRECTED) ---
+    # Check balance
+    labels = dataset['label']
 
+    # FIX: Preprocessor returns strings "malicious"/"benign", not integers 0/1.
+    # Handling both cases for safety.
+    malicious_indices = [
+        i for i, label in enumerate(labels)
+        if label == "malicious" or label == 1
+    ]
+    benign_indices = [
+        i for i, label in enumerate(labels)
+        if label == "benign" or label == 0
+    ]
+
+    logger.info(f"Indices found: {len(malicious_indices)} malicious, {len(benign_indices)} benign")
+
+    label_counts = {"malicious": len(malicious_indices), "benign": len(benign_indices)}
+    logger.info(f"Original Training Distribution: {label_counts}")
+
+    # Calculate minor class count
+    min_count = min(len(malicious_indices), len(benign_indices))
+    major_count = max(len(malicious_indices), len(benign_indices))
+
+    # If imbalance is severe (e.g. > 1.5 ratio), force undersampling
+    if min_count > 0 and major_count > min_count * 1.5:
+        logger.warning(f"Severe class imbalance detected. Forcing undersampling to {min_count} samples per class.")
+
+        import random
+        random.seed(42)
+
+        # Randomly select min_count from each
+        malicious_sample = random.sample(malicious_indices, min(len(malicious_indices), min_count))
+        benign_sample = random.sample(benign_indices, min(len(benign_indices), min_count))
+
+        balanced_indices = malicious_sample + benign_sample
+        random.shuffle(balanced_indices)
+
+        dataset = dataset.select(balanced_indices)
+        logger.info(f"Balanced Dataset Size: {len(dataset)}")
+    elif min_count == 0:
+        logger.error("CRITICAL: One class has 0 samples! Check data validation/preprocessing logic.")
     if eval_dataset:
         logger.info(f"Evaluation dataset provided with {len(eval_dataset)} samples")
     else:

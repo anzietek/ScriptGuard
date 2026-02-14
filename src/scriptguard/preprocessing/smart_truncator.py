@@ -110,97 +110,88 @@ def extract_main_entry(code: str) -> str:
 
 def smart_truncate(code: str, max_chars: int) -> str:
     """
-    Intelligently truncate code while preserving critical sections.
-
-    Strategy:
-    1. If code fits, return as-is
-    2. Extract and prioritize:
-       - Imports (top of file context)
-       - Security-related functions
-       - Main entry point
-    3. Reconstruct within char limit
-
-    Args:
-        code: Source code to truncate
-        max_chars: Maximum character limit
-
-    Returns:
-        Truncated code with preserved critical sections
+    Intelligently truncate code preserving HEAD (imports), TAIL (payloads), and SECURITY keywords.
     """
     if len(code) <= max_chars:
         return code
 
-    logger.debug(f"Smart truncating code from {len(code)} to {max_chars} chars")
+    # Zwiększamy bufor bezpieczeństwa dla promptu
+    effective_max = max_chars
 
     try:
-        # Extract critical sections
-        imports = extract_imports(code)
-        security_funcs = extract_security_relevant_functions(code, SECURITY_KEYWORDS)
-        main_entry = extract_main_entry(code)
+        # Strategy:
+        # 1. Always keep the last 25% of budget for the TAIL (common place for payloads)
+        # 2. Keep Imports (Head)
+        # 3. Keep Security Keywords
+        # 4. Fill the rest with body from top
 
-        # Build truncated version with priorities
+        tail_size = int(effective_max * 0.3)  # Increased to 30% for tail
+        head_budget = effective_max - tail_size
+
+        # Extract components
+        tail_code = code[-tail_size:]
+        remaining_code = code[:-tail_size]  # Work with the rest
+
+        imports = extract_imports(remaining_code)
+        security_funcs = extract_security_relevant_functions(remaining_code, SECURITY_KEYWORDS)
+
         sections = []
         current_size = 0
-        budget = max_chars
 
-        # 1. Always include imports (usually small)
-        if imports and len(imports) < budget * 0.2:  # Max 20% for imports
+        # A. Add Imports (Context)
+        if imports and len(imports) < head_budget * 0.3:
             sections.append(("# Imports", imports))
-            current_size += len(imports) + 15  # +15 for header
+            current_size += len(imports)
 
-        # 2. Include security-relevant functions
+        # B. Add Security Functions (Malicious Logic)
         if security_funcs:
-            sections.append(("# Security-relevant functions", ""))
-            current_size += 30
-
             for func_code, _, _ in security_funcs:
-                if current_size + len(func_code) < budget * 0.6:  # Max 60% for functions
-                    sections.append(("", func_code))
-                    current_size += len(func_code) + 2  # +2 for newlines
+                if current_size + len(func_code) < head_budget * 0.7:
+                    sections.append(("# Security Function", func_code))
+                    current_size += len(func_code)
                 else:
                     break
 
-        # 3. Include main entry if space allows
-        if main_entry and current_size + len(main_entry) < budget * 0.8:  # Max 80% total
-            sections.append(("# Main entry point", main_entry))
-            current_size += len(main_entry) + 20
-
-        # 4. Fill remaining space with beginning of code if we have room
-        if current_size < budget * 0.5:  # We haven't used much space
-            remaining = budget - current_size - 50  # Reserve space for truncation marker
-            if remaining > 100:
-                sections.insert(1, ("# Beginning of code", code[:remaining]))
+        # C. Add Main/Body if space allows (Context)
+        remaining_space = head_budget - current_size - 100  # Buffer
+        if remaining_space > 200:
+            # Take from the start of the remaining code (skipping what might be imports if duplicated)
+            body_sample = remaining_code[:remaining_space]
+            sections.append(("# Code Body", body_sample))
 
         # Reconstruct
         reconstructed = []
         for header, content in sections:
-            if header:
-                reconstructed.append(header)
-            if content:
-                reconstructed.append(content)
-
-        result = '\n\n'.join(reconstructed)
+            reconstructed.append(header)
+            reconstructed.append(content)
 
         # Add truncation marker
-        if len(result) < len(code):
-            result += "\n\n# ... [Code truncated by smart truncation] ..."
+        reconstructed.append("\n# ... [TRUNCATED] ...\n")
 
-        # Final safety check
+        # Add Tail (CRITICAL for Malware)
+        reconstructed.append("# End of file (Payloads often here)")
+        reconstructed.append(tail_code)
+
+        result = '\n'.join(reconstructed)
+
+        # Hard safety cut just in case logic overflowed
         if len(result) > max_chars:
-            result = result[:max_chars - 50] + "\n\n# ... [Truncated] ..."
+            return simple_truncate(code, max_chars)  # Fallback to Head+Tail
 
-        logger.debug(f"Smart truncation: {len(code)} -> {len(result)} chars")
         return result
 
     except Exception as e:
-        logger.warning(f"Smart truncation failed: {e}. Falling back to simple truncation.")
-        # Fallback: simple head + tail
-        half = max_chars // 2
-        return code[:half] + "\n\n# ... [Truncated] ...\n\n" + code[-half:]
+        logger.warning(f"Smart truncation failed: {e}. Using robust fallback.")
+        return simple_truncate(code, max_chars)
 
 
 def simple_truncate(code: str, max_chars: int) -> str:
-    """Simple truncation: just take first N characters."""
+    """Robust truncation: HEAD + TAIL strategy (Vital for malware detection)."""
     if len(code) <= max_chars:
         return code
-    return code[:max_chars]
+
+    keep_part = (max_chars // 2) - 50  # Reserve space for marker
+    head = code[:keep_part]
+    tail = code[-keep_part:]
+
+    return f"{head}\n\n# ... [Truncated {len(code) - max_chars} chars] ...\n\n{tail}"

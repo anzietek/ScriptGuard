@@ -2,7 +2,7 @@
 # PIPELINE CONFIGURATION
 # ============================================================================
 pipeline:
-  enable_cache: true
+  enable_cache: false
   cache_ttl_hours: 24
   cache_key_includes_version: true
   cache_invalidation_on_config_change: true
