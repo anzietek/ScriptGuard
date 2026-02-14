@@ -151,12 +151,15 @@ data_sources:
     max_samples: 1000
 
   huggingface:
-    enabled: false
-    timeout: 120
+    enabled: true
+    timeout: 180
     max_retries: 3
     retry_backoff_factor: 2.0
-    datasets: ["codeparrot/github-code"]
-    max_samples: 20000
+    datasets:
+      - "flytech/python-codes-25k"
+      - "mbpp"
+      - "iamtarun/python_code_instructions_18k_alpaca"
+    max_samples: 5000
 
   cve_feeds:
     enabled: true
