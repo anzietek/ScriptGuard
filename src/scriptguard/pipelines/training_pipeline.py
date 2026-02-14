@@ -8,7 +8,8 @@ from scriptguard.steps.data_ingestion import (
     synthetic_data_generation
 )
 from scriptguard.steps.advanced_ingestion import advanced_data_ingestion as _advanced_data_ingestion
-from scriptguard.steps.data_validation import validate_samples as _validate_samples, filter_by_quality as _filter_by_quality
+from scriptguard.steps.data_validation import validate_samples as _validate_samples, \
+    filter_by_quality as _filter_by_quality
 from scriptguard.steps.advanced_augmentation import (
     augment_malicious_samples as _augment_malicious_samples,
     balance_dataset
@@ -23,6 +24,8 @@ from scriptguard.steps.model_training import train_model as _train_model
 from scriptguard.steps.model_evaluation import evaluate_model
 from scriptguard.steps.vectorize_samples import vectorize_samples
 from scriptguard.materializers.dataset_materializer import HuggingFaceDatasetMaterializer
+from scriptguard.utils.logger import logger
+
 
 @step
 def split_train_test(dataset: Dataset, test_size: float = 0.1) -> Tuple[Dataset, Dataset]:
@@ -58,7 +61,6 @@ def split_raw_data(
         - raw_test_dataset: HF Dataset for evaluation (not preprocessed)
     """
     from datasets import Dataset as HFDataset
-    from scriptguard.utils.logger import logger
 
     logger.info(f"Splitting {len(data)} samples into train/test (test_size={test_size})")
 
@@ -162,7 +164,6 @@ def advanced_training_pipeline(
 
     if augment_after_split:
         # RECOMMENDED: Split BEFORE augmentation to prevent data leakage
-        from scriptguard.utils.logger import logger
         logger.info("Using augment_after_split=True (prevents data leakage)")
 
         train_data_list, test_data_list, raw_test_data = split_raw_data(
@@ -172,7 +173,6 @@ def advanced_training_pipeline(
         data_to_augment = train_data_list
     else:
         # LEGACY: Augment before split (NOT RECOMMENDED - risk of data leakage)
-        from scriptguard.utils.logger import logger
         logger.warning("Using augment_after_split=False - this may cause data leakage!")
         data_to_augment = featured_data
 
@@ -199,7 +199,7 @@ def advanced_training_pipeline(
             max_length=100000,
             skip_syntax_errors=True  # Strictly discard broken variants
         )
-        logger.info(f"Augmented data valid count: {len(augmented_data)}")
+        # -----------------------------------------------------
     else:
         augmented_data = data_to_augment
 
@@ -208,7 +208,6 @@ def advanced_training_pipeline(
     # Training will use balanced subset, but RAG retrieves from full dataset
 
     # Step 7: Vectorize ALL augmented data to Qdrant (BEFORE balancing)
-    from scriptguard.utils.logger import logger
     logger.info("Vectorizing augmented samples to Qdrant (BEFORE balancing)...")
 
     vectorization_result = vectorize_samples(
