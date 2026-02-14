@@ -22,15 +22,36 @@ class TheZooDataSource:
         Initialize TheZoo data source.
 
         Args:
-            github_token: GitHub token for higher rate limits
-            config: Configuration dictionary with retry/timeout settings
+            github_token: Default GitHub token (fallback)
+            config: Configuration dictionary potentially containing specific thezoo_github_token
         """
-        self.github_token = github_token
         self.config = config or {}
+
+        # TOKEN PRIORITY LOGIC:
+        # 1. Check if a dedicated token for TheZoo (thezoo_github_token) exists in config
+        # 2. If not, use the general token passed in arguments (github_token)
+
+        api_keys = self.config.get("api_keys", {})
+        specific_token = api_keys.get("thezoo_github_token")
+
+        # Select token: dedicated > general argument > None
+        self.github_token = specific_token if specific_token else github_token
+
         self.headers = {"Accept": "application/vnd.github+json"}
-        if github_token:
-            self.headers["Authorization"] = f"Bearer {github_token}"
-            logger.info("TheZoo: GitHub token configured")
+
+        if self.github_token:
+            # Mask token in logs for security
+            masked_token = f"{self.github_token[:4]}...{self.github_token[-4:]}" if len(
+                self.github_token) > 8 else "***"
+
+            if specific_token:
+                logger.info(f"TheZoo: Using DEDICATED GitHub token ({masked_token})")
+            else:
+                logger.info(f"TheZoo: Using SHARED GitHub token ({masked_token})")
+
+            self.headers["Authorization"] = f"Bearer {self.github_token}"
+        else:
+            logger.warning("TheZoo: No GitHub token provided! Rate limits will be very low (60/hr).")
 
         # Read configuration with fallback defaults
         source_config = self.config.get("data_sources", {}).get("thezoo", {})
