@@ -31,7 +31,7 @@ api_keys:
   connection_pool_size: 10
 
 # ============================================================================
-# DATA SOURCES CONFIGURATION - FIXED FOR 1:1 BALANCE & SPECIFICITY
+# DATA SOURCES CONFIGURATION - OPTIMIZED FOR PYTHON MALWARE DETECTION
 # ============================================================================
 data_sources:
   github:
@@ -43,96 +43,75 @@ data_sources:
     retry_backoff_factor: 2.0
 
     malicious_keywords:
+      # Classic Threats
       - "reverse-shell python"
       - "keylogger python"
       - "ransomware python"
       - "backdoor python"
       - "credential stealer python"
       - "port scanner python"
+      # Modern Threats (Stealers/RATs)
+      - "discord token stealer python"
+      - "telegram rat python"
+      - "browser password stealer python"
+      - "cookie grabber python"
+      - "wifi password stealer python"
+      # Techniques
+      - "process injection python"
+      - "obfuscated payload python"
+      - "uac bypass python"
       - "exploit python"
       - "payload python"
-      - "data exfiltration python"
-      - "obfuscated malware python"
 
     benign_repos:
       # Administrative & DevOps (Critical for reducing False Positives)
       - "ansible/ansible"
-      - "ansible/ansible-runner"
       - "saltstack/salt"
       - "fabric/fabric"
-      - "paramiko/paramiko"
+      - "paramiko/paramiko"           # SSH usage (critical context)
+      - "giampaolo/psutil"            # Process management (critical context)
       - "pyinstaller/pyinstaller"
-      - "pallets/click"               # CLI tools
-      - "requests/requests-oauthlib"  # OAuth (uses network calls)
-      - "psf/black"                   # Code formatter
-      - "pytest-dev/pytest"           # Testing framework
-      - "celery/celery"               # Task queue (network operations)
+      - "pallets/click"
+      - "celery/celery"
 
       # Core Frameworks & Web
       - "django/django"
       - "pallets/flask"
-      - "psf/requests"
       - "tiangolo/fastapi"
+      - "encode/httpx"                # HTTP client
+      - "psf/requests"
       - "aio-libs/aiohttp"
-      - "encode/httpx"                # Modern HTTP client
-      - "grpc/grpc"                   # gRPC framework
-      - "tornadoweb/tornado"          # Async web framework
+      - "tornadoweb/tornado"
 
       # Security & Crypto (Proper legal patterns)
       - "pyca/cryptography"
-      - "certifi/python-certifi"
-      - "certbot/certbot"             # Let's Encrypt client (security tool)
+      - "certbot/certbot"             # Security tool
+      - "sqlmapproject/sqlmap"        # Offensive but legitimate tool (Hard Negative)
+      - "nmap/nmap"
 
       # Data Processing & Cloud
       - "scikit-learn/scikit-learn"
       - "pandas-dev/pandas"
+      - "numpy/numpy"
       - "pytorch/pytorch"
-      - "boto/boto3"                  # AWS SDK
-      - "Azure/azure-cli"             # Azure command-line tools
-      - "aws/aws-cli"                 # AWS CLI
-      - "docker/docker-py"            # Docker SDK
-      - "kubernetes-client/python"    # Kubernetes client
+      - "boto/boto3"
+      - "docker/docker-py"
+      - "kubernetes-client/python"
 
-      # System & Monitoring Tools
-      - "giampaolo/psutil"            # Process and system utilities
-      - "fabric/patchwork"            # System administration tasks
-      - "supervisor/supervisor"       # Process control system
+      # Web Scraping & Automation
+      - "scrapy/scrapy"
+      - "SeleniumHQ/selenium"
 
-      # Data Science & Workflow
-      - "apache/airflow"              # Workflow management platform
-      - "jupyter/notebook"            # Jupyter notebooks
-      - "plotly/plotly.py"            # Interactive graphing library
-      - "matplotlib/matplotlib"       # Plotting library
-      - "ipython/ipython"             # Enhanced Python shell
-
-      # Web Scraping & Automation (legitimate tools that may look suspicious)
-      - "scrapy/scrapy"               # Web scraping framework
-      - "SeleniumHQ/selenium"         # Browser automation
-      - "psf/requests-html"           # HTML parsing for requests
-      - "cobrateam/splinter"          # Browser automation tool
-
-      # Testing & Quality Assurance
-      - "robotframework/robotframework"  # Test automation framework
-      - "locustio/locust"             # Load testing tool
-      - "pytest-dev/pytest-xdist"     # Distributed testing
-      - "tox-dev/tox"                 # Test environment management
-      - "PyCQA/pylint"                # Code analysis tool
-
-      # Networking & Security Tools
-      - "certifi/python-certifi"      # SSL certificates
-      - "pypa/pip"                    # Package installer
-      - "pypa/setuptools"             # Package development
-      - "pypa/virtualenv"             # Virtual environments
-
-    max_samples_per_keyword: 1000  # Increased from 600
-    max_files_per_repo: 1000        # Increased from 600
+    max_samples_per_keyword: 1000
+    max_files_per_repo: 800
 
   malwarebazaar:
     enabled: true
     timeout: 60
     max_retries: 3
     retry_backoff_factor: 2.0
-    tags: ["python", "script", "ransomware", "backdoor", "stealer"]
+    # Added modern tags
+    tags: ["python", "script", "ransomware", "backdoor", "stealer", "rat", "trojan"]
     max_samples: 2000
 
   vxunderground:
@@ -140,6 +119,7 @@ data_sources:
     timeout: 60
     max_retries: 3
     retry_backoff_factor: 2.0
+    # STRICT: Only .py files to match validation logic
     script_types: [".py"]
     max_samples: 2000
 
@@ -148,6 +128,7 @@ data_sources:
     timeout: 60
     max_retries: 3
     retry_backoff_factor: 2.0
+    # STRICT: Only .py files
     script_types: [".py"]
     max_samples: 1000
 
@@ -156,14 +137,17 @@ data_sources:
     timeout: 180
     max_retries: 3
     retry_backoff_factor: 2.0
+    # High-quality datasets for correct Python logic (Benign)
     datasets:
-      - "flytech/python-codes-25k"
-      - "mbpp"
-      - "iamtarun/python_code_instructions_18k_alpaca"
-    max_samples: 5000
+      - "flytech/python-codes-25k"          # Algorithmic/Educational
+      - "mbpp"                              # Mostly Basic Python Problems (Google)
+      - "iamtarun/python_code_instructions_18k_alpaca" # Instruction tuning
+    # Limited to prevent class imbalance (approx 1:1 or 1:2 with malware)
+    max_samples: 4000
 
+  # Disable CVE feeds for training (too much text noise, good only for RAG)
   cve_feeds:
-    enabled: true
+    enabled: false
     timeout: 45
     max_retries: 3
     retry_backoff_factor: 2.0
@@ -179,7 +163,8 @@ data_sources:
 
     malware_datasets:
       - naorm/malware-text-db
-      - rr4433/Powershell_Malware_Detection_Dataset
+      - iosifache/Malware-Detection
+      # Removed PowerShell dataset to maintain strict Python validation
       - pacificsun/Malware_10k
       - cw1521/ember2018-malware-v2
       - SubhadipPanda/Malware_Detection_System
@@ -187,16 +172,15 @@ data_sources:
     classification_datasets:
       - deepcode-ai/Malware-Prediction
       - PurCL/malware-top-100-labels
-      - PacificSun/microsoft_malware
 
   pypi:
     enabled: true
     timeout: 30
     max_retries: 3
     retry_backoff_factor: 2.0
-    top_packages: 1000         # Number of top PyPI packages to fetch
-    max_files_per_package: 50  # Max Python files per package
-    max_samples: 5000          # Maximum total samples to collect
+    top_packages: 500          # Reduced to avoid flooding with generic code
+    max_files_per_package: 20
+    max_samples: 2000
 
 # ============================================================================
 # DATABASE & VECTOR STORE CONFIGURATION
