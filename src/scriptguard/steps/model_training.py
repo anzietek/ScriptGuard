@@ -3,13 +3,15 @@ from zenml import step
 from datasets import Dataset
 from scriptguard.models.qlora_finetuner import QLoRAFineTuner
 from scriptguard.utils.logger import logger
+import random
+
 
 @step
 def train_model(
-    dataset: Dataset,
-    model_id: str = "bigcode/starcoder2-3b",
-    config: Dict[str, Any] = None,
-    eval_dataset: Optional[Dataset] = None
+        dataset: Dataset,
+        model_id: str = "bigcode/starcoder2-3b",
+        config: Dict[str, Any] = None,
+        eval_dataset: Optional[Dataset] = None
 ) -> str:
     """
     Fine-tunes the base model using QLoRA.
@@ -24,6 +26,7 @@ def train_model(
         Path to trained adapter
     """
     logger.info(f"Starting QLoRA fine-tuning for model: {model_id}")
+
     # --- FIX START: FORCE BALANCE (CORRECTED) ---
     # Check balance
     labels = dataset['label']
@@ -52,7 +55,6 @@ def train_model(
     if min_count > 0 and major_count > min_count * 1.5:
         logger.warning(f"Severe class imbalance detected. Forcing undersampling to {min_count} samples per class.")
 
-        import random
         random.seed(42)
 
         # Randomly select min_count from each
@@ -66,13 +68,34 @@ def train_model(
         logger.info(f"Balanced Dataset Size: {len(dataset)}")
     elif min_count == 0:
         logger.error("CRITICAL: One class has 0 samples! Check data validation/preprocessing logic.")
+
+    # --- NEW: DATA STARVATION GUARD ---
+    # Warn if the dataset is dangerously small for a 3B parameter model.
+    # LLMs need thousands of samples to generalize, not just memorize.
+    total_samples = len(dataset)
+    MIN_SAFE_SAMPLES = 1000
+    CRITICAL_SAMPLES = 500
+
+    if total_samples < CRITICAL_SAMPLES:
+        logger.warning("!" * 60)
+        logger.warning(f"CRITICAL DATA STARVATION: Only {total_samples} samples remaining!")
+        logger.warning("The model will likely OVERFIT (memorize) instead of learning.")
+        logger.warning("ACTION REQUIRED: Increase 'max_samples' in config.yaml or relax validation.")
+        logger.warning("!" * 60)
+    elif total_samples < MIN_SAFE_SAMPLES:
+        logger.warning(f"⚠️  Low data volume ({total_samples} samples). Training may be unstable.")
+    else:
+        logger.info(f"✓ Data volume looks healthy: {total_samples} samples.")
+    # ----------------------------------
+
     if eval_dataset:
         logger.info(f"Evaluation dataset provided with {len(eval_dataset)} samples")
     else:
         logger.info("No evaluation dataset provided - training without validation")
 
     finetuner = QLoRAFineTuner(model_id=model_id, config=config or {})
-    output_dir = config.get("training", {}).get("output_dir", "./model_checkpoints") if config else "./model_checkpoints"
+    output_dir = config.get("training", {}).get("output_dir",
+                                                "./model_checkpoints") if config else "./model_checkpoints"
     finetuner.train(dataset, eval_dataset=eval_dataset, output_dir=output_dir)
 
     return f"{output_dir}/final_adapter"
