@@ -27,12 +27,9 @@ if platform.system() == "Windows":
 
 def compute_class_weights(dataset: Dataset, method: str = "sqrt_inverse") -> dict:
     """
-    Compute class weights for imbalanced datasets.
-    Correctly detects labels from the prompts.py format (# Analysis: ...)
+    Compute class weights matching the prompts.py format.
     """
     labels = []
-
-    # Anchors from prompts.py
     MALICIOUS_ANCHOR = "classified as: MALICIOUS"
     BENIGN_ANCHOR = "classified as: BENIGN"
 
@@ -40,28 +37,23 @@ def compute_class_weights(dataset: Dataset, method: str = "sqrt_inverse") -> dic
 
     for item in dataset:
         text = item.get("text", "")
-
         if MALICIOUS_ANCHOR in text:
             labels.append("malicious")
         elif BENIGN_ANCHOR in text:
             labels.append("benign")
         else:
             # Fallback
-            if "Label: malicious" in text:
-                labels.append("malicious")
-            elif "Label: benign" in text:
-                labels.append("benign")
+            label = item.get("label")
+            if label:
+                labels.append(str(label).lower())
             else:
-                label = item.get("label", "unknown")
-                labels.append(str(label).lower() if label else "unknown")
+                labels.append("unknown")
 
     label_counts = Counter(labels)
     total = sum(label_counts.values())
-
-    logger.info(f"Class distribution for weighting: {dict(label_counts)}")
+    logger.info(f"Class distribution: {dict(label_counts)}")
 
     if "malicious" not in label_counts or "benign" not in label_counts:
-        logger.warning("⚠️  WARNING: Could not find both classes! Weights will be 1.0.")
         return {"malicious": 1.0, "benign": 1.0}
 
     weights = {}
@@ -74,44 +66,42 @@ def compute_class_weights(dataset: Dataset, method: str = "sqrt_inverse") -> dic
     else:
         raise ValueError(f"Unknown weight method: {method}")
 
+    # Normalize
     num_classes = len(weights)
     weight_sum = sum(weights.values())
     normalized_weights = {label: (w / weight_sum) * num_classes for label, w in weights.items()}
 
-    logger.info(f"Computed class weights ({method}): {normalized_weights}")
+    logger.info(f"Computed weights: {normalized_weights}")
     return normalized_weights
 
 
 class WeightedLossTrainer(UnslothTrainer):
-    """Custom trainer with weighted loss AND masked inputs awareness."""
-
+    """
+    Custom trainer that applies class weights AND supports masked inputs.
+    """
     def __init__(self, *args, class_weights=None, **kwargs):
         super().__init__(*args, **kwargs)
         self.class_weights = class_weights or {}
-        if self.class_weights:
-            logger.info(f"WeightedLossTrainer initialized with weights: {self.class_weights}")
 
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
         if not self.class_weights:
             return super().compute_loss(model, inputs, return_outputs=return_outputs, num_items_in_batch=num_items_in_batch)
 
-        # Standard loss calculation (which now respects the -100 masks from tokenization)
-        # return_outputs=True is required to get the loss tensor before reduction
+        # Standard loss calculation (respects -100 masks automatically)
         loss_output = super().compute_loss(model, inputs, return_outputs=True, num_items_in_batch=num_items_in_batch)
         base_loss, outputs = loss_output
-
         input_ids = inputs.get("input_ids")
+
         if input_ids is None or input_ids.shape[0] == 0:
             return (base_loss, outputs) if return_outputs else base_loss
 
         sample_weights = []
 
-        # Determine weight for each sample in batch
+        # Apply class weights based on label presence
         for i in range(input_ids.shape[0]):
             try:
-                # Optimized check: look at the end of the sequence for the label
-                # prompt format ends with: "... classified as: MALICIOUS"
-                end_ids = input_ids[i][-64:] # Check last 64 tokens
+                # Optimized: Check last 64 tokens for the label
+                end_ids = input_ids[i][-64:]
                 text = self.processing_class.decode(end_ids, skip_special_tokens=True)
 
                 if "MALICIOUS" in text:
@@ -119,30 +109,15 @@ class WeightedLossTrainer(UnslothTrainer):
                 elif "BENIGN" in text:
                     weight = self.class_weights.get('benign', 1.0)
                 else:
-                    # Fallback to full decode
-                    full_text = self.processing_class.decode(input_ids[i], skip_special_tokens=True)
-                    if "MALICIOUS" in full_text:
-                        weight = self.class_weights.get('malicious', 1.0)
-                    elif "BENIGN" in full_text:
-                        weight = self.class_weights.get('benign', 1.0)
-                    else:
-                        weight = 1.0
-
+                    weight = 1.0
                 sample_weights.append(weight)
-
-            except Exception:
+            except:
                 sample_weights.append(1.0)
 
         if isinstance(base_loss, tuple):
             base_loss = base_loss[0]
 
-        # Convert weights to tensor on correct device
         weights_tensor = torch.tensor(sample_weights, dtype=base_loss.dtype, device=base_loss.device)
-
-        # Apply weights. 
-        # Note: base_loss from HF is usually already a mean. 
-        # Ideally we'd weight before mean, but Unsloth/HF interface makes that hard without overriding the model.
-        # We multiply by the average weight of this batch to scale the gradient.
         avg_weight = weights_tensor.mean()
         weighted_loss = base_loss * avg_weight
 
@@ -157,14 +132,10 @@ class QLoRAFineTuner:
         self.tokenizer = None
 
     def train(self, dataset: Dataset, eval_dataset: Dataset = None, output_dir: str = "./results"):
-        logger.info(f"Tokenizing dataset with {len(dataset)} samples...")
-
         training_config = self.config.get("training", {})
         max_length = training_config.get("tokenizer_max_length", 2048)
-        logger.info(f"Using tokenizer_max_length: {max_length}")
 
-        logger.info("Loading model with unsloth optimization...")
-
+        logger.info("Loading model with unsloth...")
         import platform
         is_windows = platform.system() == "Windows"
         use_flash_attn = training_config.get("use_flash_attention_2", False)
@@ -186,7 +157,6 @@ class QLoRAFineTuner:
         if self.tokenizer.pad_token is None:
             self.tokenizer.pad_token = self.tokenizer.eos_token
 
-        logger.info("Adding LoRA adapters with unsloth...")
         self.model = FastLanguageModel.get_peft_model(
             self.model,
             r=int(training_config.get("lora_r", 16)),
@@ -197,16 +167,13 @@ class QLoRAFineTuner:
             use_gradient_checkpointing="unsloth",
             random_state=3407,
             use_rslora=False,
-            loftq_config=None,
         )
 
-        # =================================================================
-        # CRITICAL FIX: MASKING INPUTS (DATA COLLATOR SIMULATION)
-        # This ensures the loss is calculated ONLY on the label ("MALICIOUS"/"BENIGN"),
-        # not on the source code itself.
-        # =================================================================
-        def tokenize_function(examples):
-            # 1. Tokenize full text normally
+        # =========================================================
+        # CRITICAL FIX: DATA MASKING (Uczenie tylko na odpowiedziach)
+        # =========================================================
+        def tokenize_and_mask(examples):
+            # 1. Normalna tokenizacja
             model_inputs = self.tokenizer(
                 examples["text"],
                 truncation=True,
@@ -217,115 +184,82 @@ class QLoRAFineTuner:
             input_ids_list = model_inputs["input_ids"]
             labels_list = []
 
-            # The anchor string from prompts.py that separates Code from Label
-            # We want to mask everything BEFORE the label.
-            ANCHOR = "classified as: " 
+            # Fraza rozdzielająca kod od etykiety (zdefiniowana w prompts.py)
+            ANCHOR = "# Analysis: The script above is classified as:"
 
             for i, full_text in enumerate(examples["text"]):
                 input_ids = input_ids_list[i]
-                labels = list(input_ids) # Start with copy of inputs
+                labels = list(input_ids) # Kopia input_ids jako baza dla labels
 
-                # Check if anchor exists in this sample
+                # Szukamy miejsca podziału
                 if ANCHOR in full_text:
                     try:
-                        # Find the prompt part (everything before "classified as: ")
-                        prompt_text = full_text.split(ANCHOR)[0] + ANCHOR
+                        # Dzielimy tekst na: [PROMPT] + [ODPOWIEDZ]
+                        # Chcemy zamaskować [PROMPT]
+                        parts = full_text.split(ANCHOR)
+                        prompt_text = parts[0] + ANCHOR # Dołączamy anchor do promptu (model ma przewidzieć słowo PO nim)
 
-                        # Tokenize just the prompt to find how many tokens to mask
-                        # Note: We assume standard tokenization. 
+                        # Tokenizujemy sam prompt, żeby znać jego długość w tokenach
                         prompt_tokens = self.tokenizer(prompt_text, truncation=True, max_length=max_length, add_special_tokens=False)["input_ids"]
                         mask_len = len(prompt_tokens)
 
-                        # Apply Masking (-100 is ignored by CrossEntropyLoss)
-                        # We mask everything from 0 to mask_len.
-                        if mask_len < len(labels):
-                            for j in range(mask_len):
-                                labels[j] = -100
-                    except Exception as e:
-                        # Fallback: if splitting fails, just train on everything (noisy but safe)
-                        pass
+                        # Nakładamy maskę -100
+                        # Upewniamy się, że nie wyjdziemy poza zakres
+                        limit = min(mask_len, len(labels))
+                        for j in range(limit):
+                            labels[j] = -100
+
+                    except Exception:
+                        pass # W razie błędu uczymy się na całości (fail-safe)
 
                 labels_list.append(labels)
 
             model_inputs["labels"] = labels_list
             return model_inputs
 
-        tokenized_dataset = dataset.map(
-            tokenize_function,
-            batched=True,
-            remove_columns=dataset.column_names,
-            desc="Tokenizing training dataset (with masking)"
-        )
+        logger.info("Tokenizing and MASKING dataset...")
+        tokenized_dataset = dataset.map(tokenize_and_mask, batched=True, desc="Processing Train Data")
 
         tokenized_eval_dataset = None
         if eval_dataset:
-            tokenized_eval_dataset = eval_dataset.map(
-                tokenize_function,
-                batched=True,
-                remove_columns=eval_dataset.column_names,
-                desc="Tokenizing evaluation dataset"
-            )
+            tokenized_eval_dataset = eval_dataset.map(tokenize_and_mask, batched=True, desc="Processing Eval Data")
 
-        # ... (rest of configuration is standard) ...
-        use_fp16 = training_config.get("fp16", False)
-        use_bf16 = training_config.get("bf16", True)
-        if not torch.cuda.is_available(): use_bf16, use_fp16 = False, False
-
-        eval_strategy = training_config.get("evaluation_strategy", "no")
-        if tokenized_eval_dataset is not None and eval_strategy == "no":
-            eval_strategy = "steps"
-
+        # Standard Args
         training_args = TrainingArguments(
             output_dir=output_dir,
             per_device_train_batch_size=int(training_config.get("per_device_train_batch_size", 4)),
-            per_device_eval_batch_size=int(training_config.get("per_device_eval_batch_size", 4)),
             gradient_accumulation_steps=int(training_config.get("gradient_accumulation_steps", 4)),
             learning_rate=float(training_config.get("learning_rate", 2e-4)),
             weight_decay=float(training_config.get("weight_decay", 0.01)),
             warmup_steps=int(training_config.get("warmup_steps", 100)),
             num_train_epochs=int(training_config.get("num_epochs", 3)),
-            fp16=use_fp16,
-            bf16=use_bf16,
-            logging_steps=int(training_config.get("logging_steps", 10)),
-            eval_strategy=eval_strategy,
-            eval_steps=int(training_config.get("eval_steps", 100)) if eval_strategy != "no" else None,
+            fp16=not torch.cuda.is_bf16_supported(),
+            bf16=torch.cuda.is_bf16_supported(),
+            logging_steps=10,
             save_strategy="steps",
-            save_steps=int(training_config.get("save_steps", 500)),
-            report_to=training_config.get("report_to", ["wandb"]),
-            run_name=training_config.get("run_name", "scriptguard-training"),
+            save_steps=500,
+            report_to=["wandb"],
+            run_name="scriptguard-training",
         )
 
-        data_collator = DataCollatorForLanguageModeling(
-            tokenizer=self.tokenizer,
-            mlm=False,
-        )
-
+        trainer_cls = UnslothTrainer
         class_weights = None
-        use_class_weights = training_config.get("use_class_weights", False)
-        if use_class_weights:
-            method = training_config.get("class_weight_method", "sqrt_inverse")
-            class_weights = compute_class_weights(dataset, method=method)
 
-            trainer = WeightedLossTrainer(
-                model=self.model,
-                processing_class=self.tokenizer,
-                args=training_args,
-                train_dataset=tokenized_dataset,
-                eval_dataset=tokenized_eval_dataset,
-                data_collator=data_collator,
-                class_weights=class_weights,
-            )
-        else:
-            trainer = UnslothTrainer(
-                model=self.model,
-                processing_class=self.tokenizer,
-                args=training_args,
-                train_dataset=tokenized_dataset,
-                eval_dataset=tokenized_eval_dataset,
-                data_collator=data_collator,
-            )
+        if training_config.get("use_class_weights", False):
+            class_weights = compute_class_weights(dataset)
+            trainer_cls = WeightedLossTrainer
 
-        logger.info("Starting training...")
+        trainer = trainer_cls(
+            model=self.model,
+            processing_class=self.tokenizer,
+            args=training_args,
+            train_dataset=tokenized_dataset,
+            eval_dataset=tokenized_eval_dataset,
+            data_collator=DataCollatorForLanguageModeling(tokenizer=self.tokenizer, mlm=False),
+            **({"class_weights": class_weights} if class_weights else {})
+        )
+
+        logger.info("Starting training with MASKED INPUTS...")
         trainer.train()
 
         self.model.save_pretrained(f"{output_dir}/final_adapter")
