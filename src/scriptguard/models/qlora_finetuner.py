@@ -31,7 +31,6 @@ def compute_class_weights(dataset: Dataset, method: str = "sqrt_inverse") -> dic
     Compute class weights matching the prompts.py format.
     """
     labels = []
-    "# Analysis: The script above is classified as: MALICIOUS"
     MALICIOUS_ANCHOR = "classified as: MALICIOUS"
     BENIGN_ANCHOR = "classified as: BENIGN"
 
