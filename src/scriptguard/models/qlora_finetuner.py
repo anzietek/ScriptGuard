@@ -30,11 +30,14 @@ def compute_class_weights(dataset: Dataset, method: str = "sqrt_inverse") -> dic
     Compute class weights matching the prompts.py format.
     """
     labels = []
+    # Anchors must match src/scriptguard/utils/prompts.py
     MALICIOUS_ANCHOR = "classified as: MALICIOUS"
     BENIGN_ANCHOR = "classified as: BENIGN"
 
     logger.info("Scanning dataset for class labels...")
 
+    # We execute this check on a subset to be faster if dataset is huge, 
+    # but here we do full scan for accuracy on small datasets
     for item in dataset:
         text = item.get("text", "")
         if MALICIOUS_ANCHOR in text:
@@ -97,6 +100,7 @@ class WeightedLossTrainer(UnslothTrainer):
 
         for i in range(input_ids.shape[0]):
             try:
+                # Check last 64 tokens for the label
                 end_ids = input_ids[i][-64:]
                 text = self.processing_class.decode(end_ids, skip_special_tokens=True)
 
@@ -131,20 +135,20 @@ class QLoRAFineTuner:
         training_config = self.config.get("training", {})
 
         # =========================================================
-        # CRITICAL FIX: AUTO-SPLIT DATASET
+        # FIX 1: AUTO-SPLIT DATASET IF EVAL IS MISSING
         # =========================================================
         if eval_dataset is None:
-            split_size = float(training_config.get("test_split_size", 0.0))
+            split_size = float(training_config.get("test_split_size", 0.1))
             if split_size > 0:
                 logger.info(f"No eval_dataset provided. Splitting train dataset automatically (test_size={split_size})...")
-                # Shuffle before splitting to ensure random distribution
+                # Shuffle before splitting
                 dataset = dataset.shuffle(seed=42)
                 split_data = dataset.train_test_split(test_size=split_size, seed=42)
                 dataset = split_data["train"]
                 eval_dataset = split_data["test"]
                 logger.info(f"Split complete: Train={len(dataset)}, Eval={len(eval_dataset)}")
             else:
-                logger.warning("No eval_dataset provided and test_split_size is 0. Evaluation will be SKIPPED!")
+                logger.warning("No eval_dataset and test_split_size=0. Evaluation will be SKIPPED.")
 
         max_length = training_config.get("tokenizer_max_length", 2048)
 
@@ -183,7 +187,7 @@ class QLoRAFineTuner:
         )
 
         # =========================================================
-        # MASKING LOGIC
+        # FIX 2: MASKING LOGIC (With Prompt Anchor)
         # =========================================================
         def tokenize_and_mask(examples):
             model_inputs = self.tokenizer(
@@ -195,6 +199,7 @@ class QLoRAFineTuner:
 
             input_ids_list = model_inputs["input_ids"]
             labels_list = []
+            # Crucial: This anchor matches prompts.py exactly
             ANCHOR = "# Analysis: The script above is classified as:"
 
             for i, full_text in enumerate(examples["text"]):
@@ -226,15 +231,11 @@ class QLoRAFineTuner:
         if eval_dataset:
             tokenized_eval_dataset = eval_dataset.map(tokenize_and_mask, batched=True, desc="Processing Eval Data")
 
-        # Config adjustments for Trainer
+        # Config adjustments
         eval_strategy = training_config.get("evaluation_strategy", "no")
+        # Force eval strategy to 'steps' if we have an eval dataset but strategy is 'no'
         if tokenized_eval_dataset is not None and eval_strategy == "no":
             eval_strategy = "steps"
-
-        # Ensure eval_steps is set if strategy is steps
-        eval_steps = int(training_config.get("eval_steps", 50))
-        if eval_strategy == "steps" and eval_steps <= 0:
-            eval_steps = 10
 
         training_args = TrainingArguments(
             output_dir=output_dir,
@@ -249,12 +250,11 @@ class QLoRAFineTuner:
             logging_steps=10,
             save_strategy="steps",
             save_steps=500,
-            # EVAL CONFIGURATION
             eval_strategy=eval_strategy,
-            eval_steps=eval_steps,
-            # ------------------
+            eval_steps=int(training_config.get("eval_steps", 50)),
             report_to=["wandb"],
             run_name="scriptguard-training",
+            load_best_model_at_end=True if tokenized_eval_dataset else False,
         )
 
         trainer_cls = UnslothTrainer
@@ -274,7 +274,7 @@ class QLoRAFineTuner:
             **({"class_weights": class_weights} if class_weights else {})
         )
 
-        logger.info("Starting training with MASKED INPUTS...")
+        logger.info(f"Starting training (Eval samples: {len(tokenized_eval_dataset) if tokenized_eval_dataset else 0})...")
         trainer.train()
 
         self.model.save_pretrained(f"{output_dir}/final_adapter")
