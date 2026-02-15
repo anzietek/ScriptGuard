@@ -36,8 +36,6 @@ def compute_class_weights(dataset: Dataset, method: str = "sqrt_inverse") -> dic
 
     logger.info("Scanning dataset for class labels...")
 
-    # We execute this check on a subset to be faster if dataset is huge, 
-    # but here we do full scan for accuracy on small datasets
     for item in dataset:
         text = item.get("text", "")
         if MALICIOUS_ANCHOR in text:
@@ -86,9 +84,11 @@ class WeightedLossTrainer(UnslothTrainer):
         self.class_weights = class_weights or {}
 
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
+        # If no class weights, fallback to default loss
         if not self.class_weights:
             return super().compute_loss(model, inputs, return_outputs=return_outputs, num_items_in_batch=num_items_in_batch)
 
+        # Compute standard loss first
         loss_output = super().compute_loss(model, inputs, return_outputs=True, num_items_in_batch=num_items_in_batch)
         base_loss, outputs = loss_output
         input_ids = inputs.get("input_ids")
@@ -98,9 +98,10 @@ class WeightedLossTrainer(UnslothTrainer):
 
         sample_weights = []
 
+        # Determine weight for each sample in the batch
         for i in range(input_ids.shape[0]):
             try:
-                # Check last 64 tokens for the label
+                # Look at the end of the sequence for the label
                 end_ids = input_ids[i][-64:]
                 text = self.processing_class.decode(end_ids, skip_special_tokens=True)
 
@@ -117,6 +118,7 @@ class WeightedLossTrainer(UnslothTrainer):
         if isinstance(base_loss, tuple):
             base_loss = base_loss[0]
 
+        # Apply weights
         weights_tensor = torch.tensor(sample_weights, dtype=base_loss.dtype, device=base_loss.device)
         avg_weight = weights_tensor.mean()
         weighted_loss = base_loss * avg_weight
@@ -135,20 +137,20 @@ class QLoRAFineTuner:
         training_config = self.config.get("training", {})
 
         # =========================================================
-        # FIX 1: AUTO-SPLIT DATASET IF EVAL IS MISSING
+        # AUTO-SPLIT DATASET (If eval_dataset is missing)
         # =========================================================
         if eval_dataset is None:
-            split_size = float(training_config.get("test_split_size", 0.1))
+            split_size = float(training_config.get("test_split_size", 0.0))
             if split_size > 0:
                 logger.info(f"No eval_dataset provided. Splitting train dataset automatically (test_size={split_size})...")
-                # Shuffle before splitting
+                # Shuffle before splitting to ensure random distribution
                 dataset = dataset.shuffle(seed=42)
                 split_data = dataset.train_test_split(test_size=split_size, seed=42)
                 dataset = split_data["train"]
                 eval_dataset = split_data["test"]
                 logger.info(f"Split complete: Train={len(dataset)}, Eval={len(eval_dataset)}")
             else:
-                logger.warning("No eval_dataset and test_split_size=0. Evaluation will be SKIPPED.")
+                logger.warning("No eval_dataset provided and test_split_size is 0. Evaluation will be SKIPPED!")
 
         max_length = training_config.get("tokenizer_max_length", 2048)
 
@@ -187,7 +189,7 @@ class QLoRAFineTuner:
         )
 
         # =========================================================
-        # FIX 2: MASKING LOGIC (With Prompt Anchor)
+        # MASKING LOGIC
         # =========================================================
         def tokenize_and_mask(examples):
             model_inputs = self.tokenizer(
@@ -199,7 +201,6 @@ class QLoRAFineTuner:
 
             input_ids_list = model_inputs["input_ids"]
             labels_list = []
-            # Crucial: This anchor matches prompts.py exactly
             ANCHOR = "# Analysis: The script above is classified as:"
 
             for i, full_text in enumerate(examples["text"]):
@@ -209,7 +210,7 @@ class QLoRAFineTuner:
                 if ANCHOR in full_text:
                     try:
                         parts = full_text.split(ANCHOR)
-                        prompt_text = parts[0] + ANCHOR 
+                        prompt_text = parts[0] + ANCHOR
                         prompt_tokens = self.tokenizer(prompt_text, truncation=True, max_length=max_length, add_special_tokens=False)["input_ids"]
                         mask_len = len(prompt_tokens)
 
@@ -231,11 +232,18 @@ class QLoRAFineTuner:
         if eval_dataset:
             tokenized_eval_dataset = eval_dataset.map(tokenize_and_mask, batched=True, desc="Processing Eval Data")
 
-        # Config adjustments
+        # Config adjustments for Trainer
         eval_strategy = training_config.get("evaluation_strategy", "no")
-        # Force eval strategy to 'steps' if we have an eval dataset but strategy is 'no'
         if tokenized_eval_dataset is not None and eval_strategy == "no":
             eval_strategy = "steps"
+
+        # Ensure eval_steps is set if strategy is steps
+        eval_steps = int(training_config.get("eval_steps", 50))
+        if eval_strategy == "steps" and eval_steps <= 0:
+            eval_steps = 10
+
+        # FIX: Ensure save_steps matches config to allow correct Early Stopping
+        save_steps = int(training_config.get("save_steps", 500))
 
         training_args = TrainingArguments(
             output_dir=output_dir,
@@ -249,12 +257,15 @@ class QLoRAFineTuner:
             bf16=torch.cuda.is_bf16_supported(),
             logging_steps=10,
             save_strategy="steps",
-            save_steps=500,
+            save_steps=save_steps,  # Use dynamic value from config
+            # EVAL CONFIGURATION
             eval_strategy=eval_strategy,
-            eval_steps=int(training_config.get("eval_steps", 50)),
+            eval_steps=eval_steps,
+            load_best_model_at_end=True if tokenized_eval_dataset else False,
+            metric_for_best_model=training_config.get("metric_for_best_model", "eval_loss"),
+            # ------------------
             report_to=["wandb"],
             run_name="scriptguard-training",
-            load_best_model_at_end=True if tokenized_eval_dataset else False,
         )
 
         trainer_cls = UnslothTrainer
@@ -264,6 +275,13 @@ class QLoRAFineTuner:
             class_weights = compute_class_weights(dataset)
             trainer_cls = WeightedLossTrainer
 
+        # FIX: Enable Early Stopping if configured
+        callbacks = []
+        if training_config.get("early_stopping", False):
+            patience = int(training_config.get("early_stopping_patience", 3))
+            logger.info(f"Enabling Early Stopping (patience={patience})")
+            callbacks.append(EarlyStoppingCallback(early_stopping_patience=patience))
+
         trainer = trainer_cls(
             model=self.model,
             processing_class=self.tokenizer,
@@ -271,10 +289,11 @@ class QLoRAFineTuner:
             train_dataset=tokenized_dataset,
             eval_dataset=tokenized_eval_dataset,
             data_collator=DataCollatorForLanguageModeling(tokenizer=self.tokenizer, mlm=False),
+            callbacks=callbacks,
             **({"class_weights": class_weights} if class_weights else {})
         )
 
-        logger.info(f"Starting training (Eval samples: {len(tokenized_eval_dataset) if tokenized_eval_dataset else 0})...")
+        logger.info("Starting training with MASKED INPUTS...")
         trainer.train()
 
         self.model.save_pretrained(f"{output_dir}/final_adapter")
