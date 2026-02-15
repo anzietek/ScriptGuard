@@ -304,9 +304,9 @@ training:
   output_dir: ${MODEL_OUTPUT_DIR:-/workspace/models/scriptguard-model}
 
   # Preprocessing - MUST be aligned with tokenizer_max_length to prevent label truncation
-  # 2048 tokens ≈ 7000 chars for code, minus ~100 chars prompt overhead = ~6500 safe limit
+  # 2048 tokens ≈ 7000 chars for code, minus ~100 chars prompt overhead = ~4500 safe limit
   # Previously 16000 which caused silent label loss at tokenizer level
-  preprocess_max_chars: 6500
+  preprocess_max_chars: 4500
   truncation_strategy: "smart"  # Options: "simple" (cut at max_chars) or "smart" (preserve critical sections)
 
   # Tokenizer max length - MUST be large enough to fit full prompt + label
