@@ -28,8 +28,10 @@ if platform.system() == "Windows":
 def compute_class_weights(dataset: Dataset, method: str = "sqrt_inverse") -> dict:
     """
     Compute class weights matching the prompts.py format.
+    Scans the dataset to determine class distribution and calculate loss weights.
     """
     labels = []
+    # Anchors must match src/scriptguard/utils/prompts.py
     MALICIOUS_ANCHOR = "classified as: MALICIOUS"
     BENIGN_ANCHOR = "classified as: BENIGN"
 
@@ -42,7 +44,7 @@ def compute_class_weights(dataset: Dataset, method: str = "sqrt_inverse") -> dic
         elif BENIGN_ANCHOR in text:
             labels.append("benign")
         else:
-            # Fallback
+            # Fallback: check metadata if text parsing fails
             label = item.get("label")
             if label:
                 labels.append(str(label).lower())
@@ -54,6 +56,7 @@ def compute_class_weights(dataset: Dataset, method: str = "sqrt_inverse") -> dic
     logger.info(f"Class distribution: {dict(label_counts)}")
 
     if "malicious" not in label_counts or "benign" not in label_counts:
+        logger.warning("⚠️  WARNING: Could not find both classes in dataset! Weights will default to 1.0.")
         return {"malicious": 1.0, "benign": 1.0}
 
     weights = {}
@@ -66,7 +69,7 @@ def compute_class_weights(dataset: Dataset, method: str = "sqrt_inverse") -> dic
     else:
         raise ValueError(f"Unknown weight method: {method}")
 
-    # Normalize
+    # Normalize weights so they maintain the same gradient scale magnitude
     num_classes = len(weights)
     weight_sum = sum(weights.values())
     normalized_weights = {label: (w / weight_sum) * num_classes for label, w in weights.items()}
@@ -77,7 +80,8 @@ def compute_class_weights(dataset: Dataset, method: str = "sqrt_inverse") -> dic
 
 class WeightedLossTrainer(UnslothTrainer):
     """
-    Custom trainer that applies class weights AND supports masked inputs.
+    Custom trainer that applies class weights AND supports masked inputs (Data Masking).
+    It ensures the loss focuses on the classification label, not the source code syntax.
     """
     def __init__(self, *args, class_weights=None, **kwargs):
         super().__init__(*args, **kwargs)
@@ -87,7 +91,7 @@ class WeightedLossTrainer(UnslothTrainer):
         if not self.class_weights:
             return super().compute_loss(model, inputs, return_outputs=return_outputs, num_items_in_batch=num_items_in_batch)
 
-        # Standard loss calculation (respects -100 masks automatically)
+        # Standard loss calculation (respects -100 masks automatically via CrossEntropyLoss)
         loss_output = super().compute_loss(model, inputs, return_outputs=True, num_items_in_batch=num_items_in_batch)
         base_loss, outputs = loss_output
         input_ids = inputs.get("input_ids")
@@ -97,10 +101,10 @@ class WeightedLossTrainer(UnslothTrainer):
 
         sample_weights = []
 
-        # Apply class weights based on label presence
+        # Apply class weights based on label presence in the batch
         for i in range(input_ids.shape[0]):
             try:
-                # Optimized: Check last 64 tokens for the label
+                # Optimization: Check only the last 64 tokens for the label to save compute
                 end_ids = input_ids[i][-64:]
                 text = self.processing_class.decode(end_ids, skip_special_tokens=True)
 
@@ -117,6 +121,7 @@ class WeightedLossTrainer(UnslothTrainer):
         if isinstance(base_loss, tuple):
             base_loss = base_loss[0]
 
+        # Apply weights to the batch loss
         weights_tensor = torch.tensor(sample_weights, dtype=base_loss.dtype, device=base_loss.device)
         avg_weight = weights_tensor.mean()
         weighted_loss = base_loss * avg_weight
@@ -135,7 +140,7 @@ class QLoRAFineTuner:
         training_config = self.config.get("training", {})
         max_length = training_config.get("tokenizer_max_length", 2048)
 
-        logger.info("Loading model with unsloth...")
+        logger.info("Loading model with unsloth optimization...")
         import platform
         is_windows = platform.system() == "Windows"
         use_flash_attn = training_config.get("use_flash_attention_2", False)
@@ -170,10 +175,11 @@ class QLoRAFineTuner:
         )
 
         # =========================================================
-        # CRITICAL FIX: DATA MASKING (Uczenie tylko na odpowiedziach)
+        # CRITICAL: DATA MASKING (Instruction Masking)
+        # We mask the source code so the model only learns to predict the label.
         # =========================================================
         def tokenize_and_mask(examples):
-            # 1. Normalna tokenizacja
+            # 1. Standard Tokenization
             model_inputs = self.tokenizer(
                 examples["text"],
                 truncation=True,
@@ -184,33 +190,35 @@ class QLoRAFineTuner:
             input_ids_list = model_inputs["input_ids"]
             labels_list = []
 
-            # Fraza rozdzielająca kod od etykiety (zdefiniowana w prompts.py)
+            # The exact anchor string from prompts.py that separates Code from Label
             ANCHOR = "# Analysis: The script above is classified as:"
 
             for i, full_text in enumerate(examples["text"]):
                 input_ids = input_ids_list[i]
-                labels = list(input_ids) # Kopia input_ids jako baza dla labels
+                labels = list(input_ids) # Copy input_ids to create labels
 
-                # Szukamy miejsca podziału
+                # Check if the split anchor exists
                 if ANCHOR in full_text:
                     try:
-                        # Dzielimy tekst na: [PROMPT] + [ODPOWIEDZ]
-                        # Chcemy zamaskować [PROMPT]
+                        # Split text into: [PROMPT (CODE)] + [LABEL]
+                        # We want to mask the PROMPT part.
                         parts = full_text.split(ANCHOR)
-                        prompt_text = parts[0] + ANCHOR # Dołączamy anchor do promptu (model ma przewidzieć słowo PO nim)
 
-                        # Tokenizujemy sam prompt, żeby znać jego długość w tokenach
+                        # Reconstruct the prompt part to calculate its token length
+                        prompt_text = parts[0] + ANCHOR 
+
+                        # Tokenize just the prompt (without special tokens to be safe on length)
                         prompt_tokens = self.tokenizer(prompt_text, truncation=True, max_length=max_length, add_special_tokens=False)["input_ids"]
                         mask_len = len(prompt_tokens)
 
-                        # Nakładamy maskę -100
-                        # Upewniamy się, że nie wyjdziemy poza zakres
+                        # Apply the -100 mask (PyTorch CrossEntropyLoss ignores -100)
+                        # We mask from index 0 up to the start of the label
                         limit = min(mask_len, len(labels))
                         for j in range(limit):
                             labels[j] = -100
 
                     except Exception:
-                        pass # W razie błędu uczymy się na całości (fail-safe)
+                        pass # Fallback: if masking fails, train on the whole sequence
 
                 labels_list.append(labels)
 
@@ -224,7 +232,7 @@ class QLoRAFineTuner:
         if eval_dataset:
             tokenized_eval_dataset = eval_dataset.map(tokenize_and_mask, batched=True, desc="Processing Eval Data")
 
-        # Standard Args
+        # Training Arguments
         training_args = TrainingArguments(
             output_dir=output_dir,
             per_device_train_batch_size=int(training_config.get("per_device_train_batch_size", 4)),
