@@ -356,7 +356,7 @@ training:
   load_best_model_at_end: true
 
   early_stopping: true
-  early_stopping_patience: 3  # Increased from 2 - gives model more time to converge
+  early_stopping_patience: 10  # Increased from 2 - gives model more time to converge
   metric_for_best_model: "eval_loss"
 
   bf16: true
