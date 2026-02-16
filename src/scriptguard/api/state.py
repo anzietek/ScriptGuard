@@ -4,8 +4,16 @@ Handles lifecycle of global resources like models and database connections.
 """
 
 import os
+
+# Disable torchao quantizers which are incompatible with torch 2.5.1
+os.environ["TRANSFORMERS_NO_ADVISORY_WARNINGS"] = "1"
+
 import torch
 from typing import Optional, Dict, Any, Protocol, runtime_checkable, Any as TypingAny
+
+# Set environment variable before importing transformers
+os.environ["DISABLE_TORCHAO"] = "1"
+
 from transformers import AutoTokenizer, AutoModelForCausalLM
 from peft import PeftModel
 from scriptguard.rag.qdrant_store import QdrantStore, bootstrap_cve_data

@@ -32,6 +32,9 @@ def format_training_prompt(code: str, label: str, max_code_length: int = 4500) -
         f'"""\n'
         f"Security Analysis Report\n"
         f"------------------------\n"
+        f"RULES:\n"
+        f"1. Your response MUST be exactly one word: BENIGN or MALICIOUS.\n"
+        f"\n"
         f"Target Script:\n"
         f"{truncated_code}\n"
         f'"""\n'

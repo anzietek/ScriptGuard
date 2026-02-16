@@ -189,7 +189,7 @@ class QLoRAFineTuner:
         )
 
         # =========================================================
-        # MASKING LOGIC
+        # PARTIAL MASKING LOGIC (Mask Instructions, Show Code)
         # =========================================================
         def tokenize_and_mask(examples):
             model_inputs = self.tokenizer(
@@ -201,23 +201,39 @@ class QLoRAFineTuner:
 
             input_ids_list = model_inputs["input_ids"]
             labels_list = []
-            ANCHOR = "# Analysis: The script above is classified as:"
+            
+            # This marker separates the instruction from the actual code
+            SPLIT_MARKER = "Target Script:\n"
 
             for i, full_text in enumerate(examples["text"]):
                 input_ids = input_ids_list[i]
                 labels = list(input_ids)
 
-                if ANCHOR in full_text:
+                if SPLIT_MARKER in full_text:
                     try:
-                        parts = full_text.split(ANCHOR)
-                        prompt_text = parts[0] + ANCHOR
-                        prompt_tokens = self.tokenizer(prompt_text, truncation=True, max_length=max_length, add_special_tokens=False)["input_ids"]
-                        mask_len = len(prompt_tokens)
+                        # Split text to isolate the instruction part
+                        parts = full_text.split(SPLIT_MARKER)
+                        
+                        # The instruction includes everything up to and including the marker
+                        instruction_text = parts[0] + SPLIT_MARKER
+                        
+                        # Tokenize instruction to calculate mask length
+                        instruction_tokens = self.tokenizer(
+                            instruction_text, 
+                            truncation=True, 
+                            max_length=max_length, 
+                            add_special_tokens=False
+                        )["input_ids"]
+                        
+                        mask_len = len(instruction_tokens)
 
+                        # Mask only the instruction tokens (-100 means ignore in loss)
                         limit = min(mask_len, len(labels))
                         for j in range(limit):
                             labels[j] = -100
+                            
                     except Exception:
+                        # Fallback: if splitting fails, do not mask anything
                         pass
 
                 labels_list.append(labels)
@@ -225,7 +241,7 @@ class QLoRAFineTuner:
             model_inputs["labels"] = labels_list
             return model_inputs
 
-        logger.info("Tokenizing and MASKING dataset...")
+        logger.info("Tokenizing dataset with Partial Masking...")
         tokenized_dataset = dataset.map(tokenize_and_mask, batched=True, desc="Processing Train Data")
 
         tokenized_eval_dataset = None
@@ -293,7 +309,7 @@ class QLoRAFineTuner:
             **({"class_weights": class_weights} if class_weights else {})
         )
 
-        logger.info("Starting training with MASKED INPUTS...")
+        logger.info("Starting training with MASKED INSTRUCTIONS and VISIBLE CODE...")
         trainer.train()
 
         self.model.save_pretrained(f"{output_dir}/final_adapter")

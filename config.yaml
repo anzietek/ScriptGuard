@@ -333,12 +333,12 @@ training:
   # QLoRA - Higher regularization to fight Specificity: 0.00
   use_qlora: true
   lora_r: 16
-  lora_alpha: 32
+  lora_alpha: 16
   lora_dropout: 0.15
   target_modules: ["q_proj", "v_proj", "k_proj", "o_proj", "gate_proj", "up_proj", "down_proj"]
 
   # Duration - increased from 3, model now actually learns classification with fixed tokenizer
-  num_epochs: 5
+  num_epochs: 2
 
   # Anti-overfitting measures
   learning_rate: 4e-5
@@ -351,12 +351,12 @@ training:
   # Monitoring
   evaluation_strategy: "steps"
   eval_steps: 50
-  save_steps: 50
+  save_steps: 100
   test_split_size: 0.2
   load_best_model_at_end: true
 
   early_stopping: true
-  early_stopping_patience: 10  # Increased from 2 - gives model more time to converge
+  early_stopping_patience: 2  # Increased from 2 - gives model more time to converge
   metric_for_best_model: "eval_loss"
 
   bf16: true
