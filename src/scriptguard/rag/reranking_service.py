@@ -22,7 +22,7 @@ class RerankingService:
         self,
         strategy: str = "hybrid",
         security_keywords: Optional[List[str]] = None,
-        boost_factor: float = 1.2,
+        boost_factor: float = 1.05,  # Reduced from 1.2 to minimize malicious bias
         diversity_penalty: float = 0.9,
         similarity_threshold: float = 0.95,
         cross_encoder_model: Optional[str] = None,
@@ -239,7 +239,7 @@ def create_reranking_service(config: Dict[str, Any]) -> Optional[RerankingServic
     # Heuristic configuration
     heuristic_config = reranking_config.get("heuristic", {})
     security_keywords = heuristic_config.get("security_keywords", None)
-    boost_factor = heuristic_config.get("boost_factor", 1.2)
+    boost_factor = heuristic_config.get("boost_factor", 1.05)  # Reduced from 1.2
     diversity_penalty = heuristic_config.get("diversity_penalty", 0.9)
     similarity_threshold = heuristic_config.get("similarity_threshold", 0.95)
 

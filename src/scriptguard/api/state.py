@@ -17,6 +17,7 @@ os.environ["DISABLE_TORCHAO"] = "1"
 from transformers import AutoTokenizer, AutoModelForCausalLM
 from peft import PeftModel
 from scriptguard.rag.qdrant_store import QdrantStore, bootstrap_cve_data
+from scriptguard.rag.code_similarity_store import CodeSimilarityStore
 from scriptguard.utils.logger import logger
 from scriptguard.config_loader import load_config
 from scriptguard.schemas.config_schema import ScriptGuardConfig
@@ -130,39 +131,67 @@ class AppState:
             return
 
         qdrant_cfg = self.config.qdrant
-        
+        code_emb_cfg = self.config.code_embedding
+
         try:
-            self.rag_store = QdrantStore(
-                host=qdrant_cfg.host,
-                port=qdrant_cfg.port,
-                collection_name=qdrant_cfg.collection_name,
-                embedding_model=qdrant_cfg.embedding_model,
-                api_key=qdrant_cfg.api_key,
-                use_https=qdrant_cfg.use_https
-            )
+            # Use CodeSimilarityStore for code_samples collection (supports unixcoder model)
+            # Use QdrantStore for malware_knowledge collection (uses SentenceTransformer)
+            if qdrant_cfg.collection_name == "code_samples":
+                logger.info("Using CodeSimilarityStore for code_samples collection")
+                self.rag_store = CodeSimilarityStore(
+                    host=qdrant_cfg.host,
+                    port=qdrant_cfg.port,
+                    collection_name=qdrant_cfg.collection_name,
+                    embedding_model=qdrant_cfg.embedding_model,
+                    pooling_strategy=code_emb_cfg.pooling_strategy if hasattr(code_emb_cfg, 'pooling_strategy') else "mean_pooling",
+                    normalize=code_emb_cfg.normalize if hasattr(code_emb_cfg, 'normalize') else True,
+                    api_key=qdrant_cfg.api_key,
+                    use_https=qdrant_cfg.use_https,
+                    enable_chunking=False,  # For API inference, we don't need chunking
+                    # FORCE disable label balancing for inference - prevents false positive bias
+                    ensure_label_balance=False,
+                    min_per_label=0
+                )
 
-            # Check if bootstrapping is allowed via env var (default: False for API)
-            bootstrap_enabled = os.getenv("BOOTSTRAP_QDRANT", "false").lower() == "true"
-            
-            # Also check config override
-            if self.config.qdrant.bootstrap_on_startup:
-                bootstrap_enabled = True
-
-            if bootstrap_enabled:
+                # Check collection
                 info = self.rag_store.get_collection_info()
                 points_count = info.get('points_count', 0)
+                logger.info(f"✅ Qdrant connected to code_samples ({points_count} vectors)")
 
-                if points_count == 0:
-                    logger.info("Qdrant collection is empty. Bootstrapping...")
-                    bootstrap_cve_data(self.rag_store)
-                    logger.info("✅ Qdrant initialized with CVE patterns")
-                else:
-                    logger.info(f"✅ Qdrant ready ({points_count} vectors)")
             else:
-                # Just check connection without writing
-                info = self.rag_store.get_collection_info()
-                points_count = info.get('points_count', 0)
-                logger.info(f"✅ Qdrant connected ({points_count} vectors). Bootstrapping disabled.")
+                # Fallback to QdrantStore for other collections (like malware_knowledge)
+                logger.info(f"Using QdrantStore for {qdrant_cfg.collection_name} collection")
+                self.rag_store = QdrantStore(
+                    host=qdrant_cfg.host,
+                    port=qdrant_cfg.port,
+                    collection_name=qdrant_cfg.collection_name,
+                    embedding_model=qdrant_cfg.embedding_model,
+                    api_key=qdrant_cfg.api_key,
+                    use_https=qdrant_cfg.use_https
+                )
+
+                # Check if bootstrapping is allowed via env var (default: False for API)
+                bootstrap_enabled = os.getenv("BOOTSTRAP_QDRANT", "false").lower() == "true"
+
+                # Also check config override
+                if self.config.qdrant.bootstrap_on_startup:
+                    bootstrap_enabled = True
+
+                if bootstrap_enabled:
+                    info = self.rag_store.get_collection_info()
+                    points_count = info.get('points_count', 0)
+
+                    if points_count == 0:
+                        logger.info("Qdrant collection is empty. Bootstrapping...")
+                        bootstrap_cve_data(self.rag_store)
+                        logger.info("✅ Qdrant initialized with CVE patterns")
+                    else:
+                        logger.info(f"✅ Qdrant ready ({points_count} vectors)")
+                else:
+                    # Just check connection without writing
+                    info = self.rag_store.get_collection_info()
+                    points_count = info.get('points_count', 0)
+                    logger.info(f"✅ Qdrant connected ({points_count} vectors). Bootstrapping disabled.")
 
         except Exception as e:
             logger.error(f"❌ Qdrant initialization failed: {e}")

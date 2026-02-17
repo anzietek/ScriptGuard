@@ -199,8 +199,8 @@ qdrant:
   port: ${QDRANT_PORT:-6333}
   api_key: ${QDRANT_API_KEY:-}  # API key for authentication (optional for local, required for cloud)
   use_https: false  # Disable SSL for local Qdrant instance
-  collection_name: "malware_knowledge"
-  embedding_model: "all-MiniLM-L6-v2"
+  collection_name: "code_samples"  # FIXED: Use code_samples collection (70k+ examples) instead of malware_knowledge (7 examples)
+  embedding_model: "microsoft/unixcoder-base"  # FIXED: Must match the model used during vectorization (768d)
   prefer_grpc: true
 
   # Production timeouts (seconds)
@@ -231,8 +231,10 @@ code_embedding:
 
   fewshot:
     enabled: true
-    k: 3
-    balance_labels: true
+    k: 3  # Reduced from 5 - with longer context (1500 chars), fewer examples to fit in 2048 tokens
+    balance_labels: false  # Disabled for inference - return most similar regardless of label
+    max_context_length: 1500  # Increased from 300 - show full functions, not truncated fragments
+    max_code_length: 3000  # Max length for target code in prompt
 
   hierarchical:
     enabled: true
@@ -242,7 +244,9 @@ code_embedding:
 
   score_thresholds:
     "microsoft/unixcoder-base":
-      default: 0.30  # Lowered from 0.45 for better malicious recall in RAG
+      default: 0.50  # Increased from 0.30 for strict inference mode (reduces false positives)
+      strict: 0.55   # High precision mode - balanced for actual similarity scores (was 0.60 - too high)
+      lenient: 0.35  # High recall mode - more results (training/augmentation)
 
   reranking:
     enabled: true

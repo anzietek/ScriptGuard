@@ -48,7 +48,9 @@ class CodeSimilarityStore:
         timeout: int = 60,
         upsert_timeout: int = 120,
         max_retries: int = 3,
-        retry_backoff: float = 2.0
+        retry_backoff: float = 2.0,
+        ensure_label_balance: Optional[bool] = None,
+        min_per_label: Optional[int] = None
     ):
         """
         Initialize Code Similarity Store with enhanced embedding, chunking, and reranking.
@@ -73,6 +75,8 @@ class CodeSimilarityStore:
             upsert_timeout: Timeout for upsert operations (seconds)
             max_retries: Maximum number of retry attempts
             retry_backoff: Exponential backoff factor for retries
+            ensure_label_balance: Override config for label balancing (None = use config default)
+            min_per_label: Override config for min samples per label (None = use config default)
         """
         self.host = host or os.getenv("QDRANT_HOST", "localhost")
         self.port = port or int(os.getenv("QDRANT_PORT", "6333"))
@@ -119,8 +123,18 @@ class CodeSimilarityStore:
         fallback_config = code_emb_config.get("graceful_fallback", {})
         self.graceful_fallback_enabled = fallback_config.get("enabled", True)
         self.fallback_threshold = fallback_config.get("fallback_threshold", 0.0)
-        self.ensure_label_balance = fallback_config.get("ensure_label_balance", True)
-        self.min_per_label = fallback_config.get("min_per_label", 1)
+
+        # Allow constructor parameters to override config for label balancing
+        # This enables API to force disable label balancing for inference
+        if ensure_label_balance is not None:
+            self.ensure_label_balance = ensure_label_balance
+        else:
+            self.ensure_label_balance = fallback_config.get("ensure_label_balance", True)
+
+        if min_per_label is not None:
+            self.min_per_label = min_per_label
+        else:
+            self.min_per_label = fallback_config.get("min_per_label", 1)
 
         logger.info(f"  Graceful Fallback: {'enabled' if self.graceful_fallback_enabled else 'disabled'}")
         if self.graceful_fallback_enabled:
@@ -1128,14 +1142,16 @@ class CodeSimilarityStore:
                 # hit is ScoredPoint with .score and .payload attributes
                 results.append({
                     "score": float(hit.score),
-                    "code": hit.payload.get("code_content", ""),
+                    "code": hit.payload.get("code_preview", "") or hit.payload.get("content", ""),  # FIXED: code_preview (not code_content)
+                    "code_preview": hit.payload.get("code_preview", ""),  # Keep separate for compatibility
                     "label": hit.payload.get("label", ""),
                     "label_binary": hit.payload.get("label_binary", 0),
                     "source": hit.payload.get("source", ""),
                     "language": hit.payload.get("language", "python"),
                     "db_id": hit.payload.get("db_id"),
                     "chunk_index": hit.payload.get("chunk_index", 0),
-                    "total_chunks": hit.payload.get("total_chunks", 1)
+                    "total_chunks": hit.payload.get("total_chunks", 1),
+                    "payload": hit.payload  # Add full payload for API compatibility
                 })
 
             return results
