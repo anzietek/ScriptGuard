@@ -198,7 +198,7 @@ database:
 # CODEBERT CLASSIFIER CONFIGURATION
 # ============================================================================
 codebert:
-  model_name: "microsoft/codebert-base"
+  model_name: "microsoft/graphcodebert-base"
   max_tokens: 512
   chunk_overlap: 50
   batch_size: 16
