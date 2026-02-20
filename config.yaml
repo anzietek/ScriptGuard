@@ -204,11 +204,12 @@ codebert:
   batch_size: 16
   learning_rate: 2.0e-5
   warmup_steps: 200
-  weight_decay: 0.01
-  num_epochs: 5
+  weight_decay: 0.1
+  num_epochs: 2
   eval_threshold: 0.92
-  focal_gamma: 2.0  # Focal Loss gamma: 0=CrossEntropy, 2=standard focal, higher=harder examples focus
+  focal_gamma: 3.0  # Focal Loss gamma: 0=CrossEntropy, 2=standard focal, higher=harder examples focus
   max_grad_norm: 1.0  # Gradient clipping threshold (lower = more aggressive clipping)
+  decision_threshold: 0.4  # Malicious class probability threshold (lower = more aggressive detection)
   output_dir: ${MODEL_OUTPUT_DIR:-/workspace/models/codebert}
 
 # ============================================================================

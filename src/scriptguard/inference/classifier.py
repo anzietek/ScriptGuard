@@ -23,10 +23,12 @@ class ScriptGuardClassifier:
                 inference_cfg = json.load(f)
             self._max_tokens: int = inference_cfg.get("max_tokens", 512)
             self._chunk_overlap: int = inference_cfg.get("chunk_overlap", 50)
+            self._decision_threshold: float = inference_cfg.get("decision_threshold", 0.5)
         else:
             logger.warning("inference_config.json not found; using defaults max_tokens=512, chunk_overlap=50")
             self._max_tokens = 512
             self._chunk_overlap = 50
+            self._decision_threshold = 0.5
 
         logger.info(f"Loading tokenizer from {model_path}")
         self.tokenizer = AutoTokenizer.from_pretrained(str(path))
@@ -52,8 +54,7 @@ class ScriptGuardClassifier:
 
         chunks = self._chunk_script(script)
 
-        best_label: Optional[int] = None
-        best_confidence: float = 0.0
+        best_malicious_prob: float = 0.0
 
         with torch.no_grad():
             for chunk in chunks:
@@ -61,15 +62,10 @@ class ScriptGuardClassifier:
                 attention_mask = torch.tensor([chunk["attention_mask"]], dtype=torch.long).to(self.device)
                 outputs = self.model(input_ids=input_ids, attention_mask=attention_mask)
                 probs = torch.softmax(outputs.logits, dim=-1)
-                confidence, pred = probs.max(dim=-1)
-                conf_val = confidence.item()
-                pred_val = pred.item()
-                if conf_val > best_confidence:
-                    best_confidence = conf_val
-                    best_label = pred_val
+                malicious_prob = probs[0][1].item()
+                if malicious_prob > best_malicious_prob:
+                    best_malicious_prob = malicious_prob
 
-        if best_label is None:
-            raise InferenceError("No chunks produced from script")
-
-        label_str = self.LABEL_MAP.get(best_label, "benign")
-        return label_str, best_confidence
+        if best_malicious_prob >= self._decision_threshold:
+            return "malicious", best_malicious_prob
+        return "benign", 1.0 - best_malicious_prob

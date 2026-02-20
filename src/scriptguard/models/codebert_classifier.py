@@ -109,7 +109,7 @@ class CodeBERTClassifier:
             eval_strategy="epoch",
             save_strategy="epoch",
             load_best_model_at_end=True,
-            metric_for_best_model="eval_f1",
+            metric_for_best_model="eval_recall",
             greater_is_better=True,
             fp16=torch.cuda.is_available(),
             bf16=False,

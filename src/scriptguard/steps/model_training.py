@@ -48,7 +48,8 @@ def train_codebert(
         trainer.save_model(output_dir)
         classifier.tokenizer.save_pretrained(output_dir)
 
-        inference_config = {"max_tokens": max_tokens, "chunk_overlap": chunk_overlap}
+        decision_threshold: float = codebert_cfg.get("decision_threshold", 0.5)
+        inference_config = {"max_tokens": max_tokens, "chunk_overlap": chunk_overlap, "decision_threshold": decision_threshold}
         with open(os.path.join(output_dir, "inference_config.json"), "w") as f:
             json.dump(inference_config, f)
 
