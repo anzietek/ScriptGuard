@@ -264,7 +264,7 @@ training:
   test_size: 0.15
   val_size: 0.15
   seed: 42
-  early_stopping_patience: 3
+  early_stopping_patience: 2
 
 logging:
   level: ${LOG_LEVEL:-INFO}
