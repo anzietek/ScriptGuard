@@ -24,6 +24,7 @@ class EmbeddingService:
     - mean_pooling: Mean pooling with attention mask
     - pooler_output: Use model's pooler_output (if available)
     - sentence_transformer: Use SentenceTransformer.encode() directly
+    - jina_v3: Jina-embeddings-v3 with task adapters (NEW)
     """
 
     def __init__(
@@ -32,7 +33,8 @@ class EmbeddingService:
         pooling_strategy: PoolingStrategy = "mean_pooling",
         normalize: bool = True,
         max_length: int = 512,
-        device: Optional[str] = None
+        device: Optional[str] = None,
+        config: Optional[Dict[str, Any]] = None
     ):
         """
         Initialize embedding service.
@@ -43,12 +45,14 @@ class EmbeddingService:
             normalize: Apply L2 normalization to embeddings
             max_length: Maximum sequence length
             device: Device to use (auto-detected if None)
+            config: Configuration dict (for Jina-v3 settings)
         """
         self.model_name = model_name
         self.pooling_strategy = pooling_strategy
         self.normalize = normalize
         self.max_length = max_length
         self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
+        self.config = config or {}
 
         logger.info(f"Initializing EmbeddingService:")
         logger.info(f"  Model: {model_name}")
@@ -57,9 +61,20 @@ class EmbeddingService:
         logger.info(f"  Max Length: {max_length}")
         logger.info(f"  Device: {self.device}")
 
+        # Check if Jina-v3 is enabled
+        self.is_jina_v3 = "jina-embeddings-v3" in model_name
+        if self.is_jina_v3:
+            jina_config = self.config.get("code_embedding", {}).get("jina_v3", {})
+            if jina_config.get("enabled", False):
+                logger.info("  Jina-v3 mode: ENABLED")
+                logger.info(f"  Task Adapter: {jina_config.get('task_adapter', 'retrieval.v2')}")
+                logger.info(f"  Output Dimension: {jina_config.get('output_dimension', 1024)}")
+
         # Initialize model based on strategy
         if pooling_strategy == "sentence_transformer":
             self._init_sentence_transformer()
+        elif self.is_jina_v3:
+            self._init_jina_v3()
         else:
             self._init_transformers()
 
@@ -124,6 +139,70 @@ class EmbeddingService:
             logger.error(f"Failed to load Transformers model: {e}")
             raise
 
+    def _init_jina_v3(self):
+        """Initialize Jina-embeddings-v3 model with task adapter support."""
+        try:
+            jina_config = self.config.get("code_embedding", {}).get("jina_v3", {})
+
+            # Jina-v3 requires trust_remote_code for task adapters
+            trust_remote = jina_config.get("trust_remote_code", True)
+            if not trust_remote:
+                logger.warning(
+                    "⚠️  Jina-v3 requires trust_remote_code=True for task adapters. "
+                    "Enabling automatically. Set jina_v3.trust_remote_code=true in config."
+                )
+                trust_remote = True
+
+            logger.info(f"Loading Jina-v3 model with trust_remote_code={trust_remote}...")
+
+            # Load model - Jina-v3 handles tokenization internally
+            self.model = AutoModel.from_pretrained(
+                self.model_name,
+                trust_remote_code=trust_remote,
+                use_safetensors=True  # Force safetensors for security
+            ).to(self.device)
+            self.model.eval()
+
+            # No external tokenizer needed - Jina-v3 has internal tokenization
+            self.tokenizer = None
+
+            # Task adapter will be configured during encode() call
+            task_adapter = jina_config.get("task_adapter", "retrieval.v2")
+            if task_adapter:
+                logger.info(f"✓ Task adapter configured: {task_adapter} (applied during encode)")
+
+            # Configure output dimension (Matryoshka representation learning)
+            output_dim = jina_config.get("output_dimension", 1024)
+            # Test encode to determine dimension
+            logger.info(f"Testing Jina-v3 encode with dimension: {output_dim}")
+            test_embedding = self.model.encode(
+                ["test"],
+                max_length=self.max_length,
+                task="retrieval.passage",  # Use passage for document encoding
+                truncate_dim=output_dim  # Matryoshka truncation
+            )
+            self.embedding_dim = test_embedding.shape[-1]
+            logger.info(f"✓ Embedding dimension: {self.embedding_dim}")
+
+            # Update max_length from config
+            self.max_length = jina_config.get("max_length", 8192)
+            logger.info(f"✓ Max length: {self.max_length} tokens")
+
+        except Exception as e:
+            logger.error(f"Failed to load Jina-v3 model: {e}")
+            logger.info("Attempting fallback to base model if enabled...")
+
+            # Fallback logic
+            fallback_enabled = self.config.get("code_embedding", {}).get("enable_fallback", False)
+            if fallback_enabled:
+                fallback_model = self.config.get("code_embedding", {}).get("fallback_model", "microsoft/unixcoder-base")
+                logger.warning(f"Using fallback model: {fallback_model}")
+                self.model_name = fallback_model
+                self.is_jina_v3 = False
+                self._init_transformers()
+            else:
+                raise
+
     def _mean_pooling(self, token_embeddings: torch.Tensor, attention_mask: torch.Tensor) -> torch.Tensor:
         """
         Mean pooling with attention mask.
@@ -180,6 +259,30 @@ class EmbeddingService:
         """
         if not texts:
             return np.array([])
+
+        # Use Jina-v3 native encoding if available
+        if self.is_jina_v3:
+            jina_config = self.config.get("code_embedding", {}).get("jina_v3", {})
+            task_adapter = jina_config.get("task_adapter", "retrieval.v2")
+            output_dim = jina_config.get("output_dimension", 1024)
+
+            # Jina-v3 encode() handles tokenization internally
+            # Use "retrieval.passage" for documents being indexed
+            embeddings = self.model.encode(
+                texts,
+                max_length=self.max_length,
+                task="retrieval.passage" if task_adapter == "retrieval.v2" else None,  # Use passage for document encoding
+                batch_size=batch_size,
+                show_progress_bar=show_progress,
+                convert_to_numpy=True,
+                normalize_embeddings=False,  # We'll normalize manually if needed
+                truncate_dim=output_dim  # Matryoshka dimension truncation
+            )
+
+            if self.normalize:
+                embeddings = self._normalize_embeddings(embeddings)
+
+            return embeddings
 
         # Use SentenceTransformer if available
         if self.pooling_strategy == "sentence_transformer":

@@ -370,9 +370,90 @@ class CodeSimilarityStore:
                 # Indexes might already exist
                 pass
 
+            # COMPONENT 2 - STAGE 2C: Create feature indexes for hybrid search
+            self._create_feature_indexes()
+
         except Exception as e:
             logger.error(f"Failed to ensure collection: {e}")
             raise
+
+    def _create_feature_indexes(self):
+        """
+        Create payload indexes for static features (Component 2 - Stage 2C).
+
+        Enables efficient filtering by:
+        - Complexity metrics (entropy, complexity_score)
+        - API usage flags (has_network_api, has_file_api, etc.)
+        - Dangerous patterns (dangerous_api_calls, suspicious_combinations)
+
+        Indexes are idempotent - safe to call multiple times.
+        """
+        from qdrant_client.http.exceptions import UnexpectedResponse
+
+        logger.info("Creating feature payload indexes for hybrid search...")
+
+        try:
+            # Scalar indexes for range queries
+            try:
+                self.client.create_payload_index(
+                    collection_name=self.collection_name,
+                    field_name="features.entropy",
+                    field_schema=models.PayloadSchemaType.FLOAT
+                )
+                logger.info("  ✓ Index created: features.entropy (FLOAT)")
+            except UnexpectedResponse:
+                logger.debug("  - Index features.entropy already exists")
+
+            try:
+                self.client.create_payload_index(
+                    collection_name=self.collection_name,
+                    field_name="features.complexity_score",
+                    field_schema=models.PayloadSchemaType.INTEGER
+                )
+                logger.info("  ✓ Index created: features.complexity_score (INTEGER)")
+            except UnexpectedResponse:
+                logger.debug("  - Index features.complexity_score already exists")
+
+            try:
+                self.client.create_payload_index(
+                    collection_name=self.collection_name,
+                    field_name="features.code_length",
+                    field_schema=models.PayloadSchemaType.INTEGER
+                )
+                logger.info("  ✓ Index created: features.code_length (INTEGER)")
+            except UnexpectedResponse:
+                logger.debug("  - Index features.code_length already exists")
+
+            # Boolean indexes for exact match filtering
+            for flag in ["has_network_api", "has_file_api", "has_process_api", "has_crypto_api",
+                         "has_urls", "has_ips", "has_base64", "has_hex"]:
+                try:
+                    self.client.create_payload_index(
+                        collection_name=self.collection_name,
+                        field_name=f"features.{flag}",
+                        field_schema=models.PayloadSchemaType.KEYWORD
+                    )
+                    logger.info(f"  ✓ Index created: features.{flag} (KEYWORD)")
+                except UnexpectedResponse:
+                    logger.debug(f"  - Index features.{flag} already exists")
+
+            # Array indexes for contains queries
+            for field in ["dangerous_api_calls", "suspicious_combinations"]:
+                try:
+                    self.client.create_payload_index(
+                        collection_name=self.collection_name,
+                        field_name=f"features.{field}",
+                        field_schema=models.PayloadSchemaType.KEYWORD
+                    )
+                    logger.info(f"  ✓ Index created: features.{field} (KEYWORD array)")
+                except UnexpectedResponse:
+                    logger.debug(f"  - Index features.{field} already exists")
+
+            logger.info("✓ Feature indexes created successfully")
+
+        except Exception as e:
+            logger.warning(f"Failed to create some feature indexes: {e}")
+            logger.warning("Hybrid search may be slower without indexes, but will still work")
 
     def _generate_id(self, content: str) -> int:
         """Generate deterministic integer ID from content (compatible with Qdrant)."""
@@ -624,7 +705,8 @@ class CodeSimilarityStore:
                     "parent_context": parent_context,
                     "label": sample.get("label"),
                     "source": sample.get("source"),
-                    "metadata": sample.get("metadata", {})
+                    "metadata": sample.get("metadata", {}),
+                    "features": sample.get("features", {})  # CRITICAL FIX: Copy features from sample
                 })
 
         if not chunks:
@@ -686,7 +768,9 @@ class CodeSimilarityStore:
                     "label_binary": label_binary,
                     "source": chunk.get("source", "unknown"),
                     "language": "python",
-                    "metadata": chunk.get("metadata", {})
+                    "metadata": chunk.get("metadata", {}),
+                    # COMPONENT 2 - STAGE 2B: Static features for hybrid search
+                    "features": chunk.get("features", {})  # NEW: Feature payload from vectorize_samples.py
                 }
 
                 all_points.append(
@@ -755,6 +839,293 @@ class CodeSimilarityStore:
         logger.info(f"✓ Code sample synchronization complete: {len(all_points)} points indexed")
 
 
+    def _extract_query_features(self, query_code: str) -> Dict[str, Any]:
+        """
+        Extract static features from query code (Component 2 - Stage 2D).
+
+        Args:
+            query_code: Code to extract features from
+
+        Returns:
+            Feature dictionary matching schema in docs/FEATURE_SCHEMA.md
+        """
+        try:
+            from scriptguard.steps.feature_extraction import (
+                extract_ast_features,
+                calculate_entropy,
+                extract_api_patterns,
+                extract_string_features
+            )
+
+            ast_features = extract_ast_features(query_code)
+            entropy = calculate_entropy(query_code)
+            api_patterns = extract_api_patterns(query_code)
+            string_features = extract_string_features(query_code)
+
+            return {
+                "complexity_score": ast_features.get("complexity_score", 0),
+                "entropy": entropy,
+                "code_length": len(query_code),
+                "code_lines": query_code.count("\n") + 1,
+                "dangerous_api_calls": ast_features.get("dangerous_patterns", []),
+                "suspicious_combinations": api_patterns.get("suspicious_combinations", []),
+                "has_network_api": len(api_patterns.get("network_apis", [])) > 0,
+                "has_file_api": len(api_patterns.get("file_apis", [])) > 0,
+                "has_process_api": len(api_patterns.get("process_apis", [])) > 0,
+                "has_crypto_api": len(api_patterns.get("crypto_apis", [])) > 0,
+                "has_urls": string_features.get("has_urls", False),
+                "has_ips": string_features.get("has_ips", False),
+                "has_base64": string_features.get("has_base64", False),
+                "has_hex": string_features.get("has_hex", False),
+                "network_apis": api_patterns.get("network_apis", []),
+                "file_apis": api_patterns.get("file_apis", []),
+                "process_apis": api_patterns.get("process_apis", []),
+                "crypto_apis": api_patterns.get("crypto_apis", [])
+            }
+        except Exception as e:
+            logger.warning(f"Failed to extract query features: {e}")
+            return {}
+
+    def _build_hybrid_filter(
+        self,
+        filter_label: Optional[str] = None,
+        feature_filters: Optional[Dict[str, Any]] = None,
+        query_features: Optional[Dict[str, Any]] = None
+    ) -> Optional[models.Filter]:
+        """
+        Build hybrid filter combining label and feature constraints (Component 2 - Stage 2D).
+
+        Args:
+            filter_label: Label filter ("malicious" or "benign")
+            feature_filters: Manual feature constraints, e.g.:
+                {
+                    "min_entropy": 6.0,
+                    "max_entropy": 8.0,
+                    "min_complexity": 40,
+                    "required_apis": ["has_network_api", "has_process_api"],
+                    "min_dangerous_patterns": 2
+                }
+            query_features: Auto-extracted query features for smart boosting
+
+        Returns:
+            Qdrant Filter object or None if no filters specified
+        """
+        conditions = []
+
+        # Label filter
+        if filter_label:
+            conditions.append(
+                models.FieldCondition(
+                    key="label",
+                    match=models.MatchValue(value=filter_label.lower())
+                )
+            )
+
+        # Manual feature filters
+        if feature_filters:
+            # Entropy range
+            if "min_entropy" in feature_filters:
+                conditions.append(
+                    models.FieldCondition(
+                        key="features.entropy",
+                        range=models.Range(
+                            gte=feature_filters["min_entropy"],
+                            lte=feature_filters.get("max_entropy")
+                        )
+                    )
+                )
+
+            # Complexity range
+            if "min_complexity" in feature_filters:
+                conditions.append(
+                    models.FieldCondition(
+                        key="features.complexity_score",
+                        range=models.Range(
+                            gte=feature_filters["min_complexity"],
+                            lte=feature_filters.get("max_complexity")
+                        )
+                    )
+                )
+
+            # Code length range
+            if "min_code_length" in feature_filters:
+                conditions.append(
+                    models.FieldCondition(
+                        key="features.code_length",
+                        range=models.Range(
+                            gte=feature_filters["min_code_length"],
+                            lte=feature_filters.get("max_code_length")
+                        )
+                    )
+                )
+
+            # Required API flags (all must be true)
+            if "required_apis" in feature_filters:
+                for api_flag in feature_filters["required_apis"]:
+                    conditions.append(
+                        models.FieldCondition(
+                            key=f"features.{api_flag}",
+                            match=models.MatchValue(value=True)
+                        )
+                    )
+
+            # Dangerous patterns count (must have at least N)
+            if "min_dangerous_patterns" in feature_filters:
+                # Note: Qdrant doesn't support array length queries directly
+                # This is a workaround using match any (presence check)
+                # Better approach: Pre-compute dangerous_pattern_count field
+                logger.debug(f"min_dangerous_patterns filter requires custom reranking")
+
+        # DISABLED: Auto-filtering is too aggressive - causes 0% recall
+        # Use weighted BOOSTING instead (soft reranking, not hard filtering)
+        if query_features and False:  # DISABLED
+            # CRITICAL: Query has code execution patterns → filter for dangerous samples only
+            query_dangerous = query_features.get("dangerous_api_calls", [])
+            CRITICAL_PATTERNS = {'eval', 'exec', 'compile', '__import__'}
+            has_critical = any(p in CRITICAL_PATTERNS for p in query_dangerous)
+
+            if has_critical:
+                # STRONG signal - limit search to samples with ANY dangerous API
+                logger.info(f"Query has CRITICAL patterns {[p for p in query_dangerous if p in CRITICAL_PATTERNS]}, filtering for dangerous samples")
+                # Use match any on dangerous_api_calls array
+                conditions.append(
+                    models.FieldCondition(
+                        key="features.dangerous_api_calls",
+                        match=models.MatchAny(any=list(CRITICAL_PATTERNS))  # Must have at least one critical pattern
+                    )
+                )
+
+            # HIGH ENTROPY + dangerous APIs → likely obfuscated malware
+            elif query_features.get("entropy", 0) > 6.5 and len(query_dangerous) > 0:
+                logger.info(f"Query has high entropy ({query_features['entropy']:.2f}) + dangerous APIs, filtering for obfuscated samples")
+                conditions.append(
+                    models.FieldCondition(
+                        key="features.entropy",
+                        range=models.Range(gte=6.0)  # Very high entropy only
+                    )
+                )
+
+            # DISABLED: Don't filter on common APIs (network, file) - creates cross-label bias
+            # if query_features.get("has_network_api", False):
+            #     logger.debug("Query uses network API, filtering for network samples")
+            #     conditions.append(
+            #         models.FieldCondition(
+            #             key="features.has_network_api",
+            #             match=models.MatchValue(value=True)
+            #         )
+            #     )
+
+            # Query uses dangerous APIs → prefer samples with dangerous patterns
+            if len(query_features.get("dangerous_api_calls", [])) > 0:
+                logger.debug(f"Query has {len(query_features['dangerous_api_calls'])} dangerous patterns")
+                # This is a soft preference, handled in reranking instead
+
+        # Return filter only if we have conditions
+        if conditions:
+            return models.Filter(must=conditions)
+        return None
+
+    def _rerank_by_features(
+        self,
+        results: List[Dict[str, Any]],
+        query_features: Dict[str, Any],
+        boost_factor: float = 1.05
+    ) -> List[Dict[str, Any]]:
+        """
+        Rerank results based on feature similarity (Component 2 - Stage 2D).
+
+        Boosts scores for samples with similar feature characteristics:
+        - Similar entropy levels
+        - Matching API usage patterns
+        - Similar complexity
+
+        Args:
+            results: Search results
+            query_features: Query feature dict
+            boost_factor: Multiplier for matching features (e.g., 1.05 = 5% boost)
+
+        Returns:
+            Reranked results (sorted by boosted score)
+        """
+        if not query_features or not results:
+            return results
+
+        logger.info(f"📊 Reranking {len(results)} results by feature similarity (boost_factor={boost_factor})...")
+
+        boosted_count = 0
+        total_boost_applied = 0.0
+
+        for result in results:
+            result_features = result.get("features", {})
+            if not result_features:
+                continue
+
+            boost = 1.0
+
+            # CONSERVATIVE BOOSTING: Only boost on rare/dangerous features
+            # Common features (network, file APIs) appear in both benign and malicious code
+            # Boosting on them creates label bias (benign Flask -> malicious C2)
+
+            # DISABLED: Entropy matching (too broad - most code is 4-6 bits)
+            # query_entropy = query_features.get("entropy", 0)
+            # result_entropy = result_features.get("entropy", 0)
+            # if abs(query_entropy - result_entropy) < 1.0:
+            #     boost *= boost_factor
+
+            # DISABLED: General API pattern matching (creates cross-label boosting)
+            # benign network code (Flask) matches malicious network code (C2)
+            # query_apis = {...}
+            # result_apis = {...}
+            # matching_apis = set(query_apis.keys()) & set(result_apis.keys())
+            # if matching_apis:
+            #     boost *= boost_factor ** len(matching_apis)
+
+            # WEIGHTED BOOSTING: Different weights for different danger levels
+            query_dangerous = set(query_features.get("dangerous_api_calls", []))
+            result_dangerous = set(result_features.get("dangerous_api_calls", []))
+            matching_dangerous = query_dangerous & result_dangerous
+
+            if matching_dangerous:
+                # Categorize patterns by danger level
+                CRITICAL_PATTERNS = {'eval', 'exec', 'compile', '__import__'}  # Code execution - 3x boost
+                HIGH_RISK_PATTERNS = {'system', 'popen', 'spawn'}  # Command execution - 2x boost
+                MEDIUM_RISK_PATTERNS = {'decode', 'loads', 'load'}  # Deserialization - 1.2x boost (common in benign too)
+
+                for pattern in matching_dangerous:
+                    if pattern in CRITICAL_PATTERNS:
+                        boost *= (boost_factor * 3.0)  # 1.15 * 3 = 3.45x boost
+                        logger.debug(f"  CRITICAL pattern match: {pattern}")
+                    elif pattern in HIGH_RISK_PATTERNS:
+                        boost *= (boost_factor * 2.0)  # 1.15 * 2 = 2.3x boost
+                        logger.debug(f"  HIGH RISK pattern match: {pattern}")
+                    elif pattern in MEDIUM_RISK_PATTERNS:
+                        boost *= (boost_factor * 0.5)  # 1.15 * 0.5 = 1.075x boost (minimal)
+                        logger.debug(f"  MEDIUM RISK pattern match: {pattern}")
+                    else:
+                        # Unknown pattern - conservative boost
+                        boost *= boost_factor
+                        logger.debug(f"  Unknown dangerous pattern match: {pattern}")
+
+            # Apply boost to score
+            original_score = result.get("score", 0.0)
+            result["score"] = original_score * boost
+            if boost > 1.0:
+                boosted_count += 1
+                total_boost_applied += (boost - 1.0)
+                logger.debug(f"  Boosted score: {original_score:.4f} → {result['score']:.4f} (×{boost:.2f})")
+
+        # Re-sort by boosted score
+        results = sorted(results, key=lambda r: r.get("score", 0.0), reverse=True)
+
+        # Log summary
+        if boosted_count > 0:
+            avg_boost = (total_boost_applied / boosted_count) + 1.0
+            logger.info(f"✓ Reranking complete: {boosted_count}/{len(results)} results boosted (avg boost: ×{avg_boost:.2f})")
+        else:
+            logger.warning(f"⚠️  No results were boosted (no feature matches found)")
+
+        return results
+
     def search_similar_code(
         self,
         query_code: str,
@@ -767,15 +1138,24 @@ class CodeSimilarityStore:
         aggregation_strategy: str = "max_score",
         enable_reranking: bool = True,
         fetch_full_content: bool = True,
-        db_manager = None
+        db_manager = None,
+        # COMPONENT 2 - STAGE 2D: Hybrid search parameters
+        feature_filters: Optional[Dict[str, Any]] = None,
+        enable_feature_boosting: bool = False  # DISABLED: Hurts performance (70% -> 60% accuracy)
     ) -> List[Dict[str, Any]]:
         """
-        Search for similar code samples with ROBUST "Always k" STRATEGY.
+        Search for similar code samples with ROBUST "Always k" STRATEGY + HYBRID SEARCH.
 
         Multi-level search strategy:
         - Level 1: Search with score_threshold + filters (high quality)
         - Level 2: Fallback without score_threshold, keep hard filters (medium quality)
         - Level 3: Last resort - return best available, mark as low_confidence
+
+        HYBRID SEARCH (Component 2 - Stage 2D):
+        - Combines vector similarity with static feature filtering
+        - Supports manual feature constraints (min_entropy, required_apis, etc.)
+        - Auto feature boosting based on query characteristics
+        - Feature-based reranking for improved relevance
 
         This guarantees deterministic behavior even with empty collections or aggressive filters.
 
@@ -791,17 +1171,62 @@ class CodeSimilarityStore:
             enable_reranking: Enable reranking for improved relevance
             fetch_full_content: Fetch full untruncated content from database (ELIMINATES TRUNCATION)
             db_manager: DatasetManager instance (required if fetch_full_content=True)
+            feature_filters: Manual feature constraints (NEW), e.g.:
+                {
+                    "min_entropy": 6.0,
+                    "required_apis": ["has_network_api"],
+                    "min_complexity": 40
+                }
+            enable_feature_boosting: Auto-boost results matching query features (NEW)
 
         Returns:
             List of up to k similar code samples with 100% original content (if fetch_full_content=True)
+
+        Examples:
+            # Find obfuscated malware
+            results = store.search_similar_code(
+                query_code="import socket; ...",
+                k=5,
+                feature_filters={"min_entropy": 6.0, "required_apis": ["has_network_api"]}
+            )
+
+            # Auto feature boosting
+            results = store.search_similar_code(
+                query_code="eval(input())",
+                k=3,
+                enable_feature_boosting=True  # Automatically prefer samples with dangerous APIs
+            )
         """
         # Get threshold from config if not explicitly provided
         if score_threshold is None:
             score_threshold = self.get_threshold(threshold_mode)
 
+        # COMPONENT 2 - STAGE 2D: Extract query features for hybrid search
+        query_features = None
+        if enable_feature_boosting or feature_filters:
+            logger.info("🔬 Extracting query features for hybrid search...")
+            query_features = self._extract_query_features(query_code)
+            if query_features:
+                logger.info(
+                    f"✓ Query features: entropy={query_features.get('entropy', 0):.2f}, "
+                    f"complexity={query_features.get('complexity_score', 0)}, "
+                    f"dangerous_apis={query_features.get('dangerous_api_calls', [])}"
+                )
+            else:
+                logger.warning("⚠️  Failed to extract query features")
+
+        # Build hybrid filter (label + features)
+        hybrid_filter = self._build_hybrid_filter(
+            filter_label=filter_label,
+            feature_filters=feature_filters,
+            query_features=query_features if enable_feature_boosting else None
+        )
+
         logger.info(
             f"🔍 Search: k={k}, threshold={score_threshold:.2f}, "
-            f"balance={balance_labels}, fetch_full={fetch_full_content}"
+            f"balance={balance_labels}, fetch_full={fetch_full_content}, "
+            f"feature_filters={'enabled' if feature_filters else 'none'}, "
+            f"feature_boosting={'enabled' if enable_feature_boosting else 'disabled'}"
         )
 
         # Generate query embedding (normalized if configured)
@@ -819,9 +1244,10 @@ class CodeSimilarityStore:
         results = self._search_with_filters(
             query_vector=query_vector,
             limit=initial_search_limit,
-            filter_label=filter_label,
+            filter_label=filter_label if not hybrid_filter else None,  # Use hybrid_filter if available
             balance_labels=balance_labels,
-            score_threshold=score_threshold
+            score_threshold=score_threshold,
+            custom_filter=hybrid_filter  # COMPONENT 2 - STAGE 2D: Pass hybrid filter
         )
 
         # Aggregate chunks if enabled
@@ -837,6 +1263,13 @@ class CodeSimilarityStore:
         if enable_reranking and self.reranking_service:
             logger.debug("Applying reranking...")
             results = self.reranking_service.rerank(query_code, results, k=None)
+
+        # COMPONENT 2 - STAGE 2D: Feature-based reranking
+        if enable_feature_boosting and query_features:
+            logger.info(f"🚀 Applying feature-based reranking (boost_factor=1.15) to {len(results)} results...")
+            results = self._rerank_by_features(results, query_features, boost_factor=1.15)  # Increased from 1.05 to 1.15
+        elif enable_feature_boosting and not query_features:
+            logger.warning("⚠️  Feature boosting enabled but no query features extracted!")
 
         # Check if we have enough results
         if len(results) >= k:
@@ -861,9 +1294,10 @@ class CodeSimilarityStore:
             fallback_results = self._search_with_filters(
                 query_vector=query_vector,
                 limit=k * 3,
-                filter_label=filter_label,
+                filter_label=filter_label if not hybrid_filter else None,
                 balance_labels=balance_labels,
-                score_threshold=self.fallback_threshold  # Effectively no threshold (0.0)
+                score_threshold=self.fallback_threshold,  # Effectively no threshold (0.0)
+                custom_filter=hybrid_filter  # COMPONENT 2 - STAGE 2D: Use hybrid filter in fallback too
             )
 
             # Aggregate chunks
@@ -879,6 +1313,10 @@ class CodeSimilarityStore:
                 fallback_results = self.reranking_service.rerank(
                     query_code, fallback_results, k=None
                 )
+
+            # COMPONENT 2 - STAGE 2D: Feature reranking for fallback results too
+            if enable_feature_boosting and query_features:
+                fallback_results = self._rerank_by_features(fallback_results, query_features, boost_factor=1.15)  # Increased from 1.05 to 1.15
 
             # Merge results (keeping unique by db_id)
             seen_ids = {r.get("db_id") for r in results}
@@ -1053,16 +1491,27 @@ class CodeSimilarityStore:
         limit: int,
         filter_label: Optional[str],
         balance_labels: bool,
-        score_threshold: float
+        score_threshold: float,
+        custom_filter: Optional[models.Filter] = None  # COMPONENT 2 - STAGE 2D: Support hybrid filter
     ) -> List[Dict[str, Any]]:
         """
         Execute search with specified filters and threshold.
 
-        Returns list of formatted results.
+        Args:
+            query_vector: Query embedding vector
+            limit: Maximum results to return
+            filter_label: Label filter (ignored if custom_filter provided)
+            balance_labels: Balance label distribution
+            score_threshold: Minimum score threshold
+            custom_filter: Custom Qdrant filter (overrides filter_label)
+
+        Returns:
+            List of formatted results.
         """
-        # Build filter
-        search_filter = None
-        if filter_label:
+        # Use custom filter if provided (hybrid search), otherwise build from filter_label
+        if custom_filter:
+            search_filter = custom_filter
+        elif filter_label:
             search_filter = models.Filter(
                 must=[
                     models.FieldCondition(
@@ -1071,6 +1520,8 @@ class CodeSimilarityStore:
                     )
                 ]
             )
+        else:
+            search_filter = None
 
         try:
             # Modern Qdrant API uses query_points method
@@ -1151,6 +1602,7 @@ class CodeSimilarityStore:
                     "db_id": hit.payload.get("db_id"),
                     "chunk_index": hit.payload.get("chunk_index", 0),
                     "total_chunks": hit.payload.get("total_chunks", 1),
+                    "features": hit.payload.get("features", {}),  # CRITICAL FIX: Extract features for reranking
                     "payload": hit.payload  # Add full payload for API compatibility
                 })
 

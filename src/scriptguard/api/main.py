@@ -23,6 +23,13 @@ from scriptguard.utils.prompts import (
     parse_classification_output,
     format_fewshot_prompt,
 )
+# COMPONENT 2 - STAGE 2E: Import feature extraction for hybrid search
+from scriptguard.steps.feature_extraction import (
+    extract_ast_features,
+    calculate_entropy,
+    extract_api_patterns,
+    extract_string_features
+)
 
 import torch
 from transformers import LogitsProcessorList, LogitsProcessor
@@ -245,6 +252,67 @@ async def analyze_script(
     if len(analysis_request.script_content.strip()) == 0:
         raise HTTPException(status_code=400, detail="Script content cannot be empty")
 
+    # COMPONENT 2 - STAGE 2E: Extract static features for hybrid search & explainability
+    query_features = None
+    feature_analysis = None
+
+    try:
+        logger.debug("Extracting static features from query...")
+        ast_features = extract_ast_features(analysis_request.script_content)
+        entropy = calculate_entropy(analysis_request.script_content)
+        api_patterns = extract_api_patterns(analysis_request.script_content)
+        string_features = extract_string_features(analysis_request.script_content)
+
+        # Build feature dict for RAG hybrid search
+        query_features = {
+            "complexity_score": ast_features.get("complexity_score", 0),
+            "entropy": entropy,
+            "code_length": len(analysis_request.script_content),
+            "code_lines": analysis_request.script_content.count("\n") + 1,
+            "dangerous_api_calls": ast_features.get("dangerous_patterns", []),
+            "suspicious_combinations": api_patterns.get("suspicious_combinations", []),
+            "has_network_api": len(api_patterns.get("network_apis", [])) > 0,
+            "has_file_api": len(api_patterns.get("file_apis", [])) > 0,
+            "has_process_api": len(api_patterns.get("process_apis", [])) > 0,
+            "has_crypto_api": len(api_patterns.get("crypto_apis", [])) > 0,
+            "has_urls": string_features.get("has_urls", False),
+            "has_ips": string_features.get("has_ips", False),
+            "has_base64": string_features.get("has_base64", False),
+            "has_hex": string_features.get("has_hex", False)
+        }
+
+        # Build feature analysis for API response (explainability)
+        feature_analysis = {
+            "entropy": entropy,
+            "complexity_score": ast_features.get("complexity_score", 0),
+            "dangerous_patterns": ast_features.get("dangerous_patterns", []),
+            "suspicious_combinations": api_patterns.get("suspicious_combinations", []),
+            "has_obfuscation": entropy > 6.0,  # High entropy indicator
+            "has_dangerous_apis": len(ast_features.get("dangerous_patterns", [])) > 0,
+            "api_usage": {
+                "network": query_features["has_network_api"],
+                "file": query_features["has_file_api"],
+                "process": query_features["has_process_api"],
+                "crypto": query_features["has_crypto_api"]
+            },
+            "string_patterns": {
+                "urls": query_features["has_urls"],
+                "ips": query_features["has_ips"],
+                "base64": query_features["has_base64"],
+                "hex": query_features["has_hex"]
+            }
+        }
+
+        logger.info(
+            f"Features extracted: entropy={entropy:.2f}, complexity={ast_features.get('complexity_score', 0)}, "
+            f"dangerous_apis={len(ast_features.get('dangerous_patterns', []))}"
+        )
+
+    except Exception as e:
+        logger.warning(f"Failed to extract features: {e}. Continuing without feature analysis.")
+        query_features = None
+        feature_analysis = None
+
     # RAG Context
     rag_context_examples = []
     related_cves = []
@@ -273,6 +341,16 @@ async def analyze_script(
                 app_state.rag_store.graceful_fallback_enabled = False
                 app_state.rag_store.ensure_label_balance = False
 
+                # COMPONENT 2 - STAGE 2E: Build feature filters for hybrid search
+                feature_filters = {}
+                if query_features:
+                    # High entropy → filter for obfuscated samples
+                    if query_features.get("entropy", 0) > 6.0:
+                        feature_filters["min_entropy"] = 5.5
+                        logger.info(f"High entropy detected ({query_features['entropy']:.2f}), filtering for obfuscated samples")
+
+                    # Dangerous APIs → prefer samples with dangerous patterns (handled by feature boosting)
+
                 try:
                     results = app_state.rag_store.search_similar_code(
                         query_code=analysis_request.script_content,
@@ -281,7 +359,10 @@ async def analyze_script(
                         enable_reranking=True,
                         fetch_full_content=False,  # FIXED: Set to False since we don't have db_manager in API
                         aggregate_chunks=True,
-                        threshold_mode="strict"  # Use strict threshold mode for high-quality results
+                        threshold_mode="strict",  # Use strict threshold mode for high-quality results
+                        # COMPONENT 2 - STAGE 2E: Hybrid search parameters
+                        feature_filters=feature_filters if feature_filters else None,
+                        enable_feature_boosting=True  # Auto-boost results matching query features
                     )
                 finally:
                     # Restore original settings
@@ -532,7 +613,9 @@ async def analyze_script(
             is_malicious=is_malicious,
             confidence=confidence,
             reasoning=reasoning,
-            related_cves=related_cves
+            related_cves=related_cves,
+            # COMPONENT 2 - STAGE 2E: Include feature analysis for explainability
+            feature_analysis=feature_analysis
         )
 
     except Exception as e:

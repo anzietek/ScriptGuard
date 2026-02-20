@@ -23,6 +23,16 @@ class ScriptAnalysisResponse(BaseModel):
     confidence: float = Field(..., description="Confidence score of the classification (0.0 to 1.0)")
     reasoning: str = Field(..., description="Explanation for the classification")
     related_cves: List[VulnerabilityInfo] = Field(default_factory=list, description="List of related CVEs or vulnerabilities found via RAG")
+    # COMPONENT 2 - STAGE 2E: Feature analysis for explainability
+    feature_analysis: Optional[Dict[str, Any]] = Field(
+        None,
+        description="Static feature analysis of the script (NEW - Component 2). Includes:\n"
+                    "- entropy: Shannon entropy (obfuscation indicator)\n"
+                    "- dangerous_patterns: List of dangerous API calls detected\n"
+                    "- has_obfuscation: Boolean flag for high entropy\n"
+                    "- has_dangerous_apis: Boolean flag for dangerous functions\n"
+                    "- api_usage: Dictionary of API flags (network, file, process, crypto)"
+    )
     
 class HealthResponse(BaseModel):
     """Response model for health check."""

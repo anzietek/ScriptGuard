@@ -9,6 +9,12 @@ import os
 
 from scriptguard.rag.code_similarity_store import CodeSimilarityStore
 from scriptguard.utils.logger import logger
+from scriptguard.steps.feature_extraction import (
+    extract_ast_features,
+    calculate_entropy,
+    extract_api_patterns,
+    extract_string_features
+)
 
 
 @step
@@ -163,6 +169,81 @@ def vectorize_samples(
         elif label == "benign":
             benign_count += 1
 
+        # COMPONENT 2 - STAGE 2B: Extract static features for hybrid search
+        code_content = sample.get("content", "")
+
+        # Check if features already exist (from earlier pipeline step)
+        if "features" not in sample:
+            # Extract features if not already present
+            try:
+                ast_features = extract_ast_features(code_content)
+                entropy = calculate_entropy(code_content)
+                api_patterns = extract_api_patterns(code_content)
+                string_features = extract_string_features(code_content)
+
+                # Build standardized feature dict (see docs/FEATURE_SCHEMA.md)
+                features = {
+                    # Complexity metrics
+                    "complexity_score": ast_features.get("complexity_score", 0),
+                    "entropy": entropy,
+                    "code_length": len(code_content),
+                    "code_lines": code_content.count("\n") + 1,
+
+                    # Dangerous patterns
+                    "dangerous_api_calls": ast_features.get("dangerous_patterns", []),
+                    "suspicious_combinations": api_patterns.get("suspicious_combinations", []),
+
+                    # API usage flags
+                    "has_network_api": len(api_patterns.get("network_apis", [])) > 0,
+                    "has_file_api": len(api_patterns.get("file_apis", [])) > 0,
+                    "has_process_api": len(api_patterns.get("process_apis", [])) > 0,
+                    "has_crypto_api": len(api_patterns.get("crypto_apis", [])) > 0,
+
+                    # String patterns
+                    "has_urls": string_features.get("has_urls", False),
+                    "has_ips": string_features.get("has_ips", False),
+                    "has_base64": string_features.get("has_base64", False),
+                    "has_hex": string_features.get("has_hex", False),
+
+                    # Detailed arrays (for analysis, not filtering)
+                    "network_apis": api_patterns.get("network_apis", []),
+                    "file_apis": api_patterns.get("file_apis", []),
+                    "process_apis": api_patterns.get("process_apis", []),
+                    "crypto_apis": api_patterns.get("crypto_apis", []),
+                    "imports": ast_features.get("imports", []),
+                    "function_calls": ast_features.get("function_calls", []),
+                    "suspicious_strings": string_features.get("suspicious_strings", [])
+                }
+            except Exception as e:
+                logger.warning(f"Failed to extract features for sample {db_id}: {e}")
+                # Use empty features on error
+                features = {
+                    "complexity_score": 0,
+                    "entropy": 0.0,
+                    "code_length": len(code_content),
+                    "code_lines": code_content.count("\n") + 1,
+                    "dangerous_api_calls": [],
+                    "suspicious_combinations": [],
+                    "has_network_api": False,
+                    "has_file_api": False,
+                    "has_process_api": False,
+                    "has_crypto_api": False,
+                    "has_urls": False,
+                    "has_ips": False,
+                    "has_base64": False,
+                    "has_hex": False,
+                    "network_apis": [],
+                    "file_apis": [],
+                    "process_apis": [],
+                    "crypto_apis": [],
+                    "imports": [],
+                    "function_calls": [],
+                    "suspicious_strings": []
+                }
+        else:
+            # Features already extracted in earlier step (e.g., feature_extraction.py)
+            features = sample.get("features", {})
+
         samples_to_vectorize.append({
             "id": point_id,  # Qdrant point ID
             "db_id": db_id,  # Real database ID (None if synthetic)
@@ -170,7 +251,8 @@ def vectorize_samples(
             "label": label,
             "source": sample.get("source", "unknown"),
             "language": sample.get("metadata", {}).get("language", "python"),
-            "metadata": sample.get("metadata", {})
+            "metadata": sample.get("metadata", {}),
+            "features": features  # NEW: Static features for hybrid search
         })
 
     logger.info(f"  - Malicious: {malicious_count}")

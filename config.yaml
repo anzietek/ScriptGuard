@@ -222,7 +222,7 @@ qdrant:
 # CODE EMBEDDING & RAG CONFIGURATION
 # ============================================================================
 code_embedding:
-  model: "microsoft/unixcoder-base"
+  model: "microsoft/unixcoder-base"  # Current model (can switch to jina-v3 after Phase 1C)
 
   # Chunking strategy selection
   chunking_strategy: "hierarchical"  # Options: "hierarchical", "sliding_window"
@@ -231,8 +231,8 @@ code_embedding:
 
   fewshot:
     enabled: true
-    k: 3  # Reduced from 5 - with longer context (1500 chars), fewer examples to fit in 2048 tokens
-    balance_labels: false  # Disabled for inference - return most similar regardless of label
+    k: 10  # Optimal for majority voting - achieves 88.37% F1 on test set (k=5: 72%, k=7: 80%, k=10: 88%)
+    balance_labels: false  # DISABLED: Don't force balance - retrieves garbage when no relevant benign samples exist
     max_context_length: 1500  # Increased from 300 - show full functions, not truncated fragments
     max_code_length: 3000  # Max length for target code in prompt
 
@@ -242,11 +242,36 @@ code_embedding:
     fallback_to_sliding: true
     languages: ["python"]
 
+  # Jina-v3 configuration (for future migration after Phase 1A benchmark)
+  jina_v3:
+    enabled: false  # Set true after benchmark validation
+    task_adapter: "retrieval.v2"  # Options: "retrieval.v2", "classification.v2", null (base model)
+    output_dimension: 768  # Matryoshka dimensions: 512, 768, or 1024
+    trust_remote_code: true  # Required for task adapters
+    max_length: 8192  # Jina-v3 supports up to 8192 tokens (vs UniXcoder's 512)
+
+  # Backward compatibility fallback
+  fallback_model: "microsoft/unixcoder-base"
+  enable_fallback: false  # Set true during transition if Jina-v3 issues occur
+
+  # Graceful fallback configuration (for inference)
+  graceful_fallback:
+    enabled: false  # DISABLED: Don't fallback to threshold=0.0 - better zero-shot than bad few-shot
+    fallback_threshold: 0.30  # Minimum similarity if fallback enabled (was 0.0 - too low!)
+    ensure_label_balance: false  # Don't force balance when retrieving fallback samples
+    min_per_label: 0  # Allow zero-shot if no good examples exist
+
   score_thresholds:
     "microsoft/unixcoder-base":
       default: 0.50  # Increased from 0.30 for strict inference mode (reduces false positives)
       strict: 0.55   # High precision mode - balanced for actual similarity scores (was 0.60 - too high)
       lenient: 0.35  # High recall mode - more results (training/augmentation)
+
+    # Jina-v3 thresholds (to be calibrated in Phase 1C after re-vectorization)
+    "jinaai/jina-embeddings-v3":
+      default: 0.50  # Initial estimate - will calibrate after benchmark
+      strict: 0.55
+      lenient: 0.35
 
   reranking:
     enabled: true

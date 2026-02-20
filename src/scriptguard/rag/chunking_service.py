@@ -520,6 +520,14 @@ class ChunkingService:
                 metadata=sample.get("metadata"),
                 language=language
             )
+
+            # CRITICAL FIX: Copy features from parent sample to ALL chunks
+            # Features are sample-level (not chunk-level), so all chunks inherit them
+            sample_features = sample.get("features", {})
+            if sample_features:
+                for chunk in chunks:
+                    chunk["features"] = sample_features
+
             all_chunks.extend(chunks)
             samples_processed += 1
 
