@@ -1,4 +1,5 @@
 from typing import Any, Optional
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -7,11 +8,24 @@ from transformers import (
     AutoTokenizer,
     DataCollatorWithPadding,
     EarlyStoppingCallback,
+    EvalPrediction,
     Trainer,
     TrainingArguments,
 )
+from sklearn.metrics import accuracy_score, f1_score, precision_score, recall_score
 from datasets import Dataset
 from scriptguard.utils.logger import logger
+
+
+def compute_metrics(pred: EvalPrediction) -> dict:
+    labels = pred.label_ids
+    preds = np.argmax(pred.predictions, axis=1)
+    return {
+        "accuracy": accuracy_score(labels, preds),
+        "f1": f1_score(labels, preds, average="binary", zero_division=0),
+        "precision": precision_score(labels, preds, average="binary", zero_division=0),
+        "recall": recall_score(labels, preds, average="binary", zero_division=0),
+    }
 
 
 class FocalLoss(nn.Module):
@@ -95,8 +109,8 @@ class CodeBERTClassifier:
             eval_strategy="epoch",
             save_strategy="epoch",
             load_best_model_at_end=True,
-            metric_for_best_model="eval_loss",
-            greater_is_better=False,
+            metric_for_best_model="eval_f1",
+            greater_is_better=True,
             fp16=torch.cuda.is_available(),
             bf16=False,
             save_safetensors=True,
@@ -115,6 +129,7 @@ class CodeBERTClassifier:
             train_dataset=train_dataset,
             eval_dataset=val_dataset,
             data_collator=data_collator,
+            compute_metrics=compute_metrics,
             class_weights=class_weights,
             focal_gamma=focal_gamma,
             callbacks=[EarlyStoppingCallback(early_stopping_patience=early_stopping_patience)],
