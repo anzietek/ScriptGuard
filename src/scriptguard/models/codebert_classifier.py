@@ -1,5 +1,7 @@
 from typing import Any, Optional
 import torch
+import torch.nn as nn
+import torch.nn.functional as F
 from transformers import (
     AutoModelForSequenceClassification,
     AutoTokenizer,
@@ -12,10 +14,24 @@ from datasets import Dataset
 from scriptguard.utils.logger import logger
 
 
+class FocalLoss(nn.Module):
+    def __init__(self, gamma: float = 2.0, weight: Optional[torch.Tensor] = None):
+        super().__init__()
+        self.gamma = gamma
+        self.weight = weight
+
+    def forward(self, logits: torch.Tensor, labels: torch.Tensor) -> torch.Tensor:
+        ce_loss = F.cross_entropy(logits, labels, weight=self.weight, reduction='none')
+        p_t = torch.exp(-ce_loss)
+        focal_loss = (1 - p_t) ** self.gamma * ce_loss
+        return focal_loss.mean()
+
+
 class WeightedTrainer(Trainer):
-    def __init__(self, *args: Any, class_weights: Optional[torch.Tensor] = None, **kwargs: Any) -> None:
+    def __init__(self, *args: Any, class_weights: Optional[torch.Tensor] = None, focal_gamma: float = 2.0, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
         self.class_weights = class_weights
+        self.focal_gamma = focal_gamma
 
     def compute_loss(
         self,
@@ -28,7 +44,7 @@ class WeightedTrainer(Trainer):
         outputs = model(**inputs)
         logits = outputs.logits
         weight = self.class_weights.to(logits.device) if self.class_weights is not None else None
-        loss_fct = torch.nn.CrossEntropyLoss(weight=weight)
+        loss_fct = FocalLoss(gamma=self.focal_gamma, weight=weight)
         loss = loss_fct(logits.view(-1, logits.size(-1)), labels.view(-1))
         return (loss, outputs) if return_outputs else loss
 
@@ -90,6 +106,8 @@ class CodeBERTClassifier:
 
         data_collator = DataCollatorWithPadding(tokenizer=self.tokenizer)
 
+        focal_gamma = config.get("focal_gamma", 2.0)
+
         return WeightedTrainer(
             model=self.model,
             args=training_args,
@@ -97,5 +115,6 @@ class CodeBERTClassifier:
             eval_dataset=val_dataset,
             data_collator=data_collator,
             class_weights=class_weights,
+            focal_gamma=focal_gamma,
             callbacks=[EarlyStoppingCallback(early_stopping_patience=early_stopping_patience)],
         )

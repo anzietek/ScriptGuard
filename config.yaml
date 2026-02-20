@@ -207,6 +207,7 @@ codebert:
   weight_decay: 0.01
   num_epochs: 5
   eval_threshold: 0.92
+  focal_gamma: 2.0  # Focal Loss gamma: 0=CrossEntropy, 2=standard focal, higher=harder examples focus
   output_dir: ${MODEL_OUTPUT_DIR:-/workspace/models/codebert}
 
 # ============================================================================
