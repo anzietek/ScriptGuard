@@ -1,225 +1,101 @@
-"""
-Alternative Model Architecture: CodeBERT for Binary Classification
-====================================================================
-
-This is a more efficient alternative to using StarCoder2 Causal LM
-for malware classification. CodeBERT is designed for code understanding
-tasks and has a classification head built-in.
-
-ADVANTAGES:
------------
-1. Faster training (125M vs 3B parameters)
-2. Less VRAM (1-2GB vs 4GB+)
-3. Direct classification (no text generation)
-4. Better suited for binary classification tasks
-5. Proven track record on code classification
-
-EXPECTED IMPROVEMENTS:
----------------------
-- Accuracy: 75-85% (vs current 58%)
-- Training time: ~30min (vs 2h+)
-- Inference: 10-50ms (vs 500ms+)
-"""
-
+from typing import Any, Optional
 import torch
 from transformers import (
-    AutoTokenizer,
     AutoModelForSequenceClassification,
-    TrainingArguments,
+    AutoTokenizer,
+    DataCollatorWithPadding,
+    EarlyStoppingCallback,
     Trainer,
-    DataCollatorWithPadding
+    TrainingArguments,
 )
 from datasets import Dataset
-from typing import Dict, Any, Optional
 from scriptguard.utils.logger import logger
 
+
+class WeightedTrainer(Trainer):
+    def __init__(self, *args: Any, class_weights: Optional[torch.Tensor] = None, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self.class_weights = class_weights
+
+    def compute_loss(
+        self,
+        model: Any,
+        inputs: dict,
+        return_outputs: bool = False,
+        **kwargs: Any,
+    ) -> Any:
+        labels = inputs.pop("labels")
+        outputs = model(**inputs)
+        logits = outputs.logits
+        weight = self.class_weights.to(logits.device) if self.class_weights is not None else None
+        loss_fct = torch.nn.CrossEntropyLoss(weight=weight)
+        loss = loss_fct(logits.view(-1, logits.size(-1)), labels.view(-1))
+        return (loss, outputs) if return_outputs else loss
+
+
 class CodeBERTClassifier:
-    """
-    Binary classifier using CodeBERT for malware detection.
-
-    This is a simpler and more efficient approach than Causal LM.
-    """
-
-    def __init__(self, model_id: str = "microsoft/codebert-base", config: dict = None):
-        """
-        Initialize CodeBERT classifier.
-
-        Args:
-            model_id: Base model (codebert-base, graphcodebert-base, etc.)
-            config: Configuration dictionary
-        """
-        self.model_id = model_id
-        self.config = config or {}
-
-        logger.info(f"Loading tokenizer: {model_id}")
-        self.tokenizer = AutoTokenizer.from_pretrained(model_id)
-
-        logger.info("Loading model with classification head (2 classes)")
+    def __init__(self, model_name: str = "microsoft/codebert-base", num_labels: int = 2) -> None:
+        self.model_name = model_name
+        self.num_labels = num_labels
+        logger.info(f"Loading tokenizer from {model_name}")
+        self.tokenizer = AutoTokenizer.from_pretrained(model_name)
+        logger.info(f"Loading model with {num_labels} output labels")
         self.model = AutoModelForSequenceClassification.from_pretrained(
-            model_id,
-            num_labels=2,  # Binary classification
-            problem_type="single_label_classification"
+            model_name,
+            num_labels=num_labels,
+            problem_type="single_label_classification",
+            use_safetensors=True,
         )
 
-    def prepare_dataset(self, data: list) -> Dataset:
-        """
-        Prepare dataset for training.
+    def get_class_weights(self, labels: list[int]) -> torch.Tensor:
+        n_samples = len(labels)
+        n_classes = self.num_labels
+        class_counts = [labels.count(i) for i in range(n_classes)]
+        weights = [
+            n_samples / (n_classes * c) if c > 0 else 1.0
+            for c in class_counts
+        ]
+        logger.info(f"Class counts: {class_counts}, weights: {[f'{w:.3f}' for w in weights]}")
+        return torch.tensor(weights, dtype=torch.float32)
 
-        Args:
-            data: List of dicts with 'content' and 'label' keys
-
-        Returns:
-            Tokenized dataset ready for training
-        """
-        # Extract code and labels
-        texts = []
-        labels = []
-
-        for item in data:
-            code = item.get("content", "")
-            label_str = item.get("label", "benign")
-
-            # Convert to binary: 0=benign, 1=malicious
-            label = 1 if label_str.lower() == "malicious" else 0
-
-            texts.append(code)
-            labels.append(label)
-
-        # Tokenize
-        logger.info(f"Tokenizing {len(texts)} samples...")
-        encodings = self.tokenizer(
-            texts,
-            truncation=True,
-            padding="max_length",
-            max_length=512,
-            return_tensors=None  # Return lists for Dataset
-        )
-
-        # Create dataset
-        dataset = Dataset.from_dict({
-            "input_ids": encodings["input_ids"],
-            "attention_mask": encodings["attention_mask"],
-            "labels": labels
-        })
-
-        logger.info(f"Dataset prepared: {len(dataset)} samples")
-        return dataset
-
-    def train(
+    def build_trainer(
         self,
         train_dataset: Dataset,
-        eval_dataset: Optional[Dataset] = None,
-        output_dir: str = "./results"
-    ):
-        """
-        Train the classifier.
-
-        Args:
-            train_dataset: Training dataset (tokenized)
-            eval_dataset: Optional evaluation dataset
-            output_dir: Where to save the model
-        """
-        training_config = self.config.get("training", {})
-
-        # Compute class weights for imbalanced datasets
-        labels = train_dataset["labels"]
-        num_malicious = sum(labels)
-        num_benign = len(labels) - num_malicious
-
-        if num_malicious > 0 and num_benign > 0:
-            # Weight inversely proportional to class frequencies
-            pos_weight = num_benign / num_malicious
-            logger.info(f"Class distribution: {num_malicious} malicious, {num_benign} benign")
-            logger.info(f"Using positive class weight: {pos_weight:.2f}")
-        else:
-            pos_weight = 1.0
-            logger.warning("Imbalanced dataset detected but one class is empty!")
-
-        # Training arguments
+        val_dataset: Dataset,
+        output_dir: str,
+        config: dict,
+        class_weights: Optional[torch.Tensor] = None,
+        early_stopping_patience: int = 3,
+    ) -> WeightedTrainer:
         training_args = TrainingArguments(
             output_dir=output_dir,
-            num_train_epochs=training_config.get("num_epochs", 5),
-            per_device_train_batch_size=training_config.get("batch_size", 8),
-            per_device_eval_batch_size=8,
-            learning_rate=training_config.get("learning_rate", 2e-5),
-            weight_decay=training_config.get("weight_decay", 0.01),
-            warmup_steps=training_config.get("warmup_steps", 500),
-            logging_steps=10,
-            eval_strategy="steps" if eval_dataset else "no",
-            eval_steps=100 if eval_dataset else None,
-            save_strategy="steps",
-            save_steps=500,
-            load_best_model_at_end=True if eval_dataset else False,
-            metric_for_best_model="eval_loss" if eval_dataset else None,
-            report_to="wandb",
-            fp16=torch.cuda.is_available(),  # Use FP16 if GPU available
+            num_train_epochs=config.get("num_epochs", 5),
+            per_device_train_batch_size=config.get("batch_size", 16),
+            per_device_eval_batch_size=config.get("batch_size", 16),
+            learning_rate=config.get("learning_rate", 2e-5),
+            weight_decay=config.get("weight_decay", 0.01),
+            warmup_steps=config.get("warmup_steps", 200),
+            eval_strategy="epoch",
+            save_strategy="epoch",
+            load_best_model_at_end=True,
+            metric_for_best_model="eval_loss",
+            greater_is_better=False,
+            fp16=torch.cuda.is_available(),
+            bf16=False,
+            save_safetensors=True,
+            report_to="none",
+            logging_steps=50,
+            save_total_limit=2,
         )
 
-        # Data collator for dynamic padding
         data_collator = DataCollatorWithPadding(tokenizer=self.tokenizer)
 
-        # Trainer
-        trainer = Trainer(
+        return WeightedTrainer(
             model=self.model,
             args=training_args,
             train_dataset=train_dataset,
-            eval_dataset=eval_dataset,
+            eval_dataset=val_dataset,
             data_collator=data_collator,
-            tokenizer=self.tokenizer,
+            class_weights=class_weights,
+            callbacks=[EarlyStoppingCallback(early_stopping_patience=early_stopping_patience)],
         )
-
-        logger.info("Starting training...")
-        trainer.train()
-
-        # Save final model
-        self.model.save_pretrained(f"{output_dir}/final_model")
-        self.tokenizer.save_pretrained(f"{output_dir}/final_model")
-        logger.info(f"Model saved to {output_dir}/final_model")
-
-    def predict(self, code: str) -> tuple[int, float]:
-        """
-        Predict if code is malicious.
-
-        Args:
-            code: Python code string
-
-        Returns:
-            (label, confidence) where label is 0=benign, 1=malicious
-        """
-        self.model.eval()
-
-        inputs = self.tokenizer(
-            code,
-            return_tensors="pt",
-            truncation=True,
-            max_length=512
-        ).to(self.model.device)
-
-        with torch.no_grad():
-            outputs = self.model(**inputs)
-            logits = outputs.logits
-            probs = torch.softmax(logits, dim=-1)
-
-            predicted_class = torch.argmax(probs, dim=-1).item()
-            confidence = probs[0][predicted_class].item()
-
-        return predicted_class, confidence
-
-
-# Usage Example:
-# ==============
-# from scriptguard.models.codebert_classifier import CodeBERTClassifier
-#
-# # Initialize
-# classifier = CodeBERTClassifier(config=config)
-#
-# # Prepare data
-# train_dataset = classifier.prepare_dataset(train_data)
-# eval_dataset = classifier.prepare_dataset(eval_data)
-#
-# # Train
-# classifier.train(train_dataset, eval_dataset)
-#
-# # Predict
-# label, confidence = classifier.predict(malicious_code)
-# print(f"Prediction: {'Malicious' if label == 1 else 'Benign'} ({confidence:.2%})")

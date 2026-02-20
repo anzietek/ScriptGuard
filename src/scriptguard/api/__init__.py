@@ -1,3 +1,0 @@
-"""
-ScriptGuard API Package.
-"""

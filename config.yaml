@@ -194,65 +194,20 @@ database:
     user: ${POSTGRES_USER:-scriptguard}
     password: ${POSTGRES_PASSWORD:-scriptguard}
 
-qdrant:
-  host: ${QDRANT_HOST:-localhost}
-  port: ${QDRANT_PORT:-6333}
-  api_key: ${QDRANT_API_KEY:-}  # API key for authentication (optional for local, required for cloud)
-  use_https: false  # Disable SSL for local Qdrant instance
-  collection_name: "code_samples"  # FIXED: Use code_samples collection (70k+ examples) instead of malware_knowledge (7 examples)
-  embedding_model: "microsoft/unixcoder-base"  # FIXED: Must match the model used during vectorization (768d)
-  prefer_grpc: true
-
-  # Production timeouts (seconds)
-  timeout: 60                    # General operations timeout
-  upsert_timeout: 120           # Upsert operations timeout (larger batches need more time)
-  scroll_timeout: 60            # Query/scroll operations timeout
-
-  # Retry configuration with exponential backoff
-  max_retries: 3
-  retry_backoff_factor: 2.0
-  initial_retry_delay: 1.0
-  max_retry_delay: 60.0
-
-  # Batch configuration
-  batch_size: 100               # Default upsert batch size
-  max_batch_size: 1000         # Maximum points per batch (prevents OOM)
-
 # ============================================================================
-# CODE EMBEDDING & RAG CONFIGURATION
+# CODEBERT CLASSIFIER CONFIGURATION
 # ============================================================================
-code_embedding:
-  model: "microsoft/unixcoder-base"
-
-  # Chunking strategy selection
-  chunking_strategy: "hierarchical"  # Options: "hierarchical", "sliding_window"
-                                      # hierarchical = AST-based function extraction (recommended)
-                                      # sliding_window = token-based fixed-size chunks
-
-  fewshot:
-    enabled: true
-    k: 3  # Reduced from 5 - with longer context (1500 chars), fewer examples to fit in 2048 tokens
-    balance_labels: false  # Disabled for inference - return most similar regardless of label
-    max_context_length: 1500  # Increased from 300 - show full functions, not truncated fragments
-    max_code_length: 3000  # Max length for target code in prompt
-
-  hierarchical:
-    enabled: true
-    max_function_tokens: 1024
-    fallback_to_sliding: true
-    languages: ["python"]
-
-  score_thresholds:
-    "microsoft/unixcoder-base":
-      default: 0.50  # Increased from 0.30 for strict inference mode (reduces false positives)
-      strict: 0.55   # High precision mode - balanced for actual similarity scores (was 0.60 - too high)
-      lenient: 0.35  # High recall mode - more results (training/augmentation)
-
-  reranking:
-    enabled: true
-    heuristic:
-      enabled: true
-      security_keywords: ["os.system", "subprocess", "exec", "eval", "socket", "pickle.loads", "base64.b64decode"]
+codebert:
+  model_name: "microsoft/codebert-base"
+  max_tokens: 512
+  chunk_overlap: 50
+  batch_size: 16
+  learning_rate: 2.0e-5
+  warmup_steps: 200
+  weight_decay: 0.01
+  num_epochs: 5
+  eval_threshold: 0.92
+  output_dir: ${MODEL_OUTPUT_DIR:-/workspace/models/codebert}
 
 # ============================================================================
 # DATA VALIDATION & AUGMENTATION
@@ -301,83 +256,13 @@ augmentation:
   augment_after_split: true # Crucial: prevents data leakage into test set
 
 # ============================================================================
-# TRAINING CONFIGURATION — OPTIMIZED FOR RTX 3090/4090 (24GB VRAM)
+# TRAINING SPLIT CONFIGURATION
 # ============================================================================
 training:
-  model_id: "bigcode/starcoder2-3b"
-  output_dir: ${MODEL_OUTPUT_DIR:-/workspace/models/scriptguard-model}
-
-  # Preprocessing - MUST be aligned with tokenizer_max_length to prevent label truncation
-  # 2048 tokens ≈ 7000 chars for code, minus ~100 chars prompt overhead = ~4500 safe limit
-  # Previously 16000 which caused silent label loss at tokenizer level
-  preprocess_max_chars: 4500
-  truncation_strategy: "smart"  # Options: "simple" (cut at max_chars) or "smart" (preserve critical sections)
-
-  # Tokenizer max length - MUST be large enough to fit full prompt + label
-  # Without this, default is 512 tokens which truncates most samples and cuts off the label
-  tokenizer_max_length: 2048
-
-  # Class weighting for imbalanced datasets (replaces undersampling)
-  # Uses sample-level weighting to emphasize minority class during training
-  use_class_weights: true
-  class_weight_method: "inverse_frequency"  # Options: "inverse_frequency" or "sqrt_inverse" (gentler)
-
-  device: cuda
-  gradient_checkpointing: true
-  use_flash_attention_2: true
-  group_by_length: true
-
-  # Optimized Batching for 24GB with tokenizer_max_length=2048
-  # Reduced from 4 to 2 to fix OOM (4x longer sequences need 2x smaller batch)
-  # Effective batch size stays 32: 2 * 16 = 32
-  per_device_train_batch_size: 2
-  per_device_eval_batch_size: 2
-  gradient_accumulation_steps: 16
-
-  # QLoRA - Higher regularization to fight Specificity: 0.00
-  use_qlora: true
-  lora_r: 16
-  lora_alpha: 16
-  lora_dropout: 0.15
-  target_modules: ["q_proj", "v_proj", "k_proj", "o_proj", "gate_proj", "up_proj", "down_proj"]
-
-  # Duration - increased from 3, model now actually learns classification with fixed tokenizer
-  num_epochs: 2
-
-  # Anti-overfitting measures
-  learning_rate: 4e-5
-  weight_decay: 0.15
-  label_smoothing_factor: 0.05 # Reduced from 0.1 - too aggressive for binary classification via causal LM
-  warmup_steps: 100
-  lr_scheduler_type: "cosine"
-  optim: "paged_adamw_8bit"
-
-  # Monitoring
-  evaluation_strategy: "steps"
-  eval_steps: 50
-  save_steps: 100
-  test_split_size: 0.2
-  load_best_model_at_end: true
-
-  early_stopping: true
-  early_stopping_patience: 2  # Increased from 2 - gives model more time to converge
-  metric_for_best_model: "eval_loss"
-
-  bf16: true
-  tf32: true
-
-  report_to: ["wandb"]
-  run_name: ${WANDB_RUN_NAME:-scriptguard-balanced-v2}
-
-# ============================================================================
-# INFERENCE & LOGGING
-# ============================================================================
-inference:
-  host: "0.0.0.0"
-  port: 8000
-  max_length: 2048
-  temperature: 0.1
-  top_p: 0.95
+  test_size: 0.15
+  val_size: 0.15
+  seed: 42
+  early_stopping_patience: 3
 
 logging:
   level: ${LOG_LEVEL:-INFO}
