@@ -91,6 +91,7 @@ class CodeBERTClassifier:
             learning_rate=config.get("learning_rate", 2e-5),
             weight_decay=config.get("weight_decay", 0.01),
             warmup_steps=config.get("warmup_steps", 200),
+            max_grad_norm=config.get("max_grad_norm", 1.0),
             eval_strategy="epoch",
             save_strategy="epoch",
             load_best_model_at_end=True,
