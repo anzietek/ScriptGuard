@@ -18,6 +18,10 @@ from scriptguard.utils.logger import logger
 
 
 def compute_metrics(pred: EvalPrediction) -> dict:
+    # NOTE: HuggingFace Trainer operates at CHUNK level during training.
+    # These metrics are chunk-level (not script-level) because the Trainer has
+    # no access to script_id for aggregation. The final evaluate_codebert step
+    # computes the authoritative script-level metrics on the test set.
     labels = pred.label_ids
     preds = np.argmax(pred.predictions, axis=1)
 

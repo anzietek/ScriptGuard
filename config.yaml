@@ -216,7 +216,6 @@ codebert:
   mlp_hidden_dim: 128
   fusion_hidden_dim: 256
   dropout_rate: 0.3
-  feature_scaler_path: ${MODEL_OUTPUT_DIR:-/workspace/models/codebert}/feature_scaler.joblib
 
 # ============================================================================
 # DATA VALIDATION & AUGMENTATION

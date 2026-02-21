@@ -10,7 +10,6 @@ from transformers import (
     TrainingArguments,
 )
 from datasets import Dataset
-from scriptguard.models.codebert_classifier import compute_metrics
 from scriptguard.models.fused_classifier import (
     FusedCodeBERTClassifier,
     FusedDataCollator,
@@ -105,9 +104,9 @@ def train_codebert(
             train_dataset=train_dataset,
             eval_dataset=val_dataset,
             data_collator=collator,
-            compute_metrics=compute_metrics,
             class_weights=class_weights,
             focal_gamma=focal_gamma,
+            decision_threshold=decision_threshold,
             callbacks=[EarlyStoppingCallback(early_stopping_patience=early_stopping_patience)],
         )
 
