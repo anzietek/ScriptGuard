@@ -22,6 +22,8 @@ from typing import Any, Optional
 import numpy as np
 import torch
 import torch.nn as nn
+from safetensors.torch import load_file as st_load_file
+from safetensors.torch import save_file as st_save_file
 from sklearn.metrics import (
     accuracy_score,
     f1_score,
@@ -169,8 +171,8 @@ class FusedWeightedTrainer(WeightedTrainer):
 
     Key overrides:
       - evaluate()        → script-level aggregation (max malicious_prob), consistent with inference
-      - save_model()      → torch.save state dict (not HF save_pretrained)
-      - _load_best_model() → torch.load state dict from checkpoint/model.pt
+      - save_model()      → st_save_file state dict to checkpoint/model.safetensors
+      - _load_best_model() → st_load_file state dict from checkpoint/model.safetensors
     """
 
     def __init__(self, *args: Any, decision_threshold: float = 0.5, **kwargs: Any) -> None:
@@ -262,15 +264,14 @@ class FusedWeightedTrainer(WeightedTrainer):
     def save_model(self, output_dir: Optional[str] = None, _internal_call: bool = False) -> None:
         out = output_dir or self.args.output_dir
         os.makedirs(out, exist_ok=True)
-        torch.save(self.model.state_dict(), os.path.join(out, "model.pt"))
-        logger.info(f"FusedWeightedTrainer: saved model.pt to {out}")
+        st_save_file(self.model.state_dict(), os.path.join(out, "model.safetensors"))
+        logger.info(f"FusedWeightedTrainer: saved model.safetensors to {out}")
 
     def _load_best_model(self) -> None:
         if self.state.best_model_checkpoint:
-            state = torch.load(
-                os.path.join(self.state.best_model_checkpoint, "model.pt"),
-                map_location="cpu",
-                weights_only=True,
+            state = st_load_file(
+                os.path.join(self.state.best_model_checkpoint, "model.safetensors"),
+                device=str(self.args.device),
             )
             self.model.load_state_dict(state)
             self.model.to(self.args.device)
@@ -293,7 +294,7 @@ def save_fused_model(
 
     Saved files:
         tokenizer files          — for AutoTokenizer.from_pretrained compat
-        model.pt                 — raw state dict
+        model.safetensors        — state dict in safetensors format
         fused_model_config.json  — architecture params
         inference_config.json    — runtime config (includes "model_type": "fused")
         feature_scaler.joblib    — copied from `scaler_path`
@@ -302,7 +303,7 @@ def save_fused_model(
 
     tokenizer.save_pretrained(output_dir)
 
-    torch.save(model.state_dict(), os.path.join(output_dir, "model.pt"))
+    st_save_file(model.state_dict(), os.path.join(output_dir, "model.safetensors"))
 
     model_cfg = {
         "model_name": model.model_name,
@@ -351,10 +352,9 @@ def load_fused_model(
         dropout_rate=cfg.get("dropout_rate", 0.3),
     )
 
-    state = torch.load(
-        os.path.join(model_dir, "model.pt"),
-        map_location=device,
-        weights_only=True,
+    state = st_load_file(
+        os.path.join(model_dir, "model.safetensors"),
+        device=str(device),
     )
     model.load_state_dict(state)
     model.to(device)
