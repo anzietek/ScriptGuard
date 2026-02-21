@@ -36,6 +36,7 @@ dependencies = [
     "pydantic>=2.11.9",
     "psutil>=5.9.8",
     "datasketch>=1.9.0",
+    "hf-xet>=1.2.0",
 ]
 
 [project.optional-dependencies]
