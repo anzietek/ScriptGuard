@@ -75,7 +75,7 @@ class WeightedTrainer(Trainer):
         labels = inputs.pop("labels")
         outputs = model(**inputs)
         logits = outputs.logits
-        weight = self.class_weights.to(logits.device) if self.class_weights is not None else None
+        weight = self.class_weights.to(device=logits.device, dtype=logits.dtype) if self.class_weights is not None else None
         loss_fct = FocalLoss(gamma=self.focal_gamma, weight=weight)
         loss = loss_fct(logits.view(-1, logits.size(-1)), labels.view(-1))
         return (loss, outputs) if return_outputs else loss
