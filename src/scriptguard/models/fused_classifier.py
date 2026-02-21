@@ -117,8 +117,8 @@ class FusedCodeBERTClassifier(nn.Module):
         bert_out = self.bert(input_ids=input_ids, attention_mask=attention_mask)
         cls_embedding = bert_out.last_hidden_state[:, 0, :]  # [B, 768]
 
-        # Feature branch
-        feat_norm = self.feature_bn(feature_vector)
+        # Feature branch — cast to BERT dtype to stay consistent under fp16/bf16 autocast
+        feat_norm = self.feature_bn(feature_vector.to(dtype=cls_embedding.dtype))
         feat_repr = self.feature_mlp(feat_norm)  # [B, 128]
 
         # Fusion
