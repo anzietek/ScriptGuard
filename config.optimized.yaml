@@ -1,0 +1,396 @@
+# ============================================================================
+# PIPELINE CONFIGURATION
+# ============================================================================
+pipeline:
+  enable_cache: true
+  cache_ttl_hours: 24
+  cache_key_includes_version: true
+  cache_invalidation_on_config_change: true
+
+  cache_steps:
+    advanced_data_ingestion: true
+    validate_samples: true
+    augment_malicious_samples: true
+    train_model: false  # Always train fresh to avoid state pollution
+
+# ============================================================================
+# API KEYS & NETWORK CONFIGURATION
+# ============================================================================
+api_keys:
+  github_token: ${GITHUB_API_TOKEN}
+  nvd_api_key: ${NVD_API_KEY}
+  malwarebazaar_api_key: ${MALWAREBAZAAR_API_KEY}
+  huggingface_token: ${HUGGINGFACE_TOKEN}
+  scriptguard_api_key: ${SCRIPTGUARD_API_KEY}
+
+  max_retries: 3
+  retry_backoff_factor: 2
+  timeout_seconds: 30
+  connection_pool_size: 10
+
+# ============================================================================
+# DATA SOURCES CONFIGURATION - FIXED FOR 1:1 BALANCE & SPECIFICITY
+# ============================================================================
+data_sources:
+  github:
+    enabled: true
+    fetch_malicious: true
+    fetch_benign: true
+    timeout: 30
+    max_retries: 3
+    retry_backoff_factor: 2.0
+
+    malicious_keywords:
+      - "reverse-shell python"
+      - "keylogger python"
+      - "ransomware python"
+      - "backdoor python"
+      - "credential stealer python"
+      - "port scanner python"
+      - "exploit python"
+      - "payload python"
+      - "data exfiltration python"
+      - "obfuscated malware python"
+
+    benign_repos:
+      # Administrative & DevOps (Critical for reducing False Positives)
+      - "ansible/ansible"
+      - "ansible/ansible-runner"
+      - "saltstack/salt"
+      - "fabric/fabric"
+      - "paramiko/paramiko"
+      - "pyinstaller/pyinstaller"
+      - "pallets/click"               # CLI tools
+      - "requests/requests-oauthlib"  # OAuth (uses network calls)
+      - "psf/black"                   # Code formatter
+      - "pytest-dev/pytest"           # Testing framework
+      - "celery/celery"               # Task queue (network operations)
+
+      # Core Frameworks & Web
+      - "django/django"
+      - "pallets/flask"
+      - "psf/requests"
+      - "tiangolo/fastapi"
+      - "aio-libs/aiohttp"
+      - "encode/httpx"                # Modern HTTP client
+      - "grpc/grpc"                   # gRPC framework
+      - "tornadoweb/tornado"          # Async web framework
+
+      # Security & Crypto (Proper legal patterns)
+      - "pyca/cryptography"
+      - "certifi/python-certifi"
+      - "certbot/certbot"             # Let's Encrypt client (security tool)
+
+      # Data Processing & Cloud
+      - "scikit-learn/scikit-learn"
+      - "pandas-dev/pandas"
+      - "pytorch/pytorch"
+      - "boto/boto3"                  # AWS SDK
+      - "Azure/azure-cli"             # Azure command-line tools
+      - "aws/aws-cli"                 # AWS CLI
+      - "docker/docker-py"            # Docker SDK
+      - "kubernetes-client/python"    # Kubernetes client
+
+      # System & Monitoring Tools
+      - "giampaolo/psutil"            # Process and system utilities
+      - "fabric/patchwork"            # System administration tasks
+      - "supervisor/supervisor"       # Process control system
+
+      # Data Science & Workflow
+      - "apache/airflow"              # Workflow management platform
+      - "jupyter/notebook"            # Jupyter notebooks
+      - "plotly/plotly.py"            # Interactive graphing library
+      - "matplotlib/matplotlib"       # Plotting library
+      - "ipython/ipython"             # Enhanced Python shell
+
+      # Web Scraping & Automation (legitimate tools that may look suspicious)
+      - "scrapy/scrapy"               # Web scraping framework
+      - "SeleniumHQ/selenium"         # Browser automation
+      - "psf/requests-html"           # HTML parsing for requests
+      - "cobrateam/splinter"          # Browser automation tool
+
+      # Testing & Quality Assurance
+      - "robotframework/robotframework"  # Test automation framework
+      - "locustio/locust"             # Load testing tool
+      - "pytest-dev/pytest-xdist"     # Distributed testing
+      - "tox-dev/tox"                 # Test environment management
+      - "PyCQA/pylint"                # Code analysis tool
+
+      # Networking & Security Tools
+      - "certifi/python-certifi"      # SSL certificates
+      - "pypa/pip"                    # Package installer
+      - "pypa/setuptools"             # Package development
+      - "pypa/virtualenv"             # Virtual environments
+
+    max_samples_per_keyword: 1000  # Increased from 600
+    max_files_per_repo: 1000        # Increased from 600
+
+  malwarebazaar:
+    enabled: true
+    timeout: 60
+    max_retries: 3
+    retry_backoff_factor: 2.0
+    tags: ["python", "script", "ransomware", "backdoor", "stealer"]
+    max_samples: 2000
+
+  vxunderground:
+    enabled: true
+    timeout: 60
+    max_retries: 3
+    retry_backoff_factor: 2.0
+    script_types: [".py", ".ps1", ".js", ".vbs"]
+    max_samples: 2000
+
+  thezoo:
+    enabled: true
+    timeout: 60
+    max_retries: 3
+    retry_backoff_factor: 2.0
+    script_types: [".py", ".ps1", ".js", ".vbs", ".sh"]
+    max_samples: 1000
+
+  huggingface:
+    enabled: false
+    timeout: 120
+    max_retries: 3
+    retry_backoff_factor: 2.0
+    datasets: ["codeparrot/github-code"]
+    max_samples: 20000
+
+  cve_feeds:
+    enabled: true
+    timeout: 45
+    max_retries: 3
+    retry_backoff_factor: 2.0
+    days_back: 119
+    keywords: ["script", "code execution", "command injection", "python", "malicious"]
+
+  additional_hf:
+    enabled: true
+    timeout: 120
+    max_retries: 3
+    retry_backoff_factor: 2.0
+    max_samples_per_dataset: 400
+
+    malware_datasets:
+      - naorm/malware-text-db
+      - rr4433/Powershell_Malware_Detection_Dataset
+      - pacificsun/Malware_10k
+      - cw1521/ember2018-malware-v2
+      - SubhadipPanda/Malware_Detection_System
+
+    classification_datasets:
+      - deepcode-ai/Malware-Prediction
+      - PurCL/malware-top-100-labels
+      - PacificSun/microsoft_malware
+
+  pypi:
+    enabled: true
+    timeout: 30
+    max_retries: 3
+    retry_backoff_factor: 2.0
+    top_packages: 1000         # Number of top PyPI packages to fetch
+    max_files_per_package: 50  # Max Python files per package
+    max_samples: 5000          # Maximum total samples to collect
+
+# ============================================================================
+# DATABASE & VECTOR STORE CONFIGURATION
+# ============================================================================
+database:
+  type: "postgresql"
+  postgresql:
+    host: ${POSTGRES_HOST:-localhost}
+    port: ${POSTGRES_PORT:-5432}
+    database: ${POSTGRES_DB:-scriptguard}
+    user: ${POSTGRES_USER:-scriptguard}
+    password: ${POSTGRES_PASSWORD:-scriptguard}
+
+qdrant:
+  host: ${QDRANT_HOST:-localhost}
+  port: ${QDRANT_PORT:-6333}
+  api_key: ${QDRANT_API_KEY:-}  # API key for authentication (optional for local, required for cloud)
+  use_https: false  # Disable SSL for local Qdrant instance
+  collection_name: "malware_knowledge"
+  embedding_model: "all-MiniLM-L6-v2"
+  prefer_grpc: true
+
+  # Production timeouts (seconds)
+  timeout: 60                    # General operations timeout
+  upsert_timeout: 120           # Upsert operations timeout (larger batches need more time)
+  scroll_timeout: 60            # Query/scroll operations timeout
+
+  # Retry configuration with exponential backoff
+  max_retries: 3
+  retry_backoff_factor: 2.0
+  initial_retry_delay: 1.0
+  max_retry_delay: 60.0
+
+  # Batch configuration
+  batch_size: 100               # Default upsert batch size
+  max_batch_size: 1000         # Maximum points per batch (prevents OOM)
+
+# ============================================================================
+# CODE EMBEDDING & RAG CONFIGURATION
+# ============================================================================
+code_embedding:
+  model: "microsoft/unixcoder-base"
+
+  # Chunking strategy selection
+  chunking_strategy: "hierarchical"  # Options: "hierarchical", "sliding_window"
+                                      # hierarchical = AST-based function extraction (recommended)
+                                      # sliding_window = token-based fixed-size chunks
+
+  fewshot:
+    enabled: true
+    k: 3
+    balance_labels: true
+
+  hierarchical:
+    enabled: true
+    max_function_tokens: 1024
+    fallback_to_sliding: true
+    languages: ["python"]
+
+  score_thresholds:
+    "microsoft/unixcoder-base":
+      default: 0.30  # Lowered from 0.45 for better malicious recall in RAG
+
+  reranking:
+    enabled: true
+    heuristic:
+      enabled: true
+      security_keywords: ["os.system", "subprocess", "exec", "eval", "socket", "pickle.loads", "base64.b64decode"]
+
+# ============================================================================
+# DATA VALIDATION & AUGMENTATION
+# ============================================================================
+validation:
+  validate_syntax: true
+  skip_syntax_errors: true
+  min_length: 50
+  max_length: 100000
+
+  # Deduplication settings
+  deduplicate: true
+  dedup_threshold: 0.92  # Increased from 0.85 for less aggressive deduplication
+
+  # Deduplication method selection
+  dedup_method: "auto"          # Options: "auto", "minhash_lsh", "jaccard", "exact"
+                                # auto = MinHash LSH if n >= 1000, else Jaccard
+
+  # Two-stage deduplication config
+  dedup_exact_first: true       # Fast hash-based pre-filter (removes ~90% duplicates)
+
+  # MinHash LSH settings (only used if method = "minhash_lsh" or "auto")
+  dedup_minhash_num_perm: 128   # Higher = more accurate (128, 256, 512)
+                                # 128 = 95% accuracy, 256 = 98%, 512 = 99%
+
+  # Jaccard fallback settings (only used if method = "jaccard")
+  dedup_batch_size: 1000        # Batch size for fuzzy matching (controls memory)
+  dedup_max_memory_mb: 500      # Memory limit before GC trigger
+
+  filter_test_leakage: true
+  allow_python2: true     # Accept Python 2 syntax for historical malware
+
+augmentation:
+  enabled: true
+  variants_per_sample: 3  # Increased from 2 for more malware variants
+  techniques: ["base64", "hex", "rename_vars", "split_strings"]
+
+  # Qdrant-based augmentation (few-shot code samples + CVE patterns)
+  use_qdrant_patterns: true  # Retrieve similar code samples from Qdrant vector store
+  max_qdrant_samples: 1000   # Maximum samples to fetch from Qdrant collections
+  qdrant_score_threshold: 0.30  # Lowered from 0.45 for better malicious recall
+
+  balance_dataset: false  # DISABLED: Using weighted loss + augmentation to preserve all data
+  target_balance_ratio: 1.0
+  balance_method: "hybrid"  # Improved over simple oversampling
+  augment_after_split: true # Crucial: prevents data leakage into test set
+
+# ============================================================================
+# TRAINING CONFIGURATION — OPTIMIZED FOR RTX 3090/4090 (24GB VRAM)
+# ============================================================================
+training:
+  model_id: "bigcode/starcoder2-3b"
+  output_dir: ${MODEL_OUTPUT_DIR:-/workspace/models/scriptguard-model}
+
+  # Preprocessing - MUST be aligned with tokenizer_max_length to prevent label truncation
+  # 2048 tokens ≈ 7000 chars for code, minus ~100 chars prompt overhead = ~6500 safe limit
+  # Previously 16000 which caused silent label loss at tokenizer level
+  preprocess_max_chars: 6500
+  truncation_strategy: "smart"  # Options: "simple" (cut at max_chars) or "smart" (preserve critical sections)
+
+  # Tokenizer max length - MUST be large enough to fit full prompt + label
+  # Without this, default is 512 tokens which truncates most samples and cuts off the label
+  tokenizer_max_length: 2048
+
+  # Class weighting for imbalanced datasets (replaces undersampling)
+  # Uses sample-level weighting to emphasize minority class during training
+  use_class_weights: true
+  class_weight_method: "inverse_frequency"  # Options: "inverse_frequency" or "sqrt_inverse" (gentler)
+
+  device: cuda
+  gradient_checkpointing: true
+  use_flash_attention_2: true
+  group_by_length: true
+
+  # Optimized Batching for 24GB with tokenizer_max_length=2048
+  # Reduced from 4 to 2 to fix OOM (4x longer sequences need 2x smaller batch)
+  # Effective batch size stays 32: 2 * 16 = 32
+  per_device_train_batch_size: 2
+  per_device_eval_batch_size: 2
+  gradient_accumulation_steps: 16
+
+  # QLoRA - Higher regularization to fight Specificity: 0.00
+  use_qlora: true
+  lora_r: 16
+  lora_alpha: 32
+  lora_dropout: 0.05
+  target_modules: ["q_proj", "v_proj", "k_proj", "o_proj", "gate_proj", "up_proj", "down_proj"]
+
+  # Duration - increased from 3, model now actually learns classification with fixed tokenizer
+  num_epochs: 5
+
+  # Anti-overfitting measures
+  learning_rate: 2e-5
+  weight_decay: 0.01
+  label_smoothing_factor: 0.0
+  warmup_steps: 100
+  lr_scheduler_type: "cosine"
+  optim: "paged_adamw_8bit"
+
+  # Monitoring
+  evaluation_strategy: "steps"
+  eval_steps: 50
+  save_steps: 50
+  test_split_size: 0.1
+  load_best_model_at_end: true
+
+  early_stopping: true
+  early_stopping_patience: 3  # Increased from 2 - gives model more time to converge
+  metric_for_best_model: "eval_loss"
+
+  bf16: true
+  tf32: true
+
+  report_to: ["wandb"]
+  run_name: ${WANDB_RUN_NAME:-scriptguard-balanced-v2}
+
+# ============================================================================
+# INFERENCE & LOGGING
+# ============================================================================
+inference:
+  host: "0.0.0.0"
+  port: 8000
+  max_length: 2048
+  temperature: 0.1
+  top_p: 0.95
+
+logging:
+  level: ${LOG_LEVEL:-INFO}
+  file: ${LOG_FILE:-/workspace/logs/scriptguard.log}
+
+runpod:
+  pod_id: ${RUNPOD_POD_ID:-}
+  volume_mount: ${RUNPOD_VOLUME_PATH:-/workspace}
+  test_network_on_startup: true

