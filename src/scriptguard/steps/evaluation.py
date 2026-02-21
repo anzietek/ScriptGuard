@@ -173,6 +173,14 @@ def evaluate_codebert(
         elif pred == 0 and true_lbl == 1:
             fn_db_ids.append(db_id)
 
+    # Persist best threshold back to inference_config.json so the inference
+    # classifier uses the threshold optimised on the test set, not the training default.
+    if os.path.exists(inf_cfg_path):
+        inf_cfg["decision_threshold"] = best_thr
+        with open(inf_cfg_path, "w") as f:
+            json.dump(inf_cfg, f, indent=2)
+        logger.info(f"inference_config.json updated: decision_threshold → {best_thr:.2f}")
+
     logger.info(f"False Positives @ {best_thr:.2f} ({len(fp_db_ids)} benign → predicted malicious): {fp_db_ids}")
     logger.info(f"False Negatives @ {best_thr:.2f} ({len(fn_db_ids)} malicious → predicted benign): {fn_db_ids}")
 
