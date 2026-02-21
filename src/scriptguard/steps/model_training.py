@@ -82,6 +82,7 @@ def train_codebert(
             learning_rate=codebert_cfg.get("learning_rate", 2e-5),
             weight_decay=codebert_cfg.get("weight_decay", 0.01),
             warmup_steps=codebert_cfg.get("warmup_steps", 200),
+            lr_scheduler_type=codebert_cfg.get("lr_scheduler_type", "cosine"),
             max_grad_norm=codebert_cfg.get("max_grad_norm", 1.0),
             eval_strategy="epoch",
             save_strategy="epoch",

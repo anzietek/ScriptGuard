@@ -253,11 +253,11 @@ class FusedWeightedTrainer(WeightedTrainer):
             f"mcc={mcc:.4f}  scripts={len(final_true)}"
         )
 
-        # HuggingFace Trainer state management — required for early stopping and logging
+        # Log metrics so they appear in training state/history.
+        # Do NOT call on_evaluate here — the Trainer's _inner_training_loop calls it
+        # after evaluate() returns.  Calling it here too would double-fire
+        # EarlyStoppingCallback and halve the effective patience.
         self.log(metrics)
-        self.control = self.callback_handler.on_evaluate(
-            self.args, self.state, self.control, metrics
-        )
 
         return metrics
 
