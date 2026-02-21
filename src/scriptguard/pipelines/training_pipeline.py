@@ -44,6 +44,7 @@ def codebert_training_pipeline(config: Dict[str, Any]) -> None:
     )
     metrics = evaluate_codebert(
         test_dataset=test_tokens_f,
+        test_data=test_data,
         model_path=model_path,
         config=config,
         scaler_path=scaler_path,

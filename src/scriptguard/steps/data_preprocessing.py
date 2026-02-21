@@ -108,6 +108,9 @@ def split_data(
         f"(group-aware={has_families})"
     )
 
+    test_ids = [s.get("id") for s in test_data]
+    logger.info(f"Test set DB IDs ({len(test_ids)} samples): {test_ids}")
+
     # Log per-keyword breakdown for each partition
     for split_name, split in [("train", train_data), ("val", val_data), ("test", test_data)]:
         keyword_counts: dict[str, int] = {}

@@ -1,6 +1,6 @@
 import json
 import os
-from typing import Any, Dict
+from typing import Any, Dict, List
 from zenml import step, ArtifactConfig
 from typing import Annotated
 import torch
@@ -38,6 +38,7 @@ def aggregate_chunk_predictions(
 @step
 def evaluate_codebert(
     test_dataset: Dataset,
+    test_data: List[Dict[str, Any]],
     model_path: str,
     config: Dict[str, Any],
     scaler_path: str,
@@ -109,11 +110,21 @@ def evaluate_codebert(
     final_true: list[int] = []
     final_scores: list[float] = []  # malicious_prob for ROC-AUC
 
+    fp_db_ids: list[Any] = []  # benign scripts predicted as malicious
+    fn_db_ids: list[Any] = []  # malicious scripts predicted as benign
+
     for sid, chunks in chunk_results.items():
         pred_label, best_prob = aggregate_chunk_predictions(chunks, decision_threshold)
+        true_lbl = chunk_true[sid]
         final_preds.append(pred_label)
-        final_true.append(chunk_true[sid])
+        final_true.append(true_lbl)
         final_scores.append(best_prob)
+
+        db_id = test_data[sid].get("id") if sid < len(test_data) else None
+        if pred_label == 1 and true_lbl == 0:
+            fp_db_ids.append(db_id)
+        elif pred_label == 0 and true_lbl == 1:
+            fn_db_ids.append(db_id)
 
     # Confusion matrix components
     tn, fp, fn, tp = confusion_matrix(final_true, final_preds, labels=[0, 1]).ravel()
@@ -151,6 +162,8 @@ def evaluate_codebert(
         "decision_threshold": decision_threshold,
     }
 
+    logger.info(f"False Positives ({len(fp_db_ids)} benign → predicted malicious): {fp_db_ids}")
+    logger.info(f"False Negatives ({len(fn_db_ids)} malicious → predicted benign): {fn_db_ids}")
     logger.info("=" * 55)
     logger.info("EVALUATION RESULTS (script-level)")
     logger.info(f"  Threshold:         {decision_threshold:.2f}")
