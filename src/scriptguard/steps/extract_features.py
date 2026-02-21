@@ -1,14 +1,15 @@
 """
-extract_features ZenML step.
+extract_features ZenML steps.
 
-Sits between tokenize_data and augment_and_tokenize in the pipeline.
+Steps:
+  cache_features   — runs BEFORE split_data; computes and persists features for
+                     ALL ingested samples to PostgreSQL so that the post-split
+                     extract_features step is always a pure DB cache hit.
 
-Responsibilities:
-  1. Load pre-computed feature vectors from PostgreSQL for all known sample IDs.
-  2. Extract features on-the-fly for samples that are missing from the DB.
-  3. Persist newly computed features back to the DB (for future runs: load-only).
-  4. Fit a StandardScaler on TRAIN features ONLY; save it to disk.
-  5. Append a `feature_vector` column to each HuggingFace Dataset split.
+  extract_features — runs AFTER tokenize_data; loads features from DB (cache
+                     hit after cache_features ran), fits StandardScaler on train
+                     split only, and attaches a `feature_vector` column to each
+                     HuggingFace Dataset split.
 
 The `feature_vector` is keyed by `script_id` so every chunk of the same script
 gets the same feature vector (parent-level signal, not chunk-level signal).
@@ -28,6 +29,48 @@ from scriptguard.database.feature_store import load_features_from_db, save_featu
 from scriptguard.features.extractor import FeatureExtractor
 from scriptguard.materializers.dataset_materializer import HuggingFaceDatasetMaterializer
 from scriptguard.utils.logger import logger
+
+
+# ---------------------------------------------------------------------------
+# Pre-split step: cache features for ALL ingested samples
+# ---------------------------------------------------------------------------
+
+@step
+def cache_features(
+    all_data: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    """
+    Pre-split step: compute 61-dim feature vectors for every ingested sample
+    that doesn't already have them in PostgreSQL, then persist them to DB.
+
+    Runs BEFORE split_data so that the post-split extract_features step is
+    always a pure DB cache hit regardless of the split configuration.
+
+    Returns all_data unchanged — output is wired to split_data to enforce
+    correct DAG ordering.
+    """
+    extractor = FeatureExtractor()
+
+    db_ids: list[int] = [d["id"] for d in all_data if d.get("id") is not None]
+    logger.info(f"cache_features: {len(db_ids)} / {len(all_data)} samples have DB IDs")
+
+    cached: dict[int, list[float]] = load_features_from_db(db_ids) if db_ids else {}
+    logger.info(f"cache_features: {len(cached)} already in DB")
+
+    newly_computed: dict[int, list[float]] = {}
+    for sample in all_data:
+        sid = sample.get("id")
+        if sid is None or sid in cached:
+            continue
+        newly_computed[sid] = extractor.extract(sample.get("content") or "")
+
+    if newly_computed:
+        save_features_to_db(newly_computed)
+        logger.info(f"cache_features: computed and saved {len(newly_computed)} new feature vectors")
+    else:
+        logger.info("cache_features: all features already cached — no computation needed")
+
+    return all_data
 
 
 def _gather_ids_and_content(
