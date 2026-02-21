@@ -134,25 +134,32 @@ def evaluate_codebert(
     for thr in _THRESHOLDS:
         results.append(_metrics_at_threshold(true_labels_script, max_probs_script, thr))
 
-    # Log threshold table
-    logger.info("=" * 80)
-    logger.info("THRESHOLD SWEEP (script-level, max malicious_prob aggregation)")
-    logger.info(f"{'Thr':>5}  {'Acc':>6}  {'Prec':>6}  {'Recall':>6}  {'Spec':>6}  "
-                f"{'FPR':>6}  {'F1':>6}  {'MCC':>7}  {'TP':>4}  {'FP':>4}  {'TN':>4}  {'FN':>4}")
-    logger.info("-" * 80)
-    for r in results:
-        logger.info(
+    # Best by MCC — find before drawing table so we can highlight the row
+    best = max(results, key=lambda r: r["mcc"])
+
+    _GRN = "\033[1;92m"   # bold bright-green
+    _RST = "\033[0m"
+
+    def _row(r: dict) -> str:
+        line = (
             f"{r['threshold']:>5.2f}  {r['accuracy']:>6.4f}  {r['precision']:>6.4f}  "
             f"{r['recall']:>6.4f}  {r['specificity']:>6.4f}  {r['fpr']:>6.4f}  "
             f"{r['f1']:>6.4f}  {r['mcc']:>7.4f}  "
             f"{r['tp']:>4}  {r['fp']:>4}  {r['tn']:>4}  {r['fn']:>4}"
         )
-    logger.info("=" * 80)
+        if r is best:
+            return f"{_GRN}★ {line}  ← BEST{_RST}"
+        return f"  {line}"
 
-    # ------------------------------------------------------------------
-    # 4. Best threshold by MCC (most robust for imbalanced binary classification)
-    # ------------------------------------------------------------------
-    best = max(results, key=lambda r: r["mcc"])
+    # Log threshold table
+    logger.info("=" * 80)
+    logger.info("THRESHOLD SWEEP (script-level, max malicious_prob aggregation)")
+    logger.info(f"  {'Thr':>5}  {'Acc':>6}  {'Prec':>6}  {'Recall':>6}  {'Spec':>6}  "
+                f"{'FPR':>6}  {'F1':>6}  {'MCC':>7}  {'TP':>4}  {'FP':>4}  {'TN':>4}  {'FN':>4}")
+    logger.info("-" * 80)
+    for r in results:
+        logger.info(_row(r))
+    logger.info("=" * 80)
     best_thr = best["threshold"]
     best_preds = best["preds"]
 
