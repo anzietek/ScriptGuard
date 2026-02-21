@@ -210,7 +210,7 @@ codebert:
   eval_threshold: 0.92
   focal_gamma: 3.0  # Focal Loss gamma: 0=CrossEntropy, 2=standard focal, higher=harder examples focus
   max_grad_norm: 1.0  # Gradient clipping threshold (lower = more aggressive clipping)
-  decision_threshold: 0.55  # Malicious class probability threshold (lower = more aggressive detection)
+  decision_threshold: 0.50  # Malicious class probability threshold (lower = more aggressive detection)
   output_dir: ${MODEL_OUTPUT_DIR:-/workspace/models/codebert}
   report_to: "wandb"
   # Fusion model architecture settings
