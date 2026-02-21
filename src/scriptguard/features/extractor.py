@@ -7,6 +7,7 @@ regex patterns, and statistical measures.
 import ast
 import math
 import re
+import warnings
 from collections import deque
 from scriptguard.utils.logger import logger
 
@@ -65,13 +66,20 @@ class FeatureExtractor:
             logger.warning(f"FeatureExtractor.extract failed: {e}")
             return [0.0] * self.FEATURE_DIM
 
+    @staticmethod
+    def _parse_ast(code: str) -> ast.AST:
+        """Parse code suppressing SyntaxWarning emitted for analyzed samples."""
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", SyntaxWarning)
+            return ast.parse(code)
+
     # ------------------------------------------------------------------
     # AST features (13)
     # ------------------------------------------------------------------
 
     def _ast_features(self, code: str) -> list[float]:
         try:
-            tree = ast.parse(code)
+            tree = self._parse_ast(code)
         except SyntaxError:
             return [0.0] * 13
 
@@ -231,7 +239,7 @@ class FeatureExtractor:
 
     def _import_features(self, code: str) -> list[float]:
         try:
-            tree = ast.parse(code)
+            tree = self._parse_ast(code)
         except SyntaxError:
             return [0.0] * 11
 
@@ -332,7 +340,7 @@ class FeatureExtractor:
     def _obfuscation_features(self, code: str) -> list[float]:
         try:
             try:
-                tree = ast.parse(code)
+                tree = self._parse_ast(code)
                 parse_ok = True
             except SyntaxError:
                 tree = None
@@ -501,7 +509,7 @@ class FeatureExtractor:
     def _detect_c2_pattern(self, code: str) -> float:
         """Detect C2 pattern: connect + send/recv calls in same function body."""
         try:
-            tree = ast.parse(code)
+            tree = self._parse_ast(code)
         except SyntaxError:
             # Fallback to regex
             if re.search(r'\.connect\(', code) and re.search(r'\.(send|recv|sendall|recvfrom)\(', code):
@@ -580,7 +588,7 @@ class FeatureExtractor:
                 has_xor_pattern = 1.0
             # Also check for XOR loop pattern in AST
             try:
-                tree = ast.parse(code)
+                tree = self._parse_ast(code)
                 for node in ast.walk(tree):
                     if isinstance(node, ast.AugAssign) and isinstance(node.op, ast.BitXor):
                         has_xor_pattern = 1.0
