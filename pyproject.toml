@@ -39,6 +39,10 @@ dependencies = [
     "psutil>=5.9.8",
     "datasketch>=1.9.0",
     "hf-xet>=1.2.0",
+    # --- Inference API ---
+    "fastapi>=0.104.0",
+    "uvicorn[standard]>=0.24.0",
+    "python-multipart>=0.0.9",
 ]
 
 [project.optional-dependencies]
@@ -49,6 +53,9 @@ dev = [
     "flake8>=7.0.0",
     "mypy>=1.11.0",
 ]
+
+[project.scripts]
+scriptguard = "scriptguard.cli:main"
 
 [build-system]
 requires = ["hatchling"]
