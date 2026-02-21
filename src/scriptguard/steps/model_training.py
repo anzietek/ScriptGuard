@@ -92,7 +92,7 @@ def train_codebert(
             fp16=torch.cuda.is_available(),
             bf16=False,
             save_safetensors=False,  # Custom nn.Module, not PreTrainedModel
-            report_to="none",
+            report_to=codebert_cfg.get("report_to", "none"),
             logging_steps=50,
             save_total_limit=2,
         )
