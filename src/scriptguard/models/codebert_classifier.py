@@ -20,11 +20,25 @@ from scriptguard.utils.logger import logger
 def compute_metrics(pred: EvalPrediction) -> dict:
     labels = pred.label_ids
     preds = np.argmax(pred.predictions, axis=1)
+
+    tn = int(np.sum((preds == 0) & (labels == 0)))
+    fp = int(np.sum((preds == 1) & (labels == 0)))
+    fn = int(np.sum((preds == 0) & (labels == 1)))
+    tp = int(np.sum((preds == 1) & (labels == 1)))
+
+    fpr = fp / (fp + tn) if (fp + tn) > 0 else 0.0
+    specificity = tn / (tn + fp) if (tn + fp) > 0 else 0.0
+    mcc_denom = ((tp + fp) * (tp + fn) * (tn + fp) * (tn + fn)) ** 0.5
+    mcc = (tp * tn - fp * fn) / mcc_denom if mcc_denom > 0 else 0.0
+
     return {
         "accuracy": accuracy_score(labels, preds),
         "f1": f1_score(labels, preds, average="binary", zero_division=0),
         "precision": precision_score(labels, preds, average="binary", zero_division=0),
         "recall": recall_score(labels, preds, average="binary", zero_division=0),
+        "fpr": fpr,
+        "specificity": specificity,
+        "mcc": mcc,
     }
 
 

@@ -11,18 +11,28 @@ from sklearn.metrics import (
     accuracy_score,
     precision_recall_fscore_support,
     confusion_matrix,
+    roc_auc_score,
+    matthews_corrcoef,
 )
 from scriptguard.utils.logger import logger
 
 
-def aggregate_chunk_predictions(chunks: list[dict]) -> tuple[int, float]:
-    best_label = chunks[0]["predicted_label"]
-    best_confidence = chunks[0]["confidence"]
-    for chunk in chunks[1:]:
-        if chunk["confidence"] > best_confidence:
-            best_confidence = chunk["confidence"]
-            best_label = chunk["predicted_label"]
-    return best_label, best_confidence
+def aggregate_chunk_predictions(
+    chunks: list[dict],
+    decision_threshold: float = 0.5,
+) -> tuple[int, float]:
+    """
+    Aggregate chunk-level predictions to a single script-level prediction.
+
+    Strategy: use the maximum malicious_prob across all chunks (consistent with
+    ScriptGuardClassifier.classify which also uses best_malicious_prob).
+
+    Returns:
+        (predicted_label: int, best_malicious_prob: float)
+    """
+    best_malicious_prob = max(c["malicious_prob"] for c in chunks)
+    label = 1 if best_malicious_prob >= decision_threshold else 0
+    return label, best_malicious_prob
 
 
 @step
@@ -34,16 +44,17 @@ def evaluate_codebert(
 ) -> Annotated[Dict[str, Any], ArtifactConfig(name="metrics")]:
     codebert_cfg = config.get("codebert", {})
     batch_size: int = codebert_cfg.get("batch_size", 16)
+    decision_threshold: float = codebert_cfg.get("decision_threshold", 0.5)
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     logger.info(f"Loading model for evaluation from {model_path}")
 
-    # Detect model type (fused vs legacy)
     inf_cfg_path = os.path.join(model_path, "inference_config.json")
     inf_cfg = {}
     if os.path.exists(inf_cfg_path):
         with open(inf_cfg_path) as f:
             inf_cfg = json.load(f)
+        decision_threshold = inf_cfg.get("decision_threshold", decision_threshold)
 
     is_fused = inf_cfg.get("model_type") == "fused"
 
@@ -62,18 +73,14 @@ def evaluate_codebert(
         eval_columns = ["input_ids", "attention_mask"]
         logger.info("Evaluation: using legacy model path")
 
-    # Select only the columns the collator expects
     available = [c for c in eval_columns if c in test_dataset.column_names]
     eval_ds = test_dataset.select_columns(available)
 
     script_ids: list[int] = test_dataset["script_id"]
     true_labels: list[int] = test_dataset["label"]
 
-    chunk_results: dict[int, list[dict]] = {}
-    chunk_true: dict[int, int] = {}
-
-    all_preds: list[int] = []
-    all_confs: list[float] = []
+    # Collect malicious_prob per chunk (consistent with inference)
+    all_malicious_probs: list[float] = []
 
     loader = DataLoader(eval_ds, batch_size=batch_size, collate_fn=collator)
 
@@ -82,50 +89,81 @@ def evaluate_codebert(
             batch = {k: v.to(device) for k, v in batch.items()}
             outputs = model(**batch)
             probs = torch.softmax(outputs.logits, dim=-1)
-            confidences, preds = probs.max(dim=-1)
-            all_preds.extend(preds.cpu().tolist())
-            all_confs.extend(confidences.cpu().tolist())
+            malicious_probs = probs[:, 1]  # class 1 = malicious
+            all_malicious_probs.extend(malicious_probs.cpu().tolist())
 
-    for i, (pred, conf) in enumerate(zip(all_preds, all_confs)):
+    # Group chunks by script_id
+    chunk_results: dict[int, list[dict]] = {}
+    chunk_true: dict[int, int] = {}
+
+    for i, malicious_prob in enumerate(all_malicious_probs):
         sid = script_ids[i]
         true_lbl = true_labels[i]
         if sid not in chunk_results:
             chunk_results[sid] = []
             chunk_true[sid] = true_lbl
-        chunk_results[sid].append({"predicted_label": pred, "confidence": conf})
+        chunk_results[sid].append({"malicious_prob": malicious_prob})
 
+    # Aggregate to script level
     final_preds: list[int] = []
     final_true: list[int] = []
+    final_scores: list[float] = []  # malicious_prob for ROC-AUC
 
     for sid, chunks in chunk_results.items():
-        pred_label, _ = aggregate_chunk_predictions(chunks)
+        pred_label, best_prob = aggregate_chunk_predictions(chunks, decision_threshold)
         final_preds.append(pred_label)
         final_true.append(chunk_true[sid])
+        final_scores.append(best_prob)
+
+    # Confusion matrix components
+    tn, fp, fn, tp = confusion_matrix(final_true, final_preds, labels=[0, 1]).ravel()
+    cm = [[int(tn), int(fp)], [int(fn), int(tp)]]
 
     accuracy = accuracy_score(final_true, final_preds)
     precision, recall, f1, _ = precision_recall_fscore_support(
         final_true, final_preds, average="binary", pos_label=1, zero_division=0
     )
-    cm = confusion_matrix(final_true, final_preds, labels=[0, 1]).tolist()
+
+    fpr = fp / (fp + tn) if (fp + tn) > 0 else 0.0
+    specificity = tn / (tn + fp) if (tn + fp) > 0 else 0.0
+    mcc = matthews_corrcoef(final_true, final_preds)
+
+    # ROC-AUC (requires both classes present)
+    try:
+        roc_auc = roc_auc_score(final_true, final_scores)
+    except ValueError:
+        roc_auc = float("nan")
+        logger.warning("ROC-AUC skipped: only one class present in test set")
 
     metrics: Dict[str, Any] = {
         "accuracy": float(accuracy),
         "precision": float(precision),
         "malicious_recall": float(recall),
+        "specificity": float(specificity),
         "f1": float(f1),
+        "fpr": float(fpr),
+        "mcc": float(mcc),
+        "roc_auc": float(roc_auc),
         "confusion_matrix": cm,
+        "tp": int(tp), "fp": int(fp), "tn": int(tn), "fn": int(fn),
         "num_scripts_evaluated": len(final_true),
-        "num_chunks_evaluated": len(all_preds),
+        "num_chunks_evaluated": len(all_malicious_probs),
+        "decision_threshold": decision_threshold,
     }
 
-    logger.info("=" * 50)
-    logger.info("EVALUATION RESULTS")
+    logger.info("=" * 55)
+    logger.info("EVALUATION RESULTS (script-level)")
+    logger.info(f"  Threshold:         {decision_threshold:.2f}")
     logger.info(f"  Accuracy:          {accuracy:.4f}")
     logger.info(f"  Precision:         {precision:.4f}")
-    logger.info(f"  Malicious Recall:  {recall:.4f}")
+    logger.info(f"  Malicious Recall:  {recall:.4f}  (sensitivity)")
+    logger.info(f"  Specificity:       {specificity:.4f} (benign recall)")
+    logger.info(f"  FPR:               {fpr:.4f}  ← kluczowe dla security")
     logger.info(f"  F1:                {f1:.4f}")
-    logger.info(f"  Confusion Matrix:  {cm}")
+    logger.info(f"  MCC:               {mcc:.4f}")
+    logger.info(f"  ROC-AUC:           {roc_auc:.4f}")
+    logger.info(f"  Confusion Matrix:  TN={tn} FP={fp} FN={fn} TP={tp}")
     logger.info(f"  Scripts evaluated: {len(final_true)}")
-    logger.info("=" * 50)
+    logger.info("=" * 55)
 
     return metrics
