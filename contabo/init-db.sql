@@ -16,6 +16,7 @@ CREATE TABLE IF NOT EXISTS samples (
     source VARCHAR(100) NOT NULL,
     url TEXT,
     metadata JSONB DEFAULT '{}'::jsonb,
+    features JSONB DEFAULT '{}'::jsonb,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
@@ -38,6 +39,7 @@ CREATE TABLE IF NOT EXISTS dataset_versions (
     benign_count INTEGER NOT NULL,
     sources JSONB DEFAULT '{}'::jsonb,
     metadata JSONB DEFAULT '{}'::jsonb,
+
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
