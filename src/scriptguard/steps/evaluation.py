@@ -1,3 +1,5 @@
+import json
+import os
 from typing import Any, Dict
 from zenml import step, ArtifactConfig
 from typing import Annotated
@@ -28,21 +30,41 @@ def evaluate_codebert(
     test_dataset: Dataset,
     model_path: str,
     config: Dict[str, Any],
+    scaler_path: str,
 ) -> Annotated[Dict[str, Any], ArtifactConfig(name="metrics")]:
     codebert_cfg = config.get("codebert", {})
     batch_size: int = codebert_cfg.get("batch_size", 16)
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     logger.info(f"Loading model for evaluation from {model_path}")
-    tokenizer = AutoTokenizer.from_pretrained(model_path)
-    model = AutoModelForSequenceClassification.from_pretrained(model_path)
-    model.to(device)
-    model.eval()
 
-    collator = DataCollatorWithPadding(tokenizer=tokenizer)
+    # Detect model type (fused vs legacy)
+    inf_cfg_path = os.path.join(model_path, "inference_config.json")
+    inf_cfg = {}
+    if os.path.exists(inf_cfg_path):
+        with open(inf_cfg_path) as f:
+            inf_cfg = json.load(f)
 
-    eval_columns = ["input_ids", "attention_mask"]
-    eval_ds = test_dataset.select_columns(eval_columns)
+    is_fused = inf_cfg.get("model_type") == "fused"
+
+    if is_fused:
+        from scriptguard.models.fused_classifier import load_fused_model, FusedDataCollator
+        model, tokenizer = load_fused_model(model_path, device)
+        collator = FusedDataCollator(tokenizer=tokenizer)
+        eval_columns = ["input_ids", "attention_mask", "feature_vector"]
+        logger.info("Evaluation: using fused model path")
+    else:
+        tokenizer = AutoTokenizer.from_pretrained(model_path)
+        model = AutoModelForSequenceClassification.from_pretrained(model_path)
+        model.to(device)
+        model.eval()
+        collator = DataCollatorWithPadding(tokenizer=tokenizer)
+        eval_columns = ["input_ids", "attention_mask"]
+        logger.info("Evaluation: using legacy model path")
+
+    # Select only the columns the collator expects
+    available = [c for c in eval_columns if c in test_dataset.column_names]
+    eval_ds = test_dataset.select_columns(available)
 
     script_ids: list[int] = test_dataset["script_id"]
     true_labels: list[int] = test_dataset["label"]
@@ -55,7 +77,6 @@ def evaluate_codebert(
 
     loader = DataLoader(eval_ds, batch_size=batch_size, collate_fn=collator)
 
-    offset = 0
     with torch.no_grad():
         for batch in loader:
             batch = {k: v.to(device) for k, v in batch.items()}
@@ -64,7 +85,6 @@ def evaluate_codebert(
             confidences, preds = probs.max(dim=-1)
             all_preds.extend(preds.cpu().tolist())
             all_confs.extend(confidences.cpu().tolist())
-            offset += len(preds)
 
     for i, (pred, conf) in enumerate(zip(all_preds, all_confs)):
         sid = script_ids[i]

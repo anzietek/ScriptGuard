@@ -1,8 +1,11 @@
 from typing import Any, Dict, List
 from zenml import step, ArtifactConfig
 from typing import Annotated
+import numpy as np
+import joblib
 from transformers import AutoTokenizer
 from datasets import Dataset, concatenate_datasets
+from scriptguard.features.extractor import FeatureExtractor
 from scriptguard.materializers.dataset_materializer import HuggingFaceDatasetMaterializer
 from scriptguard.steps.advanced_augmentation import generate_polymorphic_variant
 from scriptguard.utils.tokenization_utils import sliding_window_chunks
@@ -18,6 +21,7 @@ def augment_and_tokenize(
     train_tokens: Dataset,
     train_data: List[Dict[str, Any]],
     config: Dict[str, Any],
+    scaler_path: str,
 ) -> Annotated[Dataset, ArtifactConfig(name="augmented_train_tokens")]:
     aug_cfg = config.get("augmentation", {})
     if not aug_cfg.get("enabled", True):
@@ -50,8 +54,13 @@ def augment_and_tokenize(
     logger.info(f"Loading tokenizer: {model_name}")
     tokenizer = AutoTokenizer.from_pretrained(model_name)
 
+    # Load scaler and extractor for feature computation
+    scaler = joblib.load(scaler_path)
+    extractor = FeatureExtractor()
+
     script_id_offset = len(train_data)
     aug_chunks: list[dict] = []
+    aug_feature_col: list[list[float]] = []
     skipped = 0
     for i, sample in enumerate(augmented_samples):
         content = sample.get("content", "")
@@ -66,6 +75,11 @@ def augment_and_tokenize(
                 script_id=script_id,
                 label=label_int,
             )
+            # Extract and scale features for this augmented sample
+            raw = extractor.extract(content)
+            scaled = scaler.transform(np.array([raw], dtype=np.float32))[0].tolist()
+            for _ in chunks:
+                aug_feature_col.append(scaled)
             aug_chunks.extend(chunks)
         except Exception:
             skipped += 1
@@ -73,7 +87,11 @@ def augment_and_tokenize(
     if skipped:
         logger.warning(f"Skipped {skipped} augmented samples during tokenization")
 
-    aug_dataset = Dataset.from_list(aug_chunks)
+    if not aug_chunks:
+        logger.warning("No augmented chunks produced after tokenization; returning original train_tokens")
+        return train_tokens
+
+    aug_dataset = Dataset.from_list(aug_chunks).add_column("feature_vector", aug_feature_col)
     combined = concatenate_datasets([train_tokens, aug_dataset])
 
     logger.info(

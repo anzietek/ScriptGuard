@@ -16,3 +16,7 @@ class InferenceError(Exception):
 
 class ModelRegistrationError(Exception):
     pass
+
+
+class FeatureExtractionError(Exception):
+    pass
