@@ -13,10 +13,10 @@ import json
 from typing import Optional
 from psycopg2.extras import execute_values
 from scriptguard.database.db_schema import get_connection, return_connection
+from scriptguard.features.extractor import FeatureExtractor
 from scriptguard.utils.logger import logger
 
 _SCHEMA_VERSION = 3
-_EXPECTED_FEATURE_DIM = 25
 
 
 def load_features_from_db(sample_ids: list[int]) -> dict[int, list[float]]:
@@ -61,7 +61,7 @@ def load_features_from_db(sample_ids: list[int]) -> dict[int, list[float]]:
             if raw.get("v") != _SCHEMA_VERSION:
                 continue
             values = raw.get("values")
-            if isinstance(values, list) and len(values) == _EXPECTED_FEATURE_DIM:
+            if isinstance(values, list) and len(values) == FeatureExtractor.FEATURE_DIM:
                 result[sid] = [float(v) for v in values]
 
         logger.info(f"Loaded {len(result)} feature vectors from DB (of {len(sample_ids)} requested)")

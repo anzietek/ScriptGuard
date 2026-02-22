@@ -10,6 +10,7 @@ from transformers import (
     TrainingArguments,
 )
 from datasets import Dataset
+from scriptguard.features.extractor import FeatureExtractor
 from scriptguard.models.fused_classifier import (
     FusedCodeBERTClassifier,
     FusedDataCollator,
@@ -48,7 +49,7 @@ def train_codebert(
     chunk_overlap: int = codebert_cfg.get("chunk_overlap", 50)
     decision_threshold: float = codebert_cfg.get("decision_threshold", 0.5)
 
-    feature_dim: int = codebert_cfg.get("feature_dim", 61)
+    feature_dim: int = FeatureExtractor.FEATURE_DIM  # single source of truth
     mlp_hidden_dim: int = codebert_cfg.get("mlp_hidden_dim", 128)
     fusion_hidden_dim: int = codebert_cfg.get("fusion_hidden_dim", 256)
     dropout_rate: float = codebert_cfg.get("dropout_rate", 0.3)
