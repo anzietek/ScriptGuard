@@ -71,42 +71,59 @@ def cache_features(
         logger.info("cache_features: all features already cached — no computation needed")
 
     # ------------------------------------------------------------------
-    # Diagnostic: inspect feature quality across ALL samples (cached + new)
+    # Diagnostic: inspect feature quality split by label (benign / malicious)
     # Statistical features (indices 56-60: total_lines, code_to_comment_ratio,
     # avg_line_length, max_line_length, blank_line_ratio) must be non-zero
     # for any real code — zero means empty content or extractor crash.
     # ------------------------------------------------------------------
     all_vectors = {**cached, **newly_computed}
     if all_vectors:
-        n_total = len(all_vectors)
-        n_all_zero = sum(1 for v in all_vectors.values() if all(x == 0.0 for x in v))
-        # Statistical features: indices 56-60 (last 5)
-        n_stat_zero = sum(
-            1 for v in all_vectors.values() if all(v[i] == 0.0 for i in range(56, 61))
-        )
-        nonzero_counts = [sum(1 for x in v if x != 0.0) for v in all_vectors.values()]
-        avg_nonzero = sum(nonzero_counts) / n_total if n_total else 0.0
-        min_nonzero = min(nonzero_counts) if nonzero_counts else 0
-        max_nonzero = max(nonzero_counts) if nonzero_counts else 0
+        # Build label lookup: sid → label (0=benign, 1=malicious)
+        label_by_id: dict[int, int] = {
+            d["id"]: int(d.get("label", -1))
+            for d in all_data
+            if d.get("id") is not None
+        }
+
+        def _diag(vectors: dict[int, list[float]], group: str) -> None:
+            if not vectors:
+                return
+            n = len(vectors)
+            n_all_zero = sum(1 for v in vectors.values() if all(x == 0.0 for x in v))
+            n_stat_zero = sum(
+                1 for v in vectors.values() if all(v[i] == 0.0 for i in range(56, 61))
+            )
+            nonzero_counts = [sum(1 for x in v if x != 0.0) for v in vectors.values()]
+            avg_nz = sum(nonzero_counts) / n
+            mn, mx = min(nonzero_counts), max(nonzero_counts)
+            # percentile buckets
+            sorted_nz = sorted(nonzero_counts)
+            p25 = sorted_nz[int(0.25 * n)]
+            p50 = sorted_nz[int(0.50 * n)]
+            p75 = sorted_nz[int(0.75 * n)]
+            logger.info(
+                f"  [{group:>8}] n={n:>5} | all-zero={n_all_zero} ({100*n_all_zero/n:.1f}%) "
+                f"| stat-zero={n_stat_zero} ({100*n_stat_zero/n:.1f}%) "
+                f"| non-zero/61: avg={avg_nz:.1f} min={mn} p25={p25} p50={p50} p75={p75} max={mx}"
+            )
+            if n_all_zero > 0:
+                logger.warning(
+                    f"cache_features [{group}]: {n_all_zero} samples have all-zero vectors "
+                    "(empty content or extractor crash)."
+                )
+
+        benign_vecs  = {sid: v for sid, v in all_vectors.items() if label_by_id.get(sid) == 0}
+        malicious_vecs = {sid: v for sid, v in all_vectors.items() if label_by_id.get(sid) == 1}
+        unknown_vecs = {sid: v for sid, v in all_vectors.items() if label_by_id.get(sid) not in (0, 1)}
 
         logger.info(
-            f"cache_features DIAGNOSTICS ({n_total} samples):\n"
-            f"  all-zero vectors (extractor crash / empty content): {n_all_zero} ({100*n_all_zero/n_total:.1f}%)\n"
-            f"  zero statistical features (empty content): {n_stat_zero} ({100*n_stat_zero/n_total:.1f}%)\n"
-            f"  non-zero features per sample: avg={avg_nonzero:.1f}, min={min_nonzero}, max={max_nonzero}\n"
-            f"  NOTE: 10-15 non-zero/61 is NORMAL for benign code (sparse binary indicators);\n"
-            f"        25-40 non-zero is typical for malicious code."
+            f"cache_features DIAGNOSTICS — non-zero features per sample (out of 61):\n"
+            f"  Expected: benign ~10-15, malicious ~25-40"
         )
-        if n_all_zero > 0:
-            logger.warning(
-                f"cache_features: {n_all_zero} samples have all-zero feature vectors. "
-                "Check for empty 'content' fields or extractor exceptions."
-            )
-        if n_stat_zero > n_all_zero:
-            logger.warning(
-                f"cache_features: {n_stat_zero - n_all_zero} samples have zero statistical "
-                "features but non-zero elsewhere — possible very short/empty code snippets."
-            )
+        _diag(benign_vecs,    "benign")
+        _diag(malicious_vecs, "malicious")
+        if unknown_vecs:
+            _diag(unknown_vecs, "unknown")
 
     return all_data
 
