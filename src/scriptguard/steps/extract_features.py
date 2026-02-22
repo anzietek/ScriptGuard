@@ -71,15 +71,38 @@ def cache_features(
         logger.info("cache_features: all features already cached — no computation needed")
 
     # ------------------------------------------------------------------
-    # Diagnostic: inspect feature quality split by label (benign / malicious)
-    # Statistical features (indices 56-60: total_lines, code_to_comment_ratio,
-    # avg_line_length, max_line_length, blank_line_ratio) must be non-zero
-    # for any real code — zero means empty content or extractor crash.
+    # Diagnostic: per-feature discrimination report (benign vs malicious mean)
     # ------------------------------------------------------------------
+    _FEATURE_NAMES = [
+        # AST (13)
+        "tree_depth", "n_calls", "n_imports", "n_funcdefs", "n_classdefs",
+        "n_for", "n_while", "n_try", "n_exec_nodes", "has_nested_funcs",
+        "exec_eval_depth", "has_decode_chain", "has_dynamic_import",
+        # Import (11)
+        "has_socket", "has_subprocess", "has_os_exec", "has_ctypes", "has_base64_import",
+        "has_marshal", "has_pickle", "has_cryptography", "has_sock_and_subproc",
+        "total_imports", "high_risk_imports",
+        # Entropy (4)
+        "mean_str_entropy", "max_str_entropy", "high_entropy_count", "has_hardcoded_key",
+        # Obfuscation (11)
+        "has_exec", "has_eval", "has_compile", "has_dunder_import",
+        "has_b64decode_call", "has_hex_strings", "has_encoded_exec",
+        "has_shellcode", "has_anti_debug", "has_ctypes_windll", "has_proc_injection",
+        # Network/C2 (6)
+        "unique_ip_count", "unique_url_count", "has_hardcoded_ports",
+        "has_c2_pattern", "has_dns_lookup", "has_system_recon",
+        # Persistence (4)
+        "has_registry_write", "has_cron_pattern", "has_startup_persist", "has_creates_exec",
+        # Crypto (4)
+        "has_aes", "has_rc4", "has_xor_cipher", "has_fernet",
+        # Recon/FS (3)
+        "has_recursive_trav", "has_mass_file_ops", "has_shadow_copy",
+        # Statistical (5)
+        "total_lines", "code_comment_ratio", "avg_line_len", "max_line_len", "blank_ratio",
+    ]
+
     all_vectors = {**cached, **newly_computed}
     if all_vectors:
-        # Build label lookup: sid → 0/1/-1
-        # label may be int (0/1) or string ("benign"/"malicious")
         def _to_int_label(raw) -> int:
             if isinstance(raw, int):
                 return raw
@@ -93,45 +116,37 @@ def cache_features(
             if d.get("id") is not None
         }
 
-        def _diag(vectors: dict[int, list[float]], group: str) -> None:
-            if not vectors:
-                return
-            n = len(vectors)
-            n_all_zero = sum(1 for v in vectors.values() if all(x == 0.0 for x in v))
-            n_stat_zero = sum(
-                1 for v in vectors.values() if all(v[i] == 0.0 for i in range(56, 61))
-            )
-            nonzero_counts = [sum(1 for x in v if x != 0.0) for v in vectors.values()]
-            avg_nz = sum(nonzero_counts) / n
-            mn, mx = min(nonzero_counts), max(nonzero_counts)
-            # percentile buckets
-            sorted_nz = sorted(nonzero_counts)
-            p25 = sorted_nz[int(0.25 * n)]
-            p50 = sorted_nz[int(0.50 * n)]
-            p75 = sorted_nz[int(0.75 * n)]
-            logger.info(
-                f"  [{group:>8}] n={n:>5} | all-zero={n_all_zero} ({100*n_all_zero/n:.1f}%) "
-                f"| stat-zero={n_stat_zero} ({100*n_stat_zero/n:.1f}%) "
-                f"| non-zero/61: avg={avg_nz:.1f} min={mn} p25={p25} p50={p50} p75={p75} max={mx}"
-            )
-            if n_all_zero > 0:
-                logger.warning(
-                    f"cache_features [{group}]: {n_all_zero} samples have all-zero vectors "
-                    "(empty content or extractor crash)."
-                )
+        benign_vecs    = [v for sid, v in all_vectors.items() if label_by_id.get(sid) == 0]
+        malicious_vecs = [v for sid, v in all_vectors.items() if label_by_id.get(sid) == 1]
 
-        benign_vecs  = {sid: v for sid, v in all_vectors.items() if label_by_id.get(sid) == 0}
-        malicious_vecs = {sid: v for sid, v in all_vectors.items() if label_by_id.get(sid) == 1}
-        unknown_vecs = {sid: v for sid, v in all_vectors.items() if label_by_id.get(sid) not in (0, 1)}
+        n_b, n_m = len(benign_vecs), len(malicious_vecs)
+        n_all_zero_b = sum(1 for v in benign_vecs if all(x == 0.0 for x in v))
+        n_all_zero_m = sum(1 for v in malicious_vecs if all(x == 0.0 for x in v))
 
         logger.info(
-            f"cache_features DIAGNOSTICS — non-zero features per sample (out of 61):\n"
-            f"  Expected: benign ~10-15, malicious ~25-40"
+            f"cache_features DIAGNOSTICS  benign={n_b}  malicious={n_m}  "
+            f"all-zero: benign={n_all_zero_b} malicious={n_all_zero_m}"
         )
-        _diag(benign_vecs,    "benign")
-        _diag(malicious_vecs, "malicious")
-        if unknown_vecs:
-            _diag(unknown_vecs, "unknown")
+
+        if benign_vecs and malicious_vecs:
+            dim = len(_FEATURE_NAMES)
+            b_means = [sum(v[i] for v in benign_vecs) / n_b for i in range(dim)]
+            m_means = [sum(v[i] for v in malicious_vecs) / n_m for i in range(dim)]
+
+            # Sort by |delta| descending — most discriminative first
+            deltas = [(m_means[i] - b_means[i], i) for i in range(dim)]
+            deltas.sort(key=lambda x: abs(x[0]), reverse=True)
+
+            lines = ["  Per-feature means (benign → malicious, Δ=mal-ben), sorted by |Δ|:"]
+            lines.append(f"  {'Feature':<22} {'Benign':>8} {'Malicious':>10} {'Δ':>8}  Direction")
+            lines.append("  " + "-" * 62)
+            for delta, i in deltas:
+                name = _FEATURE_NAMES[i]
+                direction = "✓ MAL>" if delta > 0.05 else ("✗ BEN>" if delta < -0.05 else "  ~same")
+                lines.append(
+                    f"  {name:<22} {b_means[i]:>8.3f} {m_means[i]:>10.3f} {delta:>+8.3f}  {direction}"
+                )
+            logger.info("\n".join(lines))
 
     return all_data
 
