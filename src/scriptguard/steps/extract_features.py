@@ -85,6 +85,8 @@ def cache_features(
         "unique_ip_count", "unique_url_count",
         # Statistical (5)
         "total_lines", "comment_density", "avg_line_len", "max_line_len", "line_len_cv",
+        # Obfuscation structural (2)
+        "max_str_literal_len", "long_line_ratio",
         # Aggregated binary flags (1)
         "malware_api_score",
     ]

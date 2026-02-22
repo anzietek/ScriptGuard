@@ -1,16 +1,17 @@
 """
 Feature extractor for ScriptGuard fusion model.
-Extracts a 23-dimensional feature vector from Python source code.
+Extracts a 25-dimensional feature vector from Python source code.
 
-Output vector (FEATURE_DIM=23):
-  - 22 continuous/count features: AST structure metrics, import risk counts,
-    entropy values, network counts, and statistical measures.
+Output vector (FEATURE_DIM=25):
+  - 24 continuous/count features: AST structure metrics, import risk counts,
+    entropy values, network counts, statistical measures, and obfuscation
+    structural signals (max string literal length, long-line ratio).
   - 1 malware_api_score: integer sum of 39 binary indicator flags covering
     dangerous API imports, obfuscation patterns, persistence mechanisms,
     network C2 indicators, crypto operations, and filesystem recon.
 
-Sub-methods compute an intermediate 61-feature raw vector; extract() post-
-processes it into the final 23-dimensional form by separating continuous
+Sub-methods compute an intermediate 63-feature raw vector; extract() post-
+processes it into the final 25-dimensional form by separating continuous
 features from binary flags and aggregating the latter into malware_api_score.
 """
 
@@ -24,9 +25,9 @@ from scriptguard.utils.logger import logger
 
 class FeatureExtractor:
     """
-    Extracts 23-dimensional feature vector from Python source code.
+    Extracts 25-dimensional feature vector from Python source code.
 
-    Output layout (indices 0-22):
+    Output layout (indices 0-24):
         0-9:   AST counts (tree_depth, n_calls, n_imports, n_funcdefs, n_classdefs,
                            n_for, n_while, n_try, n_exec_nodes, exec_eval_depth)
         10-11: Import counts (total_imports, high_risk_imports)
@@ -34,21 +35,23 @@ class FeatureExtractor:
         15-16: Network counts (unique_ip_count, unique_url_count)
         17-21: Statistical (total_lines, comment_density, avg_line_len,
                             max_line_len, line_len_cv)
-        22:    malware_api_score — sum of 39 binary indicator flags
+        22:    max_str_literal_len — length of longest string literal in code
+        23:    long_line_ratio — fraction of lines longer than 500 chars [0, 1]
+        24:    malware_api_score — sum of 39 binary indicator flags
 
-    Sub-methods produce a 61-feature raw vector which is post-processed in
-    extract() to yield this 23-dimensional output.
+    Sub-methods produce a 63-feature raw vector which is post-processed in
+    extract() to yield this 25-dimensional output.
     """
 
-    FEATURE_DIM = 23
-    _RAW_DIM = 61  # intermediate raw vector dimension (internal only)
+    FEATURE_DIM = 25
+    _RAW_DIM = 63  # intermediate raw vector dimension (internal only)
 
     _HIGH_RISK_IMPORTS = {
         "socket", "subprocess", "os", "ctypes", "base64",
         "marshal", "pickle", "cryptography", "fernet",
     }
 
-    # Indices into the 61-feature raw vector that are binary (0/1) flags.
+    # Indices into the 63-feature raw vector that are binary (0/1) flags.
     # These are summed into malware_api_score and dropped from the output.
     _BINARY_INDICES: frozenset = frozenset({
         # AST: has_nested_functions(9), has_decode_chain(11), has_dynamic_import(12)
@@ -78,17 +81,18 @@ class FeatureExtractor:
         24, 25, 26,                   # mean/max entropy, high_entropy_count
         39, 40,                       # unique_ip_count, unique_url_count
         56, 57, 58, 59, 60,           # statistical (5)
+        61, 62,                       # max_str_literal_len, long_line_ratio
     )
 
     def extract(self, code: str) -> list[float]:
         """
-        Extract 23-dimensional feature vector from Python source code.
+        Extract 25-dimensional feature vector from Python source code.
 
-        Internally computes 61 raw features, then:
-          - keeps the 22 continuous/count features in order
-          - sums all 39 binary flags into malware_api_score (index 22)
+        Internally computes 63 raw features, then:
+          - keeps the 24 continuous/count features in order
+          - sums all 39 binary flags into malware_api_score (index 24)
 
-        Returns [0.0] * 23 on any top-level exception.
+        Returns [0.0] * 25 on any top-level exception.
         """
         try:
             raw = (
@@ -100,7 +104,7 @@ class FeatureExtractor:
                 + self._persistence_features(code)  # 4   indices 45-48
                 + self._crypto_features(code)       # 4   indices 49-52
                 + self._recon_fs_features(code)     # 3   indices 53-55
-                + self._statistical_features(code)  # 5   indices 56-60
+                + self._statistical_features(code)  # 7   indices 56-62
             )
             assert len(raw) == self._RAW_DIM, (
                 f"Raw dimension mismatch: expected {self._RAW_DIM}, got {len(raw)}"
@@ -775,7 +779,7 @@ class FeatureExtractor:
             return [0.0] * 3
 
     # ------------------------------------------------------------------
-    # Statistical features (5)
+    # Statistical features (7)
     # ------------------------------------------------------------------
 
     def _statistical_features(self, code: str) -> list[float]:
@@ -784,7 +788,7 @@ class FeatureExtractor:
             total_lines = float(len(lines))
 
             if total_lines == 0:
-                return [0.0, 0.0, 0.0, 0.0, 0.0]
+                return [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
 
             comment_lines = sum(1 for l in lines if l.strip().startswith('#'))
 
@@ -807,12 +811,33 @@ class FeatureExtractor:
             else:
                 line_len_cv = 0.0
 
+            # max_str_literal_len: length of longest string literal content (index 61)
+            # Captures base64/hex payloads stored as string variables, even without exec()
+            # e.g.  payload = "AAAA...4000 chars...AAAA"
+            string_lits = re.findall(
+                r'(?:b?)(?:"(?:[^"\\]|\\.)*"|\'(?:[^\'\\]|\\.)*\')', code
+            )
+            max_str_literal_len = 0.0
+            for s in string_lits:
+                # Strip optional b prefix, then outer quotes
+                stripped = s[1:] if s.startswith("b") else s
+                content_len = float(len(stripped) - 2)  # subtract the two quote chars
+                if content_len > max_str_literal_len:
+                    max_str_literal_len = content_len
+
+            # long_line_ratio: fraction of lines longer than 500 chars [0, 1] (index 62)
+            # Directly measures obfuscation prevalence — most dominant signal in the dataset
+            long_line_count = sum(1 for l in line_lengths if l > 500)
+            long_line_ratio = float(long_line_count) / total_lines
+
             return [
                 total_lines,
                 comment_density,
                 avg_line_length,
                 max_line_length,
                 line_len_cv,
+                max_str_literal_len,
+                long_line_ratio,
             ]
         except Exception:
-            return [0.0] * 5
+            return [0.0] * 7

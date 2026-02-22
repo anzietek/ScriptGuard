@@ -1,7 +1,12 @@
 """
 Feature store for ScriptGuard fusion model.
-Provides load/save operations for the 61-dimensional feature vectors stored in
+Provides load/save operations for the 25-dimensional feature vectors stored in
 the `samples.features` JSONB column of PostgreSQL.
+
+Schema version history:
+  v1 — 61-dim raw vector (deprecated, caused by pre-refactor dimension)
+  v2 — 23-dim output (deprecated, FEATURE_DIM=23 refactor)
+  v3 — 25-dim output (FEATURE_DIM=25: added max_str_literal_len, long_line_ratio)
 """
 
 import json
@@ -10,7 +15,8 @@ from psycopg2.extras import execute_values
 from scriptguard.database.db_schema import get_connection, return_connection
 from scriptguard.utils.logger import logger
 
-_SCHEMA_VERSION = 1
+_SCHEMA_VERSION = 3
+_EXPECTED_FEATURE_DIM = 25
 
 
 def load_features_from_db(sample_ids: list[int]) -> dict[int, list[float]]:
@@ -55,7 +61,7 @@ def load_features_from_db(sample_ids: list[int]) -> dict[int, list[float]]:
             if raw.get("v") != _SCHEMA_VERSION:
                 continue
             values = raw.get("values")
-            if isinstance(values, list) and len(values) == 61:
+            if isinstance(values, list) and len(values) == _EXPECTED_FEATURE_DIM:
                 result[sid] = [float(v) for v in values]
 
         logger.info(f"Loaded {len(result)} feature vectors from DB (of {len(sample_ids)} requested)")
@@ -74,9 +80,9 @@ def save_features_to_db(features_by_id: dict[int, list[float]]) -> None:
     Persist feature vectors to the database.
 
     Args:
-        features_by_id: Dict mapping sample_id → 61-float feature list.
+        features_by_id: Dict mapping sample_id → 25-float feature list.
 
-    Stores as JSONB: {"v": 1, "values": [...]} for schema versioning.
+    Stores as JSONB: {"v": 3, "values": [25 floats]} for schema versioning.
     Uses a single batch UPDATE for efficiency.
     """
     if not features_by_id:
