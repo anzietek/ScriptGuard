@@ -52,6 +52,10 @@ def train_codebert(
     mlp_hidden_dim: int = codebert_cfg.get("mlp_hidden_dim", 128)
     fusion_hidden_dim: int = codebert_cfg.get("fusion_hidden_dim", 256)
     dropout_rate: float = codebert_cfg.get("dropout_rate", 0.3)
+    num_labels: int = codebert_cfg.get("num_labels", 2)
+    logging_steps: int = codebert_cfg.get("logging_steps", 50)
+    save_total_limit: int = codebert_cfg.get("save_total_limit", 2)
+    metric_for_best_model: str = codebert_cfg.get("metric_for_best_model", "eval_recall")
 
     os.makedirs(output_dir, exist_ok=True)
 
@@ -62,7 +66,7 @@ def train_codebert(
         logger.info(f"Building FusedCodeBERTClassifier: {model_name}, feature_dim={feature_dim}")
         model = FusedCodeBERTClassifier(
             model_name=model_name,
-            num_labels=2,
+            num_labels=num_labels,
             feature_dim=feature_dim,
             mlp_hidden_dim=mlp_hidden_dim,
             fusion_hidden_dim=fusion_hidden_dim,
@@ -87,14 +91,14 @@ def train_codebert(
             eval_strategy="epoch",
             save_strategy="epoch",
             load_best_model_at_end=True,
-            metric_for_best_model="eval_recall",
+            metric_for_best_model=metric_for_best_model,
             greater_is_better=True,
             fp16=torch.cuda.is_available(),
             bf16=False,
             save_safetensors=False,  # Custom nn.Module, not PreTrainedModel
             report_to=codebert_cfg.get("report_to", "none"),
-            logging_steps=50,
-            save_total_limit=2,
+            logging_steps=logging_steps,
+            save_total_limit=save_total_limit,
         )
 
         collator = FusedDataCollator(tokenizer=tokenizer)

@@ -4,9 +4,9 @@ Fused CodeBERT Classifier for ScriptGuard.
 Architecture:
     input_ids, attention_mask → GraphCodeBERT → [CLS] [B×768]
                                                               ↘
-                                                               Concat [B×896] → Linear(896→256) → ReLU → Dropout → Linear(256→2)
+                                                               Concat [B×896] → Linear(896→256) → GELU → Dropout → Linear(256→2)
                                                               ↗
-    feature_vector [B×61] → BatchNorm1d(61) → Linear(61→128) → ReLU → Dropout
+    feature_vector [B×61] → BatchNorm1d(61) → Linear(61→128) → GELU → Dropout
 
 This module also provides FusedDataCollator, FusedWeightedTrainer,
 save_fused_model, and load_fused_model.
@@ -82,7 +82,7 @@ class FusedCodeBERTClassifier(nn.Module):
         self.feature_bn = nn.BatchNorm1d(feature_dim)
         self.feature_mlp = nn.Sequential(
             nn.Linear(feature_dim, mlp_hidden_dim),
-            nn.ReLU(),
+            nn.GELU(),
             nn.Dropout(dropout_rate),
         )
 
@@ -90,7 +90,7 @@ class FusedCodeBERTClassifier(nn.Module):
         fusion_input_dim = bert_hidden + mlp_hidden_dim
         self.fusion_head = nn.Sequential(
             nn.Linear(fusion_input_dim, fusion_hidden_dim),
-            nn.ReLU(),
+            nn.GELU(),
             nn.Dropout(dropout_rate),
             nn.Linear(fusion_hidden_dim, num_labels),
         )

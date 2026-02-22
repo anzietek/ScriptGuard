@@ -213,7 +213,12 @@ codebert:
   decision_threshold: 0.50  # Malicious class probability threshold (lower = more aggressive detection)
   output_dir: ${MODEL_OUTPUT_DIR:-/workspace/models/codebert}
   report_to: "wandb"
-  # Fusion model architecture settings
+  # Training loop
+  logging_steps: 50
+  save_total_limit: 2
+  metric_for_best_model: "eval_recall"
+  # Fusion model architecture
+  num_labels: 2
   feature_dim: 61
   mlp_hidden_dim: 128
   fusion_hidden_dim: 256
