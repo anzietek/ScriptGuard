@@ -1,7 +1,17 @@
 """
 Feature extractor for ScriptGuard fusion model.
-Extracts 61 hand-crafted features from Python source code using AST analysis,
-regex patterns, and statistical measures.
+Extracts a 23-dimensional feature vector from Python source code.
+
+Output vector (FEATURE_DIM=23):
+  - 22 continuous/count features: AST structure metrics, import risk counts,
+    entropy values, network counts, and statistical measures.
+  - 1 malware_api_score: integer sum of 39 binary indicator flags covering
+    dangerous API imports, obfuscation patterns, persistence mechanisms,
+    network C2 indicators, crypto operations, and filesystem recon.
+
+Sub-methods compute an intermediate 61-feature raw vector; extract() post-
+processes it into the final 23-dimensional form by separating continuous
+features from binary flags and aggregating the latter into malware_api_score.
 """
 
 import ast
@@ -14,53 +24,91 @@ from scriptguard.utils.logger import logger
 
 class FeatureExtractor:
     """
-    Extracts 61-dimensional feature vector from Python source code.
+    Extracts 23-dimensional feature vector from Python source code.
 
-    Feature groups:
-        AST (13): tree_depth, node_count_{Call,Import,FunctionDef,ClassDef,For,While,Try,Exec},
-                  has_nested_functions, exec_eval_depth, has_decode_chain, has_dynamic_import
-        Import (11): has_{socket,subprocess,os_exec,ctypes,base64,marshal,pickle,cryptography,
-                     socket_and_subprocess}, total_import_count, high_risk_import_count
-        Entropy (4): mean_string_entropy, max_string_entropy, high_entropy_string_count, has_hardcoded_key
-        Obfuscation (11): has_{exec,eval,compile,dunder_import,b64decode_call,hex_strings,
-                          encoded_execution,shellcode,anti_debug,ctypes_windll,process_injection}
-        Network/C2 (6): unique_ip_count, unique_url_count,
-                        has_{hardcoded_ports,c2_pattern,dns_lookup,system_recon}
-        Persistence (4): has_{registry_write,cron_pattern,startup_persistence,creates_executable}
-        Cryptography (4): has_{aes_pattern,rc4_pattern,xor_pattern,fernet_usage}
-        Recon/FS (3): has_{recursive_traversal,mass_file_ops,shadow_copy}
-        Statistical (5): total_lines, code_to_comment_ratio, avg_line_length, max_line_length, blank_line_ratio
+    Output layout (indices 0-22):
+        0-9:   AST counts (tree_depth, n_calls, n_imports, n_funcdefs, n_classdefs,
+                           n_for, n_while, n_try, n_exec_nodes, exec_eval_depth)
+        10-11: Import counts (total_imports, high_risk_imports)
+        12-14: Entropy values (mean_str_entropy, max_str_entropy, high_entropy_count)
+        15-16: Network counts (unique_ip_count, unique_url_count)
+        17-21: Statistical (total_lines, comment_density, avg_line_len,
+                            max_line_len, line_len_cv)
+        22:    malware_api_score — sum of 39 binary indicator flags
+
+    Sub-methods produce a 61-feature raw vector which is post-processed in
+    extract() to yield this 23-dimensional output.
     """
 
-    FEATURE_DIM = 61
+    FEATURE_DIM = 23
+    _RAW_DIM = 61  # intermediate raw vector dimension (internal only)
 
     _HIGH_RISK_IMPORTS = {
         "socket", "subprocess", "os", "ctypes", "base64",
         "marshal", "pickle", "cryptography", "fernet",
     }
 
+    # Indices into the 61-feature raw vector that are binary (0/1) flags.
+    # These are summed into malware_api_score and dropped from the output.
+    _BINARY_INDICES: frozenset = frozenset({
+        # AST: has_nested_functions(9), has_decode_chain(11), has_dynamic_import(12)
+        9, 11, 12,
+        # Import: has_socket(13) … has_sock_and_subproc(21)
+        13, 14, 15, 16, 17, 18, 19, 20, 21,
+        # Entropy: has_hardcoded_key(27)
+        27,
+        # Obfuscation: indices 28-38 (all 11 are binary)
+        28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38,
+        # Network: has_hardcoded_ports(41), has_c2_pattern(42),
+        #          has_dns_lookup(43), has_system_recon(44)
+        41, 42, 43, 44,
+        # Persistence: indices 45-48 (all 4 are binary)
+        45, 46, 47, 48,
+        # Crypto: indices 49-52 (all 4 are binary)
+        49, 50, 51, 52,
+        # Recon/FS: indices 53-55 (all 3 are binary)
+        53, 54, 55,
+    })
+
+    # Indices of continuous/count features kept in output (order preserved).
+    _CONTINUOUS_INDICES: tuple = (
+        0, 1, 2, 3, 4, 5, 6, 7, 8,  # AST counts (tree_depth … n_exec_nodes)
+        10,                           # exec_eval_depth (count, can be > 1)
+        22, 23,                       # total_imports, high_risk_imports
+        24, 25, 26,                   # mean/max entropy, high_entropy_count
+        39, 40,                       # unique_ip_count, unique_url_count
+        56, 57, 58, 59, 60,           # statistical (5)
+    )
+
     def extract(self, code: str) -> list[float]:
         """
-        Extract 61-dimensional feature vector from Python source code.
+        Extract 23-dimensional feature vector from Python source code.
 
-        Returns [0.0] * 61 on any top-level exception. Individual sub-methods
-        return partial zeroes on errors to maintain fixed dimensionality.
+        Internally computes 61 raw features, then:
+          - keeps the 22 continuous/count features in order
+          - sums all 39 binary flags into malware_api_score (index 22)
+
+        Returns [0.0] * 23 on any top-level exception.
         """
         try:
-            features = (
-                self._ast_features(code)          # 13
-                + self._import_features(code)     # 11
-                + self._entropy_features(code)    # 4
-                + self._obfuscation_features(code)  # 11
-                + self._network_features(code)    # 6
-                + self._persistence_features(code)  # 4
-                + self._crypto_features(code)     # 4
-                + self._recon_fs_features(code)   # 3
-                + self._statistical_features(code)  # 5
+            raw = (
+                self._ast_features(code)            # 13  indices 0-12
+                + self._import_features(code)       # 11  indices 13-23
+                + self._entropy_features(code)      # 4   indices 24-27
+                + self._obfuscation_features(code)  # 11  indices 28-38
+                + self._network_features(code)      # 6   indices 39-44
+                + self._persistence_features(code)  # 4   indices 45-48
+                + self._crypto_features(code)       # 4   indices 49-52
+                + self._recon_fs_features(code)     # 3   indices 53-55
+                + self._statistical_features(code)  # 5   indices 56-60
             )
-            assert len(features) == self.FEATURE_DIM, (
-                f"Feature dimension mismatch: expected {self.FEATURE_DIM}, got {len(features)}"
+            assert len(raw) == self._RAW_DIM, (
+                f"Raw dimension mismatch: expected {self._RAW_DIM}, got {len(raw)}"
             )
+            continuous = [raw[i] for i in self._CONTINUOUS_INDICES]
+            malware_api_score = float(sum(raw[i] for i in self._BINARY_INDICES))
+            features = continuous + [malware_api_score]
+            assert len(features) == self.FEATURE_DIM
             return features
         except Exception as e:
             logger.warning(f"FeatureExtractor.extract failed: {e}")

@@ -74,31 +74,19 @@ def cache_features(
     # Diagnostic: per-feature discrimination report (benign vs malicious mean)
     # ------------------------------------------------------------------
     _FEATURE_NAMES = [
-        # AST (13)
+        # AST counts (10)
         "tree_depth", "n_calls", "n_imports", "n_funcdefs", "n_classdefs",
-        "n_for", "n_while", "n_try", "n_exec_nodes", "has_nested_funcs",
-        "exec_eval_depth", "has_decode_chain", "has_dynamic_import",
-        # Import (11)
-        "has_socket", "has_subprocess", "has_os_exec", "has_ctypes", "has_base64_import",
-        "has_marshal", "has_pickle", "has_cryptography", "has_sock_and_subproc",
+        "n_for", "n_while", "n_try", "n_exec_nodes", "exec_eval_depth",
+        # Import counts (2)
         "total_imports", "high_risk_imports",
-        # Entropy (4)
-        "mean_str_entropy", "max_str_entropy", "high_entropy_count", "has_hardcoded_key",
-        # Obfuscation (11)
-        "has_exec", "has_eval", "has_compile", "has_dunder_import",
-        "has_b64decode_call", "has_no_comments", "has_encoded_exec",
-        "has_very_long_line", "has_anti_debug", "has_ctypes_windll", "has_proc_injection",
-        # Network/C2 (6)
-        "unique_ip_count", "unique_url_count", "has_hardcoded_ports",
-        "has_c2_pattern", "has_dns_lookup", "has_system_recon",
-        # Persistence (4)
-        "has_registry_write", "has_cron_pattern", "has_startup_persist", "has_creates_exec",
-        # Crypto (4)
-        "has_aes", "has_rc4", "has_xor_cipher", "has_fernet",
-        # Recon/FS (3)
-        "has_recursive_trav", "has_mass_file_ops", "has_shadow_copy",
+        # Entropy values (3)
+        "mean_str_entropy", "max_str_entropy", "high_entropy_count",
+        # Network counts (2)
+        "unique_ip_count", "unique_url_count",
         # Statistical (5)
         "total_lines", "comment_density", "avg_line_len", "max_line_len", "line_len_cv",
+        # Aggregated binary flags (1)
+        "malware_api_score",
     ]
 
     all_vectors = {**cached, **newly_computed}
