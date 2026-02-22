@@ -19,11 +19,11 @@ class FeatureExtractor:
     Feature groups:
         AST (13): tree_depth, node_count_{Call,Import,FunctionDef,ClassDef,For,While,Try,Exec},
                   has_nested_functions, exec_eval_depth, has_decode_chain, has_dynamic_import
-        Import (11): has_{socket,subprocess,os,ctypes,base64,marshal,pickle,cryptography,fernet},
-                     total_import_count, high_risk_import_count
+        Import (11): has_{socket,subprocess,os_exec,ctypes,base64,marshal,pickle,cryptography,
+                     socket_and_subprocess}, total_import_count, high_risk_import_count
         Entropy (4): mean_string_entropy, max_string_entropy, high_entropy_string_count, has_hardcoded_key
-        Obfuscation (11): has_{exec,eval,compile,dunder_import,base64_pattern,hex_strings},
-                          lambda_chain_count, has_{shellcode,anti_debug,ctypes_windll,process_injection}
+        Obfuscation (11): has_{exec,eval,compile,dunder_import,b64decode_call,hex_strings,
+                          encoded_execution,shellcode,anti_debug,ctypes_windll,process_injection}
         Network/C2 (6): unique_ip_count, unique_url_count,
                         has_{hardcoded_ports,c2_pattern,dns_lookup,system_recon}
         Persistence (4): has_{registry_write,cron_pattern,startup_persistence,creates_executable}
@@ -255,22 +255,40 @@ class FeatureExtractor:
 
             has_socket = float("socket" in imported_modules)
             has_subprocess = float("subprocess" in imported_modules)
-            has_os = float("os" in imported_modules)
             has_ctypes = float("ctypes" in imported_modules)
             has_base64 = float("base64" in imported_modules)
             has_marshal = float("marshal" in imported_modules)
             has_pickle = float("pickle" in imported_modules or "cPickle" in imported_modules)
             has_cryptography = float("cryptography" in imported_modules)
-            has_fernet = float(
-                "fernet" in imported_modules
-                or "cryptography" in imported_modules  # Fernet is part of cryptography
+
+            # has_os_exec: specific OS execution calls — not just `import os` (fires on everything)
+            has_os_exec = 0.0
+            _os_exec_attrs = frozenset(
+                ('system', 'popen', 'execv', 'execl', 'execvp', 'execve', 'execvpe', 'spawnl', 'spawnle', 'spawnlp')
             )
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Call):
+                    func = getattr(node, 'func', None)
+                    if isinstance(func, ast.Attribute) and func.attr in _os_exec_attrs:
+                        val = getattr(func, 'value', None)
+                        if isinstance(val, ast.Name) and val.id == 'os':
+                            has_os_exec = 1.0
+                            break
+            if not has_os_exec:
+                if re.search(r'os\.(?:system|popen|execv[pe]?|execl[pe]?|spawn)\s*\(', code):
+                    has_os_exec = 1.0
+
+            # has_socket_and_subprocess: both imported together — classic reverse shell combo
+            has_socket_and_subprocess = float(
+                "socket" in imported_modules and "subprocess" in imported_modules
+            )
+
             total_import_count = float(len(imported_modules))
             high_risk_import_count = float(len(imported_modules & self._HIGH_RISK_IMPORTS))
 
             return [
-                has_socket, has_subprocess, has_os, has_ctypes, has_base64,
-                has_marshal, has_pickle, has_cryptography, has_fernet,
+                has_socket, has_subprocess, has_os_exec, has_ctypes, has_base64,
+                has_marshal, has_pickle, has_cryptography, has_socket_and_subprocess,
                 total_import_count, high_risk_import_count,
             ]
         except Exception:
@@ -381,15 +399,38 @@ class FeatureExtractor:
                         if depth > 0:
                             lambda_chain_count += 1
 
-            # has_base64_pattern: base64 encoded string in code
-            has_base64_pattern = 0.0
-            if re.search(r'[A-Za-z0-9+/]{20,}={0,2}', code):
-                has_base64_pattern = 1.0
+            # has_b64decode_call: actual decode operation — not just any alphanumeric string
+            # Old `has_base64_pattern` matched ANY 20-char alphanumeric (variable names, URLs, etc.)
+            has_b64decode_call = 0.0
+            if re.search(
+                r'b64decode|b64encode|base64\.b64|\.decode\(["\']base64["\']'
+                r'|binascii\.(?:unhexlify|a2b_hex)|bytes\.fromhex|codecs\.decode',
+                code,
+            ):
+                has_b64decode_call = 1.0
 
             # has_hex_strings: \x-style hex byte sequences
             has_hex_strings = 0.0
             if re.search(r'(?:\\x[0-9a-fA-F]{2}){4,}', code):
                 has_hex_strings = 1.0
+
+            # has_encoded_execution: decode + exec/eval in same script (high malware signal)
+            # Replaces lambda_chain_count which was rarely non-zero and weakly discriminative
+            has_encoded_execution = 0.0
+            if (has_exec or has_eval or has_compile) and has_b64decode_call:
+                if re.search(
+                    r'(?:exec|eval|compile)\s*\([^)]*(?:b64decode|unhexlify|fromhex|decode)',
+                    code, re.DOTALL,
+                ):
+                    has_encoded_execution = 1.0
+                elif re.search(
+                    r'(?:b64decode|unhexlify|fromhex)[^;)]*(?:exec|eval)',
+                    code, re.DOTALL,
+                ):
+                    has_encoded_execution = 1.0
+                # Chained calls: exec(decompress(b64decode(...))) etc.
+                elif re.search(r'(?:exec|eval)\s*\(\s*\w+\s*\(\s*\w+\s*\(', code):
+                    has_encoded_execution = 1.0
 
             # has_shellcode: bytearray/bytes literal > 100 bytes with high entropy
             has_shellcode = self._detect_shellcode(code, tree)
@@ -424,8 +465,8 @@ class FeatureExtractor:
 
             return [
                 has_exec, has_eval, has_compile, has_dunder_import,
-                has_base64_pattern, has_hex_strings,
-                float(lambda_chain_count),
+                has_b64decode_call, has_hex_strings,
+                has_encoded_execution,
                 has_shellcode, has_anti_debug, has_ctypes_windll, has_process_injection,
             ]
         except Exception:
@@ -487,12 +528,20 @@ class FeatureExtractor:
             if re.search(r'socket\.gethostbyname|dns\.resolver|getaddrinfo|nslookup', code):
                 has_dns_lookup = 1.0
 
-            # has_system_recon
+            # has_system_recon: fingerprinting specific to C2 beacon behavior
+            # Removed: os.environ (config in every Flask/Django app), platform.system() (cross-platform libs)
             has_system_recon = 0.0
             recon_patterns = [
-                r'platform\.node\(\)', r'socket\.gethostname\(\)', r'os\.uname\(\)',
-                r'getpass\.getuser\(\)', r'whoami', r'systeminfo', r'ipconfig',
-                r'os\.environ', r'platform\.system\(\)',
+                r'platform\.node\(\)',
+                r'socket\.gethostname\(\)',
+                r'os\.uname\(\)',
+                r'getpass\.getuser\(\)',
+                r'whoami',
+                r'systeminfo',
+                r'ipconfig',
+                r'net\s+user',
+                r'netifaces\.',
+                r'psutil\.net_if',
             ]
             for pat in recon_patterns:
                 if re.search(pat, code):
@@ -560,10 +609,21 @@ class FeatureExtractor:
                     has_startup_persistence = 1.0
                     break
 
-            # has_creates_executable
+            # has_creates_executable: actually dropping/writing an executable file
+            # Removed: bare .exe/.bat/.cmd mentions (fires on PyInstaller, build scripts, test files)
             has_creates_executable = 0.0
-            if re.search(r'\.exe|\.bat|\.cmd|\.vbs|\.ps1|chmod\s+\+x|os\.chmod', code):
-                has_creates_executable = 1.0
+            exec_drop_patterns = [
+                r'chmod\s+\+x',                                          # shell chmod +x
+                r'os\.chmod\([^,]+,\s*(?:0[oO]?7[0-7]{2}|0o?755|0o?777)',  # os.chmod to make executable
+                r'open\([^)]*\.(exe|bat|cmd|vbs|ps1|sh)[^)]*["\'],\s*["\'][wa]b?',  # write to executable
+                r'with\s+open\([^)]*\.(exe|bat|cmd|vbs|ps1|sh)',         # context mgr write
+                r'HKEY_[A-Z_]+.*(?:\\\\Run|\\\\RunOnce)',                 # registry run key
+                r'subprocess.*["\'][^\'"]*\.(exe|bat|cmd)["\']',          # executing dropped file
+            ]
+            for pat in exec_drop_patterns:
+                if re.search(pat, code, re.IGNORECASE):
+                    has_creates_executable = 1.0
+                    break
 
             return [has_registry_write, has_cron_pattern, has_startup_persistence, has_creates_executable]
         except Exception:
@@ -583,18 +643,30 @@ class FeatureExtractor:
             if re.search(r'RC4|arc4|Salsa20|ChaCha|rc4_encrypt', code, re.IGNORECASE):
                 has_rc4_pattern = 1.0
 
+            # has_xor_pattern: XOR used as a cipher, not standard ^= assignment
+            # Removed: bare `^=` — fires on benign bitwise ops (checksums, flags, hash functions)
             has_xor_pattern = 0.0
-            if re.search(r'\bxor\b|\^=|\bXOR\b', code, re.IGNORECASE):
+            if re.search(r'\bxor\b|\bXOR\b', code):
                 has_xor_pattern = 1.0
-            # Also check for XOR loop pattern in AST
-            try:
-                tree = self._parse_ast(code)
-                for node in ast.walk(tree):
-                    if isinstance(node, ast.AugAssign) and isinstance(node.op, ast.BitXor):
-                        has_xor_pattern = 1.0
-                        break
-            except SyntaxError:
-                pass
+            # AST: ^= inside a For loop on a subscript — classic XOR cipher loop
+            # e.g.  data[i] ^= key[i % len(key)]
+            if not has_xor_pattern:
+                try:
+                    tree = self._parse_ast(code)
+                    for node in ast.walk(tree):
+                        if isinstance(node, ast.For):
+                            for child in ast.walk(node):
+                                if (
+                                    isinstance(child, ast.AugAssign)
+                                    and isinstance(child.op, ast.BitXor)
+                                    and isinstance(child.target, ast.Subscript)
+                                ):
+                                    has_xor_pattern = 1.0
+                                    break
+                        if has_xor_pattern:
+                            break
+                except SyntaxError:
+                    pass
 
             has_fernet_usage = 0.0
             if re.search(r'Fernet|fernet\.encrypt|fernet\.decrypt', code):

@@ -78,9 +78,17 @@ def cache_features(
     # ------------------------------------------------------------------
     all_vectors = {**cached, **newly_computed}
     if all_vectors:
-        # Build label lookup: sid → label (0=benign, 1=malicious)
+        # Build label lookup: sid → 0/1/-1
+        # label may be int (0/1) or string ("benign"/"malicious")
+        def _to_int_label(raw) -> int:
+            if isinstance(raw, int):
+                return raw
+            if isinstance(raw, str):
+                return 1 if raw.lower() == "malicious" else 0
+            return -1
+
         label_by_id: dict[int, int] = {
-            d["id"]: int(d.get("label", -1))
+            d["id"]: _to_int_label(d.get("label", -1))
             for d in all_data
             if d.get("id") is not None
         }
