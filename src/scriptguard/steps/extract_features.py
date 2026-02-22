@@ -35,7 +35,7 @@ from scriptguard.utils.logger import logger
 # Pre-split step: cache features for ALL ingested samples
 # ---------------------------------------------------------------------------
 
-@step
+@step(enable_cache=False)
 def cache_features(
     all_data: List[Dict[str, Any]],
 ) -> List[Dict[str, Any]]:
