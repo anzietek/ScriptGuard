@@ -70,6 +70,44 @@ def cache_features(
     else:
         logger.info("cache_features: all features already cached — no computation needed")
 
+    # ------------------------------------------------------------------
+    # Diagnostic: inspect feature quality across ALL samples (cached + new)
+    # Statistical features (indices 56-60: total_lines, code_to_comment_ratio,
+    # avg_line_length, max_line_length, blank_line_ratio) must be non-zero
+    # for any real code — zero means empty content or extractor crash.
+    # ------------------------------------------------------------------
+    all_vectors = {**cached, **newly_computed}
+    if all_vectors:
+        n_total = len(all_vectors)
+        n_all_zero = sum(1 for v in all_vectors.values() if all(x == 0.0 for x in v))
+        # Statistical features: indices 56-60 (last 5)
+        n_stat_zero = sum(
+            1 for v in all_vectors.values() if all(v[i] == 0.0 for i in range(56, 61))
+        )
+        nonzero_counts = [sum(1 for x in v if x != 0.0) for v in all_vectors.values()]
+        avg_nonzero = sum(nonzero_counts) / n_total if n_total else 0.0
+        min_nonzero = min(nonzero_counts) if nonzero_counts else 0
+        max_nonzero = max(nonzero_counts) if nonzero_counts else 0
+
+        logger.info(
+            f"cache_features DIAGNOSTICS ({n_total} samples):\n"
+            f"  all-zero vectors (extractor crash / empty content): {n_all_zero} ({100*n_all_zero/n_total:.1f}%)\n"
+            f"  zero statistical features (empty content): {n_stat_zero} ({100*n_stat_zero/n_total:.1f}%)\n"
+            f"  non-zero features per sample: avg={avg_nonzero:.1f}, min={min_nonzero}, max={max_nonzero}\n"
+            f"  NOTE: 10-15 non-zero/61 is NORMAL for benign code (sparse binary indicators);\n"
+            f"        25-40 non-zero is typical for malicious code."
+        )
+        if n_all_zero > 0:
+            logger.warning(
+                f"cache_features: {n_all_zero} samples have all-zero feature vectors. "
+                "Check for empty 'content' fields or extractor exceptions."
+            )
+        if n_stat_zero > n_all_zero:
+            logger.warning(
+                f"cache_features: {n_stat_zero - n_all_zero} samples have zero statistical "
+                "features but non-zero elsewhere — possible very short/empty code snippets."
+            )
+
     return all_data
 
 
