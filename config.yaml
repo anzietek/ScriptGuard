@@ -206,7 +206,7 @@ codebert:
   warmup_steps: 200
   lr_scheduler_type: "cosine"
   weight_decay: 0.1
-  num_epochs: 5
+  num_epochs: 2
   eval_threshold: 0.92
   focal_gamma: 3.0  # Focal Loss gamma: 0=CrossEntropy, 2=standard focal, higher=harder examples focus
   max_grad_norm: 1.0  # Gradient clipping threshold (lower = more aggressive clipping)
