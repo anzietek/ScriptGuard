@@ -593,19 +593,36 @@ class FeatureExtractor:
             if re.search(r'winreg|_winreg|RegSetValue|HKEY_|OpenKey|CreateKey', code):
                 has_registry_write = 1.0
 
-            # has_cron_pattern
+            # has_cron_pattern: creating scheduled tasks — not just mentioning cron
+            # Removed: crontab|/etc/cron — Ansible, Fabric, SaltStack all manage cron legitimately
             has_cron_pattern = 0.0
-            if re.search(r'crontab|/etc/cron|at\.exe|schtasks|Task Scheduler', code, re.IGNORECASE):
-                has_cron_pattern = 1.0
+            cron_create_patterns = [
+                r'schtasks\s+/[Cc]reate',          # Windows schtasks /Create
+                r'at\.exe\s+\d',                    # Windows at.exe scheduler
+                r'SchTasks\.exe',
+                r'open\(["\'][/\\]etc[/\\]cron',    # writing to cron file (not just reading)
+                r'crontab\s+-[el]\s',               # editing crontab interactively
+                r'TaskScheduler|ITaskScheduler',    # COM interface
+            ]
+            for pat in cron_create_patterns:
+                if re.search(pat, code, re.IGNORECASE):
+                    has_cron_pattern = 1.0
+                    break
 
-            # has_startup_persistence
+            # has_startup_persistence: actual persistence mechanism installation
+            # Removed: Startup, systemd, launchd, autorun, .bashrc, .profile, rc.local
+            # — all fired by Ansible, Fabric, SaltStack, Django AppConfig, Flask startup handlers
             has_startup_persistence = 0.0
             startup_patterns = [
-                r'Startup', r'\\CurrentVersion\\Run', r'launchd', r'systemd',
-                r'autorun', r'\.bashrc', r'\.profile', r'rc\.local',
+                r'\\CurrentVersion\\Run(?:Once)?["\']',  # registry run key (write)
+                r'HKCU.*\\Run|HKLM.*\\Run',              # registry persistence
+                r'nssm\s+install',                        # Windows service via nssm
+                r'sc\.exe\s+create|CreateService\s*\(',  # Windows service creation
+                r'open\(["\'][/\\]etc[/\\](?:init\.d|rc\.local)',  # writing init script
+                r'(?:plist|launchd).*write|write.*plist', # plist persistence write
             ]
             for pat in startup_patterns:
-                if re.search(pat, code):
+                if re.search(pat, code, re.IGNORECASE):
                     has_startup_persistence = 1.0
                     break
 
@@ -682,9 +699,11 @@ class FeatureExtractor:
 
     def _recon_fs_features(self, code: str) -> list[float]:
         try:
-            # has_recursive_traversal: os.walk or pathlib rglob
+            # has_recursive_traversal: deep/recursive filesystem traversal
+            # Removed: os.listdir — simple listing, extremely common in benign code
+            # (scikit-learn dataset loaders, scrapy spiders, Ansible file management, etc.)
             has_recursive_traversal = 0.0
-            if re.search(r'os\.walk\(|\.rglob\(|glob\.glob.+\*\*|os\.listdir', code):
+            if re.search(r'os\.walk\(|\.rglob\(|glob\.glob[^)]*\*\*', code):
                 has_recursive_traversal = 1.0
 
             # has_mass_file_ops: iteration over multiple file extensions (ransomware pattern)
