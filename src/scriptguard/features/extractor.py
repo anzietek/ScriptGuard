@@ -43,15 +43,12 @@ class FeatureExtractor:
     extract() to yield this 25-dimensional output.
     """
 
-    FEATURE_DIM = 25
-    _RAW_DIM = 63  # intermediate raw vector dimension (internal only)
-
     _HIGH_RISK_IMPORTS = {
         "socket", "subprocess", "os", "ctypes", "base64",
         "marshal", "pickle", "cryptography", "fernet",
     }
 
-    # Indices into the 63-feature raw vector that are binary (0/1) flags.
+    # Indices into the raw vector that are binary (0/1) flags.
     # These are summed into malware_api_score and dropped from the output.
     _BINARY_INDICES: frozenset = frozenset({
         # AST: has_nested_functions(9), has_decode_chain(11), has_dynamic_import(12)
@@ -83,6 +80,10 @@ class FeatureExtractor:
         56, 57, 58, 59, 60,           # statistical (5)
         61, 62,                       # max_str_literal_len, long_line_ratio
     )
+
+    # Derived — never edit these manually; change the index sets above instead.
+    _RAW_DIM: int = len(_BINARY_INDICES) + len(_CONTINUOUS_INDICES)
+    FEATURE_DIM: int = len(_CONTINUOUS_INDICES) + 1  # +1 for malware_api_score
 
     def extract(self, code: str) -> list[float]:
         """
