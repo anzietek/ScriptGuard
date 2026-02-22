@@ -136,6 +136,39 @@ def cache_features(
                 )
             logger.info("\n".join(lines))
 
+            # --- malware_api_score distribution breakdown ---
+            api_idx = _FEATURE_NAMES.index("malware_api_score")
+
+            def _score_dist(vecs: list[list[float]], label: str) -> str:
+                scores = sorted(v[api_idx] for v in vecs)
+                n = len(scores)
+                if not n:
+                    return f"  {label}: n=0"
+                mean = sum(scores) / n
+                p = lambda q: scores[int(q * n)]  # noqa: E731
+                # bucket counts: 0, 1-3, 4-7, 8-14, 15+
+                buckets = {
+                    "0":    sum(1 for s in scores if s == 0),
+                    "1-3":  sum(1 for s in scores if 1 <= s <= 3),
+                    "4-7":  sum(1 for s in scores if 4 <= s <= 7),
+                    "8-14": sum(1 for s in scores if 8 <= s <= 14),
+                    "15+":  sum(1 for s in scores if s >= 15),
+                }
+                bucket_str = "  ".join(f"{k}:{v}" for k, v in buckets.items())
+                return (
+                    f"  {label:<10} n={n}  mean={mean:.2f}  "
+                    f"min={scores[0]:.0f}  p25={p(0.25):.0f}  p50={p(0.50):.0f}  "
+                    f"p75={p(0.75):.0f}  max={scores[-1]:.0f}\n"
+                    f"             buckets: {bucket_str}"
+                )
+
+            logger.info(
+                "malware_api_score distribution (max=39 flags):\n"
+                + _score_dist(benign_vecs, "benign")
+                + "\n"
+                + _score_dist(malicious_vecs, "malicious")
+            )
+
     return all_data
 
 
