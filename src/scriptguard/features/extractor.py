@@ -409,13 +409,13 @@ class FeatureExtractor:
             ):
                 has_b64decode_call = 1.0
 
-            # has_hex_strings: \x-style hex byte sequences
-            has_hex_strings = 0.0
-            if re.search(r'(?:\\x[0-9a-fA-F]{2}){4,}', code):
-                has_hex_strings = 1.0
+            # has_no_comments: malicious code almost never has inline documentation
+            # Replaces has_hex_strings (Δ≈-0.001, anti-correlated, useless)
+            _ob_lines = code.splitlines()
+            _ob_comment_count = sum(1 for l in _ob_lines if l.strip().startswith('#'))
+            has_no_comments = float(_ob_comment_count == 0 and len(_ob_lines) > 5)
 
             # has_encoded_execution: decode + exec/eval in same script (high malware signal)
-            # Replaces lambda_chain_count which was rarely non-zero and weakly discriminative
             has_encoded_execution = 0.0
             if (has_exec or has_eval or has_compile) and has_b64decode_call:
                 if re.search(
@@ -428,12 +428,13 @@ class FeatureExtractor:
                     code, re.DOTALL,
                 ):
                     has_encoded_execution = 1.0
-                # Chained calls: exec(decompress(b64decode(...))) etc.
                 elif re.search(r'(?:exec|eval)\s*\(\s*\w+\s*\(\s*\w+\s*\(', code):
                     has_encoded_execution = 1.0
 
-            # has_shellcode: bytearray/bytes literal > 100 bytes with high entropy
-            has_shellcode = self._detect_shellcode(code, tree)
+            # has_very_long_line: single-line blobs = obfuscated/base64 payloads
+            # Replaces has_shellcode (Δ=0.000, never fires in practice)
+            _ob_line_lens = [len(l) for l in _ob_lines]
+            has_very_long_line = float(max(_ob_line_lens) > 500 if _ob_line_lens else False)
 
             # has_anti_debug
             has_anti_debug = 0.0
@@ -465,9 +466,9 @@ class FeatureExtractor:
 
             return [
                 has_exec, has_eval, has_compile, has_dunder_import,
-                has_b64decode_call, has_hex_strings,
+                has_b64decode_call, has_no_comments,
                 has_encoded_execution,
-                has_shellcode, has_anti_debug, has_ctypes_windll, has_process_injection,
+                has_very_long_line, has_anti_debug, has_ctypes_windll, has_process_injection,
             ]
         except Exception:
             return [0.0] * 11
@@ -738,22 +739,32 @@ class FeatureExtractor:
                 return [0.0, 0.0, 0.0, 0.0, 0.0]
 
             comment_lines = sum(1 for l in lines if l.strip().startswith('#'))
-            code_lines = sum(1 for l in lines if l.strip() and not l.strip().startswith('#'))
-            blank_lines = sum(1 for l in lines if not l.strip())
 
-            code_to_comment_ratio = float(code_lines) / max(1.0, float(comment_lines))
-            blank_line_ratio = float(blank_lines) / max(1.0, total_lines)
+            # comment_density: fraction of comment lines [0, 1]
+            # Replaces code_to_comment_ratio which was unbounded when no comments exist
+            # (ratio = code_lines / 1 → same as total_lines → hundreds, pollutes the feature)
+            comment_density = float(comment_lines) / total_lines
 
             line_lengths = [len(l) for l in lines]
             avg_line_length = sum(line_lengths) / max(1, len(line_lengths))
             max_line_length = float(max(line_lengths)) if line_lengths else 0.0
 
+            # line_len_cv: coefficient of variation of line lengths (stdev / mean)
+            # High CV = obfuscated code: one very long line among many short lines
+            # Replaces blank_line_ratio (Δ=-0.055, anti-correlated, not useful)
+            if len(line_lengths) > 1:
+                mean = avg_line_length
+                variance = sum((l - mean) ** 2 for l in line_lengths) / len(line_lengths)
+                line_len_cv = math.sqrt(variance) / max(1.0, mean)
+            else:
+                line_len_cv = 0.0
+
             return [
                 total_lines,
-                code_to_comment_ratio,
+                comment_density,
                 avg_line_length,
                 max_line_length,
-                blank_line_ratio,
+                line_len_cv,
             ]
         except Exception:
             return [0.0] * 5

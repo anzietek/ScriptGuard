@@ -86,8 +86,8 @@ def cache_features(
         "mean_str_entropy", "max_str_entropy", "high_entropy_count", "has_hardcoded_key",
         # Obfuscation (11)
         "has_exec", "has_eval", "has_compile", "has_dunder_import",
-        "has_b64decode_call", "has_hex_strings", "has_encoded_exec",
-        "has_shellcode", "has_anti_debug", "has_ctypes_windll", "has_proc_injection",
+        "has_b64decode_call", "has_no_comments", "has_encoded_exec",
+        "has_very_long_line", "has_anti_debug", "has_ctypes_windll", "has_proc_injection",
         # Network/C2 (6)
         "unique_ip_count", "unique_url_count", "has_hardcoded_ports",
         "has_c2_pattern", "has_dns_lookup", "has_system_recon",
@@ -98,7 +98,7 @@ def cache_features(
         # Recon/FS (3)
         "has_recursive_trav", "has_mass_file_ops", "has_shadow_copy",
         # Statistical (5)
-        "total_lines", "code_comment_ratio", "avg_line_len", "max_line_len", "blank_ratio",
+        "total_lines", "comment_density", "avg_line_len", "max_line_len", "line_len_cv",
     ]
 
     all_vectors = {**cached, **newly_computed}
