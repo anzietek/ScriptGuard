@@ -112,6 +112,9 @@ def cache_features(
         # Reflection & data-structure features P24-P26 — indices 49-51
         "reflection_proxy_score", "string_mutation_density",
         "data_to_logic_ratio",
+        # Ghostbuster features P27-P29 — indices 52-54
+        "logic_less_payload_volume", "top_level_execution_density",
+        "builtin_cast_anomaly",
     ]
 
     all_vectors = {**cached, **newly_computed}

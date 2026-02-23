@@ -1,8 +1,8 @@
 """
 Feature extractor for ScriptGuard fusion model.
-Extracts a 52-dimensional feature vector from Python source code.
+Extracts a 55-dimensional feature vector from Python source code.
 
-Output vector (FEATURE_DIM=52):
+Output vector (FEATURE_DIM=55):
   - 25 continuous/count features: AST structure metrics, import risk counts,
     entropy values, network counts, statistical measures, and obfuscation
     structural signals (max string literal length, long-line ratio).
@@ -29,11 +29,13 @@ Output vector (FEATURE_DIM=52):
     bitwise_logic_density, immediate_eval_flatness, hex_payload_coverage.
   - 3 reflection & data-structure features (P24-P26): reflection_proxy_score,
     string_mutation_density, data_to_logic_ratio.
+  - 3 ghostbuster features (P27-P29): logic_less_payload_volume,
+    top_level_execution_density, builtin_cast_anomaly.
 
 Sub-methods compute an intermediate 69-feature raw vector; extract() post-
-processes it into the final 52-dimensional form by separating continuous
+processes it into the final 55-dimensional form by separating continuous
 features from binary flags, applying log1p to 5 heavy features, aggregating
-the binary flags into malware_api_score, and appending the 26 targeted features.
+the binary flags into malware_api_score, and appending the 29 targeted features.
 """
 
 import ast
@@ -46,9 +48,9 @@ from scriptguard.utils.logger import logger
 
 class FeatureExtractor:
     """
-    Extracts 52-dimensional feature vector from Python source code.
+    Extracts 55-dimensional feature vector from Python source code.
 
-    Output layout (indices 0-51):
+    Output layout (indices 0-54):
         0-9:   AST counts (tree_depth, n_calls*, n_imports, n_funcdefs, n_classdefs,
                            n_for, n_while, n_try, n_exec_nodes, exec_eval_depth)
                * log1p-scaled
@@ -87,9 +89,12 @@ class FeatureExtractor:
         49:    reflection_proxy_score (P24) — getattr/dunder/dir-loop reflection [0, 1]
         50:    string_mutation_density (P25) — ln(1+str_mutations) / (1+ln(1+n_calls))
         51:    data_to_logic_ratio (P26) — (Expr+Assign) / (1+If+For+While+Try)
+        52:    logic_less_payload_volume (P27) — ln(1+lit_lens) / ln(1+n_ast_nodes)
+        53:    top_level_execution_density (P28) — top_expr / total_expr [0, 1]
+        54:    builtin_cast_anomaly (P29) — ln(1+nested_cast_count)
 
     Sub-methods produce a 69-feature raw vector which is post-processed in
-    extract() to yield this 52-dimensional output.
+    extract() to yield this 55-dimensional output.
     """
 
     _HIGH_RISK_IMPORTS = {
@@ -144,12 +149,12 @@ class FeatureExtractor:
     # Positions: n_calls=1, total_lines=17, avg_line_len=19, max_line_len=20, max_str_literal_len=22
     _LOG1P_INDICES: tuple[int, ...] = (1, 17, 19, 20, 22)
 
-    # 25 + 1 malware_api_score + 4 (P1-P4) + 6 (P5-P10) + 4 (P11-P14) + 1 (P15) + 4 (P16-P19) + 4 (P20-P23) + 3 (P24-P26)
-    FEATURE_DIM: int = len(_CONTINUOUS_INDICES) + 1 + 4 + 6 + 4 + 1 + 4 + 4 + 3
+    # 25 + 1 malware_api_score + 4 (P1-P4) + 6 (P5-P10) + 4 (P11-P14) + 1 (P15) + 4 (P16-P19) + 4 (P20-P23) + 3 (P24-P26) + 3 (P27-P29)
+    FEATURE_DIM: int = len(_CONTINUOUS_INDICES) + 1 + 4 + 6 + 4 + 1 + 4 + 4 + 3 + 3
 
     def extract(self, code: str) -> list[float]:
         """
-        Extract 52-dimensional feature vector from Python source code.
+        Extract 55-dimensional feature vector from Python source code.
 
         Internally computes 69 raw features, then:
           - keeps the 25 continuous/count features in order
@@ -158,8 +163,9 @@ class FeatureExtractor:
           - appends 19 targeted features P1-P19 (indices 26-44)
           - appends 4 byte-buster features P20-P23 (indices 45-48)
           - appends 3 reflection & data-structure features P24-P26 (indices 49-51)
+          - appends 3 ghostbuster features P27-P29 (indices 52-54)
 
-        Returns [0.0] * 52 on any top-level exception.
+        Returns [0.0] * 55 on any top-level exception.
         """
         try:
             _aliases: dict[str, str] = {}
@@ -234,8 +240,12 @@ class FeatureExtractor:
                     )
                     _p9_val = 0.0
                 features.append(_p9_val)
+            # P27-P29: ghostbuster signals (v10.0)
+            features.append(self._logic_less_payload_volume(code))       # 52
+            features.append(self._top_level_execution_density(code))     # 53
+            features.append(self._builtin_cast_anomaly(code))            # 54
 
-            assert len(features) == self.FEATURE_DIM  # 52
+            assert len(features) == self.FEATURE_DIM  # 55
 
             # Sanity pass: replace non-finite values with 0.0, cap > 20.0
             for _i in range(len(features)):
@@ -1585,7 +1595,8 @@ class FeatureExtractor:
     # ------------------------------------------------------------------
     # P13: structural_malware_ratio (index 38)
     # Formula: log1p(n_calls) / (1 + log1p(n_funcdefs + n_classdefs))
-    # features[1] is already log1p-scaled (n_calls); features[3,4] are raw counts.
+    # features[1] is already log1p-scaled (n_calls); features[3,4] are raw counts,
+    # but log1p is applied inline → both sides are log-scaled (verified v10.0).
     # Amplifies flat structure: many calls with few abstractions → high ratio.
     # ------------------------------------------------------------------
 
@@ -1896,13 +1907,43 @@ class FeatureExtractor:
     _REFLECT_FUNCS: frozenset[str] = frozenset({'getattr', 'hasattr'})
 
     def _reflection_proxy_score(self, code: str) -> float:
+        # v10.0: gated — only fires if a reflection call is inside a lambda,
+        # OR a purely-underscore variable with >3 chars exists (obfuscation marker).
+        # This prevents FP from legitimate frameworks that use getattr extensively.
         try:
             try:
                 tree = self._parse_ast(code)
             except SyntaxError:
                 return 0.0
 
-            # Collect all node IDs that live inside a FunctionDef/AsyncFunctionDef
+            # Gate: collect lambda body node IDs
+            lambda_ids: set[int] = set()
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Lambda):
+                    for child in ast.walk(node):
+                        lambda_ids.add(id(child))
+
+            # Gate condition 1: any reflection call (getattr/hasattr/dir) inside a lambda
+            lambda_reflect: bool = any(
+                id(node) in lambda_ids
+                and isinstance(node, ast.Call)
+                and isinstance(getattr(node, 'func', None), ast.Name)
+                and getattr(node.func, 'id', '') in (self._REFLECT_FUNCS | frozenset({'dir'}))
+                for node in ast.walk(tree)
+            )
+
+            # Gate condition 2: variable whose name is composed entirely of underscores, length > 3
+            deep_underscore_var: bool = any(
+                isinstance(node, ast.Name)
+                and len(node.id) > 3
+                and all(c == '_' for c in node.id)
+                for node in ast.walk(tree)
+            )
+
+            if not lambda_reflect and not deep_underscore_var:
+                return 0.0
+
+            # Original scoring — same rules as v9.0
             in_funcdef_ids: set[int] = set()
             for node in ast.walk(tree):
                 if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
@@ -1913,7 +1954,6 @@ class FeatureExtractor:
             rule1_fired = rule2_fired = rule3_fired = False
 
             for node in ast.walk(tree):
-                # Rule 1: getattr/hasattr with a non-literal second argument
                 if not rule1_fired and isinstance(node, ast.Call):
                     func = getattr(node, 'func', None)
                     if isinstance(func, ast.Name) and func.id in self._REFLECT_FUNCS:
@@ -1921,7 +1961,6 @@ class FeatureExtractor:
                             score += 0.6
                             rule1_fired = True
 
-                # Rule 2: dunder access outside any function body
                 if not rule2_fired and id(node) not in in_funcdef_ids:
                     if (
                         (isinstance(node, ast.Attribute) and node.attr in self._REFLECT_DUNDERS)
@@ -1930,7 +1969,6 @@ class FeatureExtractor:
                         score += 0.5
                         rule2_fired = True
 
-                # Rule 3: for x in dir(module): ...
                 if not rule3_fired and isinstance(node, ast.For):
                     iter_node = node.iter
                     if isinstance(iter_node, ast.Call):
@@ -2006,5 +2044,104 @@ class FeatureExtractor:
             count_data = sum(1 for n in ast.walk(tree) if isinstance(n, _DATA_TYPES))
             count_logic = sum(1 for n in ast.walk(tree) if isinstance(n, _LOGIC_TYPES))
             return count_data / (1.0 + count_logic)
+        except Exception:
+            return 0.0
+
+    # ------------------------------------------------------------------
+    # P27: logic_less_payload_volume (index 52)
+    # Detects massive string/bytes payloads in shallow AST trees.
+    # Formula: ln(1 + sum_lit_lens) / ln(1 + n_ast_nodes)
+    # ------------------------------------------------------------------
+
+    def _logic_less_payload_volume(self, code: str) -> float:
+        try:
+            try:
+                tree = self._parse_ast(code)
+            except SyntaxError:
+                return 0.0
+            nodes: list[ast.AST] = list(ast.walk(tree))
+            n_ast_nodes: int = len(nodes)
+            denom: float = math.log1p(n_ast_nodes)
+            if denom == 0.0:
+                return 0.0
+            sum_lens: int = sum(
+                len(node.value)
+                for node in nodes
+                if isinstance(node, ast.Constant) and isinstance(node.value, (str, bytes))
+            )
+            return math.log1p(sum_lens) / denom
+        except Exception:
+            return 0.0
+
+    # ------------------------------------------------------------------
+    # P28: top_level_execution_density (index 53)
+    # Detects scripts that run everything at global scope without abstraction.
+    # Formula: top_level_expr_count / total_expr_count  (range [0, 1])
+    # ------------------------------------------------------------------
+
+    def _top_level_execution_density(self, code: str) -> float:
+        try:
+            try:
+                tree = self._parse_ast(code)
+            except SyntaxError:
+                return 0.0
+            # Collect Expr node IDs that live inside a FunctionDef/ClassDef
+            nested_ids: set[int] = set()
+            for node in ast.walk(tree):
+                if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                    for child in ast.walk(node):
+                        nested_ids.add(id(child))
+            total_expr: int = 0
+            top_level_expr: int = 0
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Expr):
+                    total_expr += 1
+                    if id(node) not in nested_ids:
+                        top_level_expr += 1
+            if total_expr == 0:
+                return 0.0
+            return top_level_expr / total_expr
+        except Exception:
+            return 0.0
+
+    # ------------------------------------------------------------------
+    # P29: builtin_cast_anomaly (index 54)
+    # Detects nested builtin calls used for manual type-reconstruction:
+    #   bytes(int(...)), eval(str(...)), exec(bytes(...)), chr(int(...))
+    # Formula: ln(1 + count_nested_casts)
+    # ------------------------------------------------------------------
+
+    _CAST_PAIRS: dict[str, str] = {
+        'bytes': 'int',
+        'eval':  'str',
+        'exec':  'bytes',
+        'chr':   'int',
+    }
+
+    def _builtin_cast_anomaly(self, code: str) -> float:
+        try:
+            count: int = 0
+            try:
+                tree = self._parse_ast(code)
+                for node in ast.walk(tree):
+                    if not isinstance(node, ast.Call):
+                        continue
+                    outer = getattr(node, 'func', None)
+                    if not isinstance(outer, ast.Name) or outer.id not in self._CAST_PAIRS:
+                        continue
+                    expected_inner: str = self._CAST_PAIRS[outer.id]
+                    for arg in node.args:
+                        if isinstance(arg, ast.Call):
+                            inner = getattr(arg, 'func', None)
+                            if isinstance(inner, ast.Name) and inner.id == expected_inner:
+                                count += 1
+                                break
+            except SyntaxError:
+                for outer_name, inner_name in self._CAST_PAIRS.items():
+                    count += len(re.findall(
+                        rf'\b{outer_name}\s*\(\s*{inner_name}\s*\(',
+                        code,
+                    ))
+            return math.log1p(count)
         except Exception:
             return 0.0
