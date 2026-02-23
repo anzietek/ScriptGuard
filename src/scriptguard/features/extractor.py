@@ -1,8 +1,8 @@
 """
 Feature extractor for ScriptGuard fusion model.
-Extracts a 49-dimensional feature vector from Python source code.
+Extracts a 52-dimensional feature vector from Python source code.
 
-Output vector (FEATURE_DIM=49):
+Output vector (FEATURE_DIM=52):
   - 25 continuous/count features: AST structure metrics, import risk counts,
     entropy values, network counts, statistical measures, and obfuscation
     structural signals (max string literal length, long-line ratio).
@@ -27,11 +27,13 @@ Output vector (FEATURE_DIM=49):
     non_ascii_ratio, dead_string_ratio, suspicious_builtin_shadowing.
   - 4 byte-buster features (P20-P23): byte_transform_ratio,
     bitwise_logic_density, immediate_eval_flatness, hex_payload_coverage.
+  - 3 reflection & data-structure features (P24-P26): reflection_proxy_score,
+    string_mutation_density, data_to_logic_ratio.
 
 Sub-methods compute an intermediate 69-feature raw vector; extract() post-
-processes it into the final 49-dimensional form by separating continuous
+processes it into the final 52-dimensional form by separating continuous
 features from binary flags, applying log1p to 5 heavy features, aggregating
-the binary flags into malware_api_score, and appending the 23 targeted features.
+the binary flags into malware_api_score, and appending the 26 targeted features.
 """
 
 import ast
@@ -44,9 +46,9 @@ from scriptguard.utils.logger import logger
 
 class FeatureExtractor:
     """
-    Extracts 49-dimensional feature vector from Python source code.
+    Extracts 52-dimensional feature vector from Python source code.
 
-    Output layout (indices 0-48):
+    Output layout (indices 0-51):
         0-9:   AST counts (tree_depth, n_calls*, n_imports, n_funcdefs, n_classdefs,
                            n_for, n_while, n_try, n_exec_nodes, exec_eval_depth)
                * log1p-scaled
@@ -82,9 +84,12 @@ class FeatureExtractor:
         46:    bitwise_logic_density (P21) — bitwise_ops / ln(1+total_chars)
         47:    immediate_eval_flatness (P22) — flat+exec combo [0/1]
         48:    hex_payload_coverage (P23) — hex-string bytes / total_chars
+        49:    reflection_proxy_score (P24) — getattr/dunder/dir-loop reflection [0, 1]
+        50:    string_mutation_density (P25) — ln(1+str_mutations) / (1+ln(1+n_calls))
+        51:    data_to_logic_ratio (P26) — (Expr+Assign) / (1+If+For+While+Try)
 
     Sub-methods produce a 69-feature raw vector which is post-processed in
-    extract() to yield this 49-dimensional output.
+    extract() to yield this 52-dimensional output.
     """
 
     _HIGH_RISK_IMPORTS = {
@@ -139,12 +144,12 @@ class FeatureExtractor:
     # Positions: n_calls=1, total_lines=17, avg_line_len=19, max_line_len=20, max_str_literal_len=22
     _LOG1P_INDICES: tuple[int, ...] = (1, 17, 19, 20, 22)
 
-    # 25 + 1 malware_api_score + 4 (P1-P4) + 6 (P5-P10) + 4 (P11-P14) + 1 (P15) + 4 (P16-P19) + 4 (P20-P23)
-    FEATURE_DIM: int = len(_CONTINUOUS_INDICES) + 1 + 4 + 6 + 4 + 1 + 4 + 4
+    # 25 + 1 malware_api_score + 4 (P1-P4) + 6 (P5-P10) + 4 (P11-P14) + 1 (P15) + 4 (P16-P19) + 4 (P20-P23) + 3 (P24-P26)
+    FEATURE_DIM: int = len(_CONTINUOUS_INDICES) + 1 + 4 + 6 + 4 + 1 + 4 + 4 + 3
 
     def extract(self, code: str) -> list[float]:
         """
-        Extract 49-dimensional feature vector from Python source code.
+        Extract 52-dimensional feature vector from Python source code.
 
         Internally computes 69 raw features, then:
           - keeps the 25 continuous/count features in order
@@ -152,8 +157,9 @@ class FeatureExtractor:
           - applies math.log1p to 5 heavy features (indices 1,17,19,20,22)
           - appends 19 targeted features P1-P19 (indices 26-44)
           - appends 4 byte-buster features P20-P23 (indices 45-48)
+          - appends 3 reflection & data-structure features P24-P26 (indices 49-51)
 
-        Returns [0.0] * 49 on any top-level exception.
+        Returns [0.0] * 52 on any top-level exception.
         """
         try:
             _aliases: dict[str, str] = {}
@@ -215,8 +221,21 @@ class FeatureExtractor:
             features.append(self._bitwise_logic_density(code))              # 46
             features.append(self._immediate_eval_flatness(code, features))  # 47
             features.append(self._hex_payload_coverage(code))               # 48
+            # P24-P26: reflection & data-structure signals (v9.0)
+            for _p9_name, _p9_val in (
+                ("reflection_proxy_score",  self._reflection_proxy_score(code)),
+                ("string_mutation_density", self._string_mutation_density(code, features)),
+                ("data_to_logic_ratio",     self._data_to_logic_ratio(code)),
+            ):
+                if not math.isfinite(_p9_val):
+                    logger.warning(
+                        f"FeatureExtractor: {_p9_name} returned non-finite value "
+                        f"{_p9_val!r}; substituting 0.0"
+                    )
+                    _p9_val = 0.0
+                features.append(_p9_val)
 
-            assert len(features) == self.FEATURE_DIM  # 49
+            assert len(features) == self.FEATURE_DIM  # 52
 
             # Sanity pass: replace non-finite values with 0.0, cap > 20.0
             for _i in range(len(features)):
@@ -1859,5 +1878,133 @@ class FeatureExtractor:
                         if hex_count / len(s) > 0.80:
                             hex_total += len(s)
             return hex_total / total_chars
+        except Exception:
+            return 0.0
+
+    # ------------------------------------------------------------------
+    # P24: reflection_proxy_score (index 49)
+    # Detects hidden API access via Python reflection / introspection.
+    # Rules (scored once each, capped at 1.0):
+    #   +0.6  getattr/hasattr called with a non-literal second arg
+    #   +0.5  __subclasses__/__mro__/__globals__/__builtins__ accessed outside any FunctionDef
+    #   +0.4  dir() result consumed directly in a for-loop
+    # ------------------------------------------------------------------
+
+    _REFLECT_DUNDERS: frozenset[str] = frozenset({
+        '__subclasses__', '__mro__', '__globals__', '__builtins__',
+    })
+    _REFLECT_FUNCS: frozenset[str] = frozenset({'getattr', 'hasattr'})
+
+    def _reflection_proxy_score(self, code: str) -> float:
+        try:
+            try:
+                tree = self._parse_ast(code)
+            except SyntaxError:
+                return 0.0
+
+            # Collect all node IDs that live inside a FunctionDef/AsyncFunctionDef
+            in_funcdef_ids: set[int] = set()
+            for node in ast.walk(tree):
+                if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    for child in ast.walk(node):
+                        in_funcdef_ids.add(id(child))
+
+            score = 0.0
+            rule1_fired = rule2_fired = rule3_fired = False
+
+            for node in ast.walk(tree):
+                # Rule 1: getattr/hasattr with a non-literal second argument
+                if not rule1_fired and isinstance(node, ast.Call):
+                    func = getattr(node, 'func', None)
+                    if isinstance(func, ast.Name) and func.id in self._REFLECT_FUNCS:
+                        if len(node.args) >= 2 and not isinstance(node.args[1], ast.Constant):
+                            score += 0.6
+                            rule1_fired = True
+
+                # Rule 2: dunder access outside any function body
+                if not rule2_fired and id(node) not in in_funcdef_ids:
+                    if (
+                        (isinstance(node, ast.Attribute) and node.attr in self._REFLECT_DUNDERS)
+                        or (isinstance(node, ast.Name) and node.id in self._REFLECT_DUNDERS)
+                    ):
+                        score += 0.5
+                        rule2_fired = True
+
+                # Rule 3: for x in dir(module): ...
+                if not rule3_fired and isinstance(node, ast.For):
+                    iter_node = node.iter
+                    if isinstance(iter_node, ast.Call):
+                        func = getattr(iter_node, 'func', None)
+                        if isinstance(func, ast.Name) and func.id == 'dir':
+                            score += 0.4
+                            rule3_fired = True
+
+            return min(score, 1.0)
+        except Exception:
+            return 0.0
+
+    # ------------------------------------------------------------------
+    # P25: string_mutation_density (index 50)
+    # Detects payload assembly via string methods on long literal strings.
+    # Counts .replace/.join/.split/.strip/.lower/.upper on literals len > 10.
+    # Formula: ln(1 + count) / (1 + ln(1 + n_calls))
+    # features[1] is already log1p(n_calls) from extract().
+    # ------------------------------------------------------------------
+
+    _STRING_MUTATORS: frozenset[str] = frozenset({
+        'replace', 'join', 'split', 'strip', 'lower', 'upper',
+    })
+
+    def _string_mutation_density(self, code: str, features: list[float]) -> float:
+        try:
+            count = 0
+            try:
+                tree = self._parse_ast(code)
+                for node in ast.walk(tree):
+                    if not isinstance(node, ast.Call):
+                        continue
+                    func = getattr(node, 'func', None)
+                    if not isinstance(func, ast.Attribute):
+                        continue
+                    if func.attr not in self._STRING_MUTATORS:
+                        continue
+                    val = getattr(func, 'value', None)
+                    if (
+                        isinstance(val, ast.Constant)
+                        and isinstance(val.value, str)
+                        and len(val.value) > 10
+                    ):
+                        count += 1
+            except SyntaxError:
+                count = len(re.findall(
+                    r'(?:"(?:[^"\\]|\\.){10,}"|\'(?:[^\'\\]|\\.){10,}\')\s*\.'
+                    r'(?:replace|join|split|strip|lower|upper)\s*\(',
+                    code,
+                ))
+            ln_n_calls = features[1]  # already log1p(n_calls) from extract()
+            return math.log1p(count) / (1.0 + ln_n_calls)
+        except Exception:
+            return 0.0
+
+    # ------------------------------------------------------------------
+    # P26: data_to_logic_ratio (index 51)
+    # Detects static data wrappers — scripts that assign/express data but
+    # contain little control flow, using a single reflection call to run them.
+    # Data nodes:  ast.Expr, ast.Assign
+    # Logic nodes: ast.If, ast.For, ast.While, ast.Try
+    # Formula: count_data / (1 + count_logic)
+    # ------------------------------------------------------------------
+
+    def _data_to_logic_ratio(self, code: str) -> float:
+        _DATA_TYPES = (ast.Expr, ast.Assign)
+        _LOGIC_TYPES = (ast.If, ast.For, ast.While, ast.Try)
+        try:
+            try:
+                tree = self._parse_ast(code)
+            except SyntaxError:
+                return 0.0
+            count_data = sum(1 for n in ast.walk(tree) if isinstance(n, _DATA_TYPES))
+            count_logic = sum(1 for n in ast.walk(tree) if isinstance(n, _LOGIC_TYPES))
+            return count_data / (1.0 + count_logic)
         except Exception:
             return 0.0
