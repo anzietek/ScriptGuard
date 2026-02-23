@@ -6,7 +6,7 @@ Architecture:
                                                               ↘
                                                                Concat [B×896] → Linear(896→256) → GELU → Dropout → Linear(256→2)
                                                               ↗
-    feature_vector [B×25] → BatchNorm1d(25) → Linear(25→128) → GELU → Dropout
+    feature_vector [B×27] → BatchNorm1d(27) → Linear(27→128) → GELU → Dropout
 
 This module also provides FusedDataCollator, FusedWeightedTrainer,
 save_fused_model, and load_fused_model.

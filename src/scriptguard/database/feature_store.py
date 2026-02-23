@@ -1,6 +1,6 @@
 """
 Feature store for ScriptGuard fusion model.
-Provides load/save operations for the 25-dimensional feature vectors stored in
+Provides load/save operations for the 27-dimensional feature vectors stored in
 the `samples.features` JSONB column of PostgreSQL.
 
 Schema version history:
@@ -8,6 +8,7 @@ Schema version history:
   v2 — 23-dim output (deprecated, FEATURE_DIM=23 refactor)
   v3 — 25-dim output (FEATURE_DIM=25: added max_str_literal_len, long_line_ratio)
   v4 — 33-dim output (FEATURE_DIM=33: added 8 FP/FN mitigation features)
+  v5 — 27-dim output (FEATURE_DIM=27: removed 6 zero-delta features, kept benign_framework_score + identifier_entropy)
 """
 
 import json
@@ -17,7 +18,7 @@ from scriptguard.database.db_schema import get_connection, return_connection
 from scriptguard.features.extractor import FeatureExtractor
 from scriptguard.utils.logger import logger
 
-_SCHEMA_VERSION = 4
+_SCHEMA_VERSION = 5
 
 
 def load_features_from_db(sample_ids: list[int]) -> dict[int, list[float]]:
@@ -81,9 +82,9 @@ def save_features_to_db(features_by_id: dict[int, list[float]]) -> None:
     Persist feature vectors to the database.
 
     Args:
-        features_by_id: Dict mapping sample_id → 25-float feature list.
+        features_by_id: Dict mapping sample_id → 27-float feature list.
 
-    Stores as JSONB: {"v": 4, "values": [33 floats]} for schema versioning.
+    Stores as JSONB: {"v": 5, "values": [27 floats]} for schema versioning.
     Uses a single batch UPDATE for efficiency.
     """
     if not features_by_id:
