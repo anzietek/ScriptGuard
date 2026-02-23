@@ -74,23 +74,30 @@ def cache_features(
     # Diagnostic: per-feature discrimination report (benign vs malicious mean)
     # ------------------------------------------------------------------
     _FEATURE_NAMES = [
-        # AST counts (10)
+        # AST counts (10) — indices 0-9
         "tree_depth", "n_calls", "n_imports", "n_funcdefs", "n_classdefs",
         "n_for", "n_while", "n_try", "n_exec_nodes", "exec_eval_depth",
-        # Import counts (2)
+        # Import counts (2) — indices 10-11
         "total_imports", "high_risk_imports",
-        # Entropy values (3)
+        # Entropy values (3) — indices 12-14
         "mean_str_entropy", "max_str_entropy", "high_entropy_count",
-        # Network counts (2)
+        # Network counts (2) — indices 15-16
         "unique_ip_count", "unique_url_count",
-        # Statistical (5)
+        # Statistical (5) — indices 17-21
         "total_lines", "comment_density", "avg_line_len", "max_line_len", "line_len_cv",
-        # Obfuscation structural (2)
+        # Obfuscation structural (2) — indices 22-23
         "max_str_literal_len", "long_line_ratio",
-        # FP/FN mitigation features (1)
+        # FP/FN mitigation (1) — index 24
         "benign_framework_score",
-        # Aggregated binary flags (1)
+        # Aggregated binary flags (1) — index 25
         "malware_api_score",
+        # Targeted features P1-P4 — indices 26-29
+        "short_script_malware_score", "benign_context_ratio",
+        "package_infra_score", "direct_exec_chain_score",
+        # Behavioral-chain features P5-P10 — indices 30-35
+        "write_exec_chain_score", "in_memory_exec_score",
+        "string_fragmentation_ratio", "persistence_indicator",
+        "anti_debug_score", "execution_compactness_score",
     ]
 
     all_vectors = {**cached, **newly_computed}
@@ -167,7 +174,7 @@ def cache_features(
                 )
 
             logger.info(
-                "malware_api_score distribution (max=39 flags):\n"
+                "malware_api_score distribution (max=44 flags):\n"
                 + _score_dist(benign_vecs, "benign")
                 + "\n"
                 + _score_dist(malicious_vecs, "malicious")
