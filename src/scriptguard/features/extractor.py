@@ -1,18 +1,23 @@
 """
 Feature extractor for ScriptGuard fusion model.
-Extracts a 25-dimensional feature vector from Python source code.
+Extracts a 30-dimensional feature vector from Python source code.
 
-Output vector (FEATURE_DIM=25):
-  - 24 continuous/count features: AST structure metrics, import risk counts,
+Output vector (FEATURE_DIM=30):
+  - 25 continuous/count features: AST structure metrics, import risk counts,
     entropy values, network counts, statistical measures, and obfuscation
     structural signals (max string literal length, long-line ratio).
-  - 1 malware_api_score: integer sum of 39 binary indicator flags covering
+  - 1 malware_api_score: integer sum of 44 binary indicator flags covering
     dangerous API imports, obfuscation patterns, persistence mechanisms,
-    network C2 indicators, crypto operations, and filesystem recon.
+    network C2 indicators, crypto operations, filesystem recon, and 5 extended
+    API flags (sys.gettrace, ctypes.VirtualAlloc, marshal.loads,
+    zlib.decompress, platform.uname).
+  - 4 appended targeted features (P1-P4): short_script_malware_score,
+    benign_context_ratio, package_infra_score, direct_exec_chain_score.
 
-Sub-methods compute an intermediate 63-feature raw vector; extract() post-
-processes it into the final 25-dimensional form by separating continuous
-features from binary flags and aggregating the latter into malware_api_score.
+Sub-methods compute an intermediate 69-feature raw vector; extract() post-
+processes it into the final 30-dimensional form by separating continuous
+features from binary flags, aggregating the latter into malware_api_score,
+and appending the 4 targeted features.
 """
 
 import ast
@@ -25,9 +30,9 @@ from scriptguard.utils.logger import logger
 
 class FeatureExtractor:
     """
-    Extracts 26-dimensional feature vector from Python source code.
+    Extracts 30-dimensional feature vector from Python source code.
 
-    Output layout (indices 0-25):
+    Output layout (indices 0-29):
         0-9:   AST counts (tree_depth, n_calls, n_imports, n_funcdefs, n_classdefs,
                            n_for, n_while, n_try, n_exec_nodes, exec_eval_depth)
         10-11: Import counts (total_imports, high_risk_imports)
@@ -38,10 +43,14 @@ class FeatureExtractor:
         22:    max_str_literal_len — length of longest string literal in code
         23:    long_line_ratio — fraction of lines longer than 500 chars [0, 1]
         24:    benign_framework_score — weighted score of legitimate framework imports
-        25:    malware_api_score — sum of 39 binary indicator flags
+        25:    malware_api_score — sum of 44 binary indicator flags
+        26:    short_script_malware_score (P1) — exec+exfil in compact scripts
+        27:    benign_context_ratio (P2) — FP suppressor: benign framework context
+        28:    package_infra_score (P3) — pip/stdlib infrastructure code signal
+        29:    direct_exec_chain_score (P4) — recon+exfil or ctypes+net chains
 
-    Sub-methods produce a 64-feature raw vector which is post-processed in
-    extract() to yield this 26-dimensional output.
+    Sub-methods produce a 69-feature raw vector which is post-processed in
+    extract() to yield this 30-dimensional output.
     """
 
     _HIGH_RISK_IMPORTS = {
@@ -69,6 +78,10 @@ class FeatureExtractor:
         49, 50, 51, 52,
         # Recon/FS: indices 53-55 (all 3 are binary)
         53, 54, 55,
+        # Extended API flags: indices 64-68
+        # has_sys_gettrace(64), has_ctypes_virtual_alloc(65), has_marshal_loads(66),
+        # has_zlib_decompress(67), has_platform_uname(68)
+        64, 65, 66, 67, 68,
     })
 
     # Indices of continuous/count features kept in output (order preserved).
@@ -80,25 +93,27 @@ class FeatureExtractor:
         39, 40,                       # unique_ip_count, unique_url_count
         56, 57, 58, 59, 60,           # statistical (5)
         61, 62,                       # max_str_literal_len, long_line_ratio
-        63,                               # benign_framework_score
+        63,                           # benign_framework_score
     )
 
-    # Derived — never edit these manually; change the index sets above instead.
+    # _RAW_DIM auto-computed; _CONTINUOUS_INDICES covers raw indices 0-63,
+    # _BINARY_INDICES covers raw indices 0-55 plus 64-68 (extended API flags).
     _RAW_DIM: int = len(_BINARY_INDICES) + len(_CONTINUOUS_INDICES)
-    FEATURE_DIM: int = len(_CONTINUOUS_INDICES) + 1  # +1 for malware_api_score
+    # 25 continuous + 1 malware_api_score + 4 appended targeted features (P1-P4)
+    FEATURE_DIM: int = len(_CONTINUOUS_INDICES) + 1 + 4
 
     def extract(self, code: str) -> list[float]:
         """
-        Extract 25-dimensional feature vector from Python source code.
+        Extract 30-dimensional feature vector from Python source code.
 
-        Internally computes 63 raw features, then:
-          - keeps the 24 continuous/count features in order
-          - sums all 39 binary flags into malware_api_score (index 24)
+        Internally computes 69 raw features, then:
+          - keeps the 25 continuous/count features in order
+          - sums all 44 binary flags into malware_api_score (index 25)
+          - appends 4 targeted features P1-P4 (indices 26-29)
 
-        Returns [0.0] * 25 on any top-level exception.
+        Returns [0.0] * 30 on any top-level exception.
         """
         try:
-            # First pass: build alias map before any feature extraction
             _aliases: dict[str, str] = {}
             try:
                 _aliases = self._build_alias_map(self._parse_ast(code))
@@ -116,6 +131,7 @@ class FeatureExtractor:
                 + self._recon_fs_features(code)               # 3   indices 53-55
                 + self._statistical_features(code)            # 7   indices 56-62
                 + self._extra_features(code)                  # 1   index 63
+                + self._extended_api_flags(code, _aliases)    # 5   indices 64-68
             )
             assert len(raw) == self._RAW_DIM, (
                 f"Raw dimension mismatch: expected {self._RAW_DIM}, got {len(raw)}"
@@ -123,6 +139,13 @@ class FeatureExtractor:
             continuous = [raw[i] for i in self._CONTINUOUS_INDICES]
             malware_api_score = float(sum(raw[i] for i in self._BINARY_INDICES))
             features = continuous + [malware_api_score]
+
+            # Append 4 targeted features (P1-P4)
+            features.append(self._short_script_malware_score(code))
+            features.append(self._benign_context_ratio(code, _aliases))
+            features.append(self._package_infra_score(code))
+            features.append(self._direct_exec_chain_score(code))
+
             assert len(features) == self.FEATURE_DIM
             return features
         except Exception as e:
@@ -131,7 +154,6 @@ class FeatureExtractor:
 
     @staticmethod
     def _parse_ast(code: str) -> ast.AST:
-        """Parse code suppressing SyntaxWarning emitted for analyzed samples."""
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", SyntaxWarning)
             return ast.parse(code)
@@ -213,8 +235,6 @@ class FeatureExtractor:
                 elif isinstance(node, (ast.Try, ast.ExceptHandler)):
                     node_count_try += 1
                 elif isinstance(node, ast.Expr):
-                    # Check for exec() call — resolve aliases so `e("cmd")` where
-                    # aliases["e"] == "exec" (or "builtins.exec") is also counted
                     if isinstance(getattr(node, 'value', None), ast.Call):
                         func = getattr(node.value, 'func', None)
                         if isinstance(func, ast.Name):
@@ -233,14 +253,9 @@ class FeatureExtractor:
                 if has_nested_functions:
                     break
 
-            # exec_eval_depth: max nesting depth of exec(eval(...)) patterns
             exec_eval_depth = self._compute_exec_eval_depth(tree, aliases)
-
-            # has_decode_chain: chained b64decode/decompress/exec pattern
             has_decode_chain = self._has_decode_chain(code, tree)
 
-            # has_dynamic_import: use of __import__() or importlib.import_module
-            # Also detects aliased forms: `from importlib import import_module as im; im('os')`
             has_dynamic_import = 0.0
             for node in ast.walk(tree):
                 if isinstance(node, ast.Call):
@@ -275,11 +290,6 @@ class FeatureExtractor:
     def _compute_exec_eval_depth(
         self, tree: ast.AST, aliases: dict[str, str] | None = None
     ) -> float:
-        """Compute max nesting depth of exec(eval(...)) call chains.
-
-        Resolves aliases so `e(v("cmd"))` where aliases["e"]=="exec",
-        aliases["v"]=="eval" is counted as depth 2.
-        """
         _aliases = aliases or {}
         _EXEC_NAMES = frozenset({"exec", "eval", "compile"})
         max_depth = 0
@@ -307,11 +317,8 @@ class FeatureExtractor:
         return float(max_depth)
 
     def _has_decode_chain(self, code: str, tree: ast.AST) -> float:
-        """Detect chained decode/decompress/exec patterns."""
-        # Regex approach: b64decode(...decompress(...exec(
         if re.search(r'b64decode.+decompress.+exec', code, re.DOTALL):
             return 1.0
-        # AST: look for chained calls with decode/decompress in same call chain
         for node in ast.walk(tree):
             if isinstance(node, ast.Call):
                 chain_funcs = self._collect_call_chain_names(node)
@@ -369,12 +376,6 @@ class FeatureExtractor:
             has_pickle = float("pickle" in imported_modules or "cPickle" in imported_modules)
             has_cryptography = float("cryptography" in imported_modules)
 
-            # has_os_exec: specific OS execution calls — not just `import os` (fires on everything)
-            # Alias-aware: detects all of:
-            #   os.system("cmd")               — direct Attribute access
-            #   import os as o; o.system("cmd") — aliased module, Attribute access
-            #   from os import system as s; s("cmd") — aliased function, bare Name call
-            #   from os import system; system("cmd") — direct function import, bare Name call
             has_os_exec = 0.0
             _os_exec_attrs = frozenset(
                 ('system', 'popen', 'execv', 'execl', 'execvp', 'execve', 'execvpe', 'spawnl', 'spawnle', 'spawnlp')
@@ -385,14 +386,11 @@ class FeatureExtractor:
                     if isinstance(func, ast.Attribute) and func.attr in _os_exec_attrs:
                         val = getattr(func, 'value', None)
                         if isinstance(val, ast.Name):
-                            # Resolve module alias: `import os as o` → aliases["o"] == "os"
                             resolved_mod = aliases.get(val.id, val.id)
                             if resolved_mod == 'os':
                                 has_os_exec = 1.0
                                 break
                     elif isinstance(func, ast.Name):
-                        # Bare call via alias: `from os import system as s; s("cmd")`
-                        # aliases["s"] == "os.system" → resolved starts with "os."
                         resolved = aliases.get(func.id, '')
                         if resolved.startswith('os.') and resolved[3:] in _os_exec_attrs:
                             has_os_exec = 1.0
@@ -401,7 +399,6 @@ class FeatureExtractor:
                 if re.search(r'os\.(?:system|popen|execv[pe]?|execl[pe]?|spawn)\s*\(', code):
                     has_os_exec = 1.0
 
-            # has_socket_and_subprocess: both imported together — classic reverse shell combo
             has_socket_and_subprocess = float(
                 "socket" in imported_modules and "subprocess" in imported_modules
             )
@@ -423,14 +420,12 @@ class FeatureExtractor:
 
     def _entropy_features(self, code: str) -> list[float]:
         try:
-            # Extract string literals using regex (both single and double quoted)
             string_literals = re.findall(
                 r'(?:b?)(?:"(?:[^"\\]|\\.)*"|\'(?:[^\'\\]|\\.)*\')', code
             )
 
             entropies = []
             for s in string_literals:
-                # Strip quotes and prefix
                 inner = s
                 for prefix in ('b"', "b'", '"', "'"):
                     if inner.startswith(prefix):
@@ -453,7 +448,6 @@ class FeatureExtractor:
             max_string_entropy = max(ent_values)
             high_entropy_string_count = float(sum(1 for e in ent_values if e > 4.5))
 
-            # has_hardcoded_key: entropy > 4.5 AND length in {16, 32, 64}
             has_hardcoded_key = 0.0
             for ent, length in entropies:
                 if ent > 4.5 and length in (16, 32, 64):
@@ -488,13 +482,9 @@ class FeatureExtractor:
                 tree = None
                 parse_ok = False
 
-            # has_exec: exec() call in AST
             has_exec = 0.0
-            # has_eval: eval() call
             has_eval = 0.0
-            # has_compile: compile() call
             has_compile = 0.0
-            # has_dunder_import: __import__() call
             has_dunder_import = 0.0
             lambda_chain_count = 0
 
@@ -503,7 +493,6 @@ class FeatureExtractor:
                     if isinstance(node, ast.Call):
                         func = getattr(node, 'func', None)
                         if isinstance(func, ast.Name):
-                            # Resolve alias before checking: `from builtins import exec as e`
                             resolved = aliases.get(func.id, func.id)
                             if resolved == 'exec':
                                 has_exec = 1.0
@@ -514,7 +503,6 @@ class FeatureExtractor:
                             elif resolved == '__import__':
                                 has_dunder_import = 1.0
 
-                # lambda chain: lambda that returns a lambda
                 for node in ast.walk(tree):
                     if isinstance(node, ast.Lambda):
                         body = node.body
@@ -525,8 +513,6 @@ class FeatureExtractor:
                         if depth > 0:
                             lambda_chain_count += 1
 
-            # has_b64decode_call: actual decode operation — not just any alphanumeric string
-            # Old `has_base64_pattern` matched ANY 20-char alphanumeric (variable names, URLs, etc.)
             has_b64decode_call = 0.0
             if re.search(
                 r'b64decode|b64encode|base64\.b64|\.decode\(["\']base64["\']'
@@ -535,13 +521,10 @@ class FeatureExtractor:
             ):
                 has_b64decode_call = 1.0
 
-            # has_no_comments: malicious code almost never has inline documentation
-            # Replaces has_hex_strings (Δ≈-0.001, anti-correlated, useless)
             _ob_lines = code.splitlines()
             _ob_comment_count = sum(1 for l in _ob_lines if l.strip().startswith('#'))
             has_no_comments = float(_ob_comment_count == 0 and len(_ob_lines) > 5)
 
-            # has_encoded_execution: decode + exec/eval in same script (high malware signal)
             has_encoded_execution = 0.0
             if (has_exec or has_eval or has_compile) and has_b64decode_call:
                 if re.search(
@@ -557,12 +540,9 @@ class FeatureExtractor:
                 elif re.search(r'(?:exec|eval)\s*\(\s*\w+\s*\(\s*\w+\s*\(', code):
                     has_encoded_execution = 1.0
 
-            # has_very_long_line: single-line blobs = obfuscated/base64 payloads
-            # Replaces has_shellcode (Δ=0.000, never fires in practice)
             _ob_line_lens = [len(l) for l in _ob_lines]
             has_very_long_line = float(max(_ob_line_lens) > 500 if _ob_line_lens else False)
 
-            # has_anti_debug
             has_anti_debug = 0.0
             anti_debug_patterns = [
                 r'IsDebuggerPresent', r'QueryPerformanceCounter',
@@ -574,12 +554,10 @@ class FeatureExtractor:
                     has_anti_debug = 1.0
                     break
 
-            # has_ctypes_windll
             has_ctypes_windll = 0.0
             if re.search(r'ctypes\.windll|windll\.kernel32|windll\.ntdll', code):
                 has_ctypes_windll = 1.0
 
-            # has_process_injection
             has_process_injection = 0.0
             injection_patterns = [
                 r'VirtualAlloc', r'WriteProcessMemory', r'CreateRemoteThread',
@@ -600,13 +578,10 @@ class FeatureExtractor:
             return [0.0] * 11
 
     def _detect_shellcode(self, code: str, tree) -> float:
-        """Detect shellcode: bytearray/bytes literal > 100 bytes with entropy > 5.5."""
-        # Regex for hex-encoded byte arrays
         hex_arrays = re.findall(r'(?:bytearray|bytes)\s*\(\s*\[([^\]]+)\]', code)
         for arr_str in hex_arrays:
             parts = [p.strip() for p in arr_str.split(',') if p.strip()]
             if len(parts) > 100:
-                # Compute entropy of the byte values
                 try:
                     values = [int(p, 0) for p in parts if p]
                     if len(values) > 100:
@@ -620,7 +595,6 @@ class FeatureExtractor:
                 except Exception:
                     pass
 
-        # Also check for long \x byte strings
         hex_str_matches = re.findall(r'(?:\\x[0-9a-fA-F]{2}){100,}', code)
         if hex_str_matches:
             return 1.0
@@ -633,30 +607,23 @@ class FeatureExtractor:
 
     def _network_features(self, code: str) -> list[float]:
         try:
-            # unique_ip_count
             ips = re.findall(r'\b\d{1,3}(?:\.\d{1,3}){3}\b', code)
             unique_ip_count = float(len(set(ips)))
 
-            # unique_url_count
             urls = re.findall(r'https?://[^\s\'"]+', code)
             unique_url_count = float(len(set(urls)))
 
-            # has_hardcoded_ports: non-well-known port numbers in code
             has_hardcoded_ports = 0.0
             port_matches = re.findall(r'\b(4444|1337|8080|8888|9999|31337|6667|1234|5555|7777)\b', code)
             if port_matches:
                 has_hardcoded_ports = 1.0
 
-            # has_c2_pattern: connect + send/recv in same function body (AST scope)
             has_c2_pattern = self._detect_c2_pattern(code)
 
-            # has_dns_lookup
             has_dns_lookup = 0.0
             if re.search(r'socket\.gethostbyname|dns\.resolver|getaddrinfo|nslookup', code):
                 has_dns_lookup = 1.0
 
-            # has_system_recon: fingerprinting specific to C2 beacon behavior
-            # Removed: os.environ (config in every Flask/Django app), platform.system() (cross-platform libs)
             has_system_recon = 0.0
             recon_patterns = [
                 r'platform\.node\(\)',
@@ -683,11 +650,9 @@ class FeatureExtractor:
             return [0.0] * 6
 
     def _detect_c2_pattern(self, code: str) -> float:
-        """Detect C2 pattern: connect + send/recv calls in same function body."""
         try:
             tree = self._parse_ast(code)
         except SyntaxError:
-            # Fallback to regex
             if re.search(r'\.connect\(', code) and re.search(r'\.(send|recv|sendall|recvfrom)\(', code):
                 return 1.0
             return 0.0
@@ -715,54 +680,46 @@ class FeatureExtractor:
 
     def _persistence_features(self, code: str) -> list[float]:
         try:
-            # has_registry_write
             has_registry_write = 0.0
             if re.search(r'winreg|_winreg|RegSetValue|HKEY_|OpenKey|CreateKey', code):
                 has_registry_write = 1.0
 
-            # has_cron_pattern: creating scheduled tasks — not just mentioning cron
-            # Removed: crontab|/etc/cron — Ansible, Fabric, SaltStack all manage cron legitimately
             has_cron_pattern = 0.0
             cron_create_patterns = [
-                r'schtasks\s+/[Cc]reate',          # Windows schtasks /Create
-                r'at\.exe\s+\d',                    # Windows at.exe scheduler
+                r'schtasks\s+/[Cc]reate',
+                r'at\.exe\s+\d',
                 r'SchTasks\.exe',
-                r'open\(["\'][/\\]etc[/\\]cron',    # writing to cron file (not just reading)
-                r'crontab\s+-[el]\s',               # editing crontab interactively
-                r'TaskScheduler|ITaskScheduler',    # COM interface
+                r'open\(["\'][/\\]etc[/\\]cron',
+                r'crontab\s+-[el]\s',
+                r'TaskScheduler|ITaskScheduler',
             ]
             for pat in cron_create_patterns:
                 if re.search(pat, code, re.IGNORECASE):
                     has_cron_pattern = 1.0
                     break
 
-            # has_startup_persistence: actual persistence mechanism installation
-            # Removed: Startup, systemd, launchd, autorun, .bashrc, .profile, rc.local
-            # — all fired by Ansible, Fabric, SaltStack, Django AppConfig, Flask startup handlers
             has_startup_persistence = 0.0
             startup_patterns = [
-                r'\\CurrentVersion\\Run(?:Once)?["\']',  # registry run key (write)
-                r'HKCU.*\\Run|HKLM.*\\Run',              # registry persistence
-                r'nssm\s+install',                        # Windows service via nssm
-                r'sc\.exe\s+create|CreateService\s*\(',  # Windows service creation
-                r'open\(["\'][/\\]etc[/\\](?:init\.d|rc\.local)',  # writing init script
-                r'(?:plist|launchd).*write|write.*plist', # plist persistence write
+                r'\\CurrentVersion\\Run(?:Once)?["\']',
+                r'HKCU.*\\Run|HKLM.*\\Run',
+                r'nssm\s+install',
+                r'sc\.exe\s+create|CreateService\s*\(',
+                r'open\(["\'][/\\]etc[/\\](?:init\.d|rc\.local)',
+                r'(?:plist|launchd).*write|write.*plist',
             ]
             for pat in startup_patterns:
                 if re.search(pat, code, re.IGNORECASE):
                     has_startup_persistence = 1.0
                     break
 
-            # has_creates_executable: actually dropping/writing an executable file
-            # Removed: bare .exe/.bat/.cmd mentions (fires on PyInstaller, build scripts, test files)
             has_creates_executable = 0.0
             exec_drop_patterns = [
-                r'chmod\s+\+x',                                          # shell chmod +x
-                r'os\.chmod\([^,]+,\s*(?:0[oO]?7[0-7]{2}|0o?755|0o?777)',  # os.chmod to make executable
-                r'open\([^)]*\.(exe|bat|cmd|vbs|ps1|sh)[^)]*["\'],\s*["\'][wa]b?',  # write to executable
-                r'with\s+open\([^)]*\.(exe|bat|cmd|vbs|ps1|sh)',         # context mgr write
-                r'HKEY_[A-Z_]+.*(?:\\\\Run|\\\\RunOnce)',                 # registry run key
-                r'subprocess.*["\'][^\'"]*\.(exe|bat|cmd)["\']',          # executing dropped file
+                r'chmod\s+\+x',
+                r'os\.chmod\([^,]+,\s*(?:0[oO]?7[0-7]{2}|0o?755|0o?777)',
+                r'open\([^)]*\.(exe|bat|cmd|vbs|ps1|sh)[^)]*["\'],\s*["\'][wa]b?',
+                r'with\s+open\([^)]*\.(exe|bat|cmd|vbs|ps1|sh)',
+                r'HKEY_[A-Z_]+.*(?:\\\\Run|\\\\RunOnce)',
+                r'subprocess.*["\'][^\'"]*\.(exe|bat|cmd)["\']',
             ]
             for pat in exec_drop_patterns:
                 if re.search(pat, code, re.IGNORECASE):
@@ -787,13 +744,9 @@ class FeatureExtractor:
             if re.search(r'RC4|arc4|Salsa20|ChaCha|rc4_encrypt', code, re.IGNORECASE):
                 has_rc4_pattern = 1.0
 
-            # has_xor_pattern: XOR used as a cipher, not standard ^= assignment
-            # Removed: bare `^=` — fires on benign bitwise ops (checksums, flags, hash functions)
             has_xor_pattern = 0.0
             if re.search(r'\bxor\b|\bXOR\b', code):
                 has_xor_pattern = 1.0
-            # AST: ^= inside a For loop on a subscript — classic XOR cipher loop
-            # e.g.  data[i] ^= key[i % len(key)]
             if not has_xor_pattern:
                 try:
                     tree = self._parse_ast(code)
@@ -826,24 +779,18 @@ class FeatureExtractor:
 
     def _recon_fs_features(self, code: str) -> list[float]:
         try:
-            # has_recursive_traversal: deep/recursive filesystem traversal
-            # Removed: os.listdir — simple listing, extremely common in benign code
-            # (scikit-learn dataset loaders, scrapy spiders, Ansible file management, etc.)
             has_recursive_traversal = 0.0
             if re.search(r'os\.walk\(|\.rglob\(|glob\.glob[^)]*\*\*', code):
                 has_recursive_traversal = 1.0
 
-            # has_mass_file_ops: iteration over multiple file extensions (ransomware pattern)
             has_mass_file_ops = 0.0
             ext_pattern = r'\.(doc|docx|xls|xlsx|pdf|jpg|png|mp4|zip|rar|txt|csv)'
             ext_matches = re.findall(ext_pattern, code, re.IGNORECASE)
             if len(set(ext_matches)) >= 3:
                 has_mass_file_ops = 1.0
-            # Also check for encrypt/open loops over files
             if re.search(r'for\s+\w+\s+in\s+.*\.walk|encrypt.*\.open|open.*encrypt', code, re.DOTALL):
                 has_mass_file_ops = 1.0
 
-            # has_shadow_copy: VSS deletion (ransomware behavior)
             has_shadow_copy = 0.0
             if re.search(r'vssadmin|shadow\s+copy|wmic.*shadowcopy|Win32_ShadowCopy', code, re.IGNORECASE):
                 has_shadow_copy = 1.0
@@ -865,19 +812,12 @@ class FeatureExtractor:
                 return [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
 
             comment_lines = sum(1 for l in lines if l.strip().startswith('#'))
-
-            # comment_density: fraction of comment lines [0, 1]
-            # Replaces code_to_comment_ratio which was unbounded when no comments exist
-            # (ratio = code_lines / 1 → same as total_lines → hundreds, pollutes the feature)
             comment_density = float(comment_lines) / total_lines
 
             line_lengths = [len(l) for l in lines]
             avg_line_length = sum(line_lengths) / max(1, len(line_lengths))
             max_line_length = float(max(line_lengths)) if line_lengths else 0.0
 
-            # line_len_cv: coefficient of variation of line lengths (stdev / mean)
-            # High CV = obfuscated code: one very long line among many short lines
-            # Replaces blank_line_ratio (Δ=-0.055, anti-correlated, not useful)
             if len(line_lengths) > 1:
                 mean = avg_line_length
                 variance = sum((l - mean) ** 2 for l in line_lengths) / len(line_lengths)
@@ -885,22 +825,16 @@ class FeatureExtractor:
             else:
                 line_len_cv = 0.0
 
-            # max_str_literal_len: length of longest string literal content (index 61)
-            # Captures base64/hex payloads stored as string variables, even without exec()
-            # e.g.  payload = "AAAA...4000 chars...AAAA"
             string_lits = re.findall(
                 r'(?:b?)(?:"(?:[^"\\]|\\.)*"|\'(?:[^\'\\]|\\.)*\')', code
             )
             max_str_literal_len = 0.0
             for s in string_lits:
-                # Strip optional b prefix, then outer quotes
                 stripped = s[1:] if s.startswith("b") else s
-                content_len = float(len(stripped) - 2)  # subtract the two quote chars
+                content_len = float(len(stripped) - 2)
                 if content_len > max_str_literal_len:
                     max_str_literal_len = content_len
 
-            # long_line_ratio: fraction of lines longer than 500 chars [0, 1] (index 62)
-            # Directly measures obfuscation prevalence — most dominant signal in the dataset
             long_line_count = sum(1 for l in line_lengths if l > 500)
             long_line_ratio = float(long_line_count) / total_lines
 
@@ -948,3 +882,259 @@ class FeatureExtractor:
                 pass
 
         return [benign_framework_score]
+
+    # ------------------------------------------------------------------
+    # Extended API flags (5) — indices 64-68 in raw vector
+    # Contributes to malware_api_score via _BINARY_INDICES.
+    # ------------------------------------------------------------------
+
+    def _extended_api_flags(self, code: str, aliases: dict[str, str] | None = None) -> list[float]:
+        aliases = aliases or {}
+        try:
+            # 64: sys.gettrace — anti-debug / sandbox detection
+            has_sys_gettrace = 0.0
+            if re.search(r'\bsys\.gettrace\s*\(\)', code):
+                has_sys_gettrace = 1.0
+            else:
+                try:
+                    tree = self._parse_ast(code)
+                    for node in ast.walk(tree):
+                        if isinstance(node, ast.Call):
+                            func = getattr(node, 'func', None)
+                            if isinstance(func, ast.Attribute) and func.attr == 'gettrace':
+                                val = getattr(func, 'value', None)
+                                if isinstance(val, ast.Name):
+                                    resolved = aliases.get(val.id, val.id)
+                                    if resolved == 'sys':
+                                        has_sys_gettrace = 1.0
+                                        break
+                except SyntaxError:
+                    pass
+
+            # 65: ctypes.VirtualAlloc — process injection primitive
+            has_ctypes_virtual_alloc = float(bool(re.search(r'\bVirtualAlloc\b', code)))
+
+            # 66: marshal.loads — bytecode deserialization (code exec vector)
+            has_marshal_loads = 0.0
+            if re.search(r'\bmarshal\.loads\s*\(', code):
+                has_marshal_loads = 1.0
+            else:
+                try:
+                    tree = self._parse_ast(code)
+                    for node in ast.walk(tree):
+                        if isinstance(node, ast.Call):
+                            func = getattr(node, 'func', None)
+                            if isinstance(func, ast.Attribute) and func.attr == 'loads':
+                                val = getattr(func, 'value', None)
+                                if isinstance(val, ast.Name):
+                                    resolved = aliases.get(val.id, val.id)
+                                    if resolved == 'marshal':
+                                        has_marshal_loads = 1.0
+                                        break
+                except SyntaxError:
+                    pass
+
+            # 67: zlib/gzip/bz2/lzma decompress — obfuscated payload unpacking
+            has_zlib_decompress = float(
+                bool(re.search(r'(?:zlib|gzip|bz2|lzma)\.decompress\s*\(', code, re.I))
+            )
+
+            # 68: platform.uname — system fingerprinting / C2 beacon enumeration
+            has_platform_uname = 0.0
+            if re.search(r'\bplatform\.uname\s*\(\)', code):
+                has_platform_uname = 1.0
+            else:
+                try:
+                    tree = self._parse_ast(code)
+                    for node in ast.walk(tree):
+                        if isinstance(node, ast.Call):
+                            func = getattr(node, 'func', None)
+                            if isinstance(func, ast.Attribute) and func.attr == 'uname':
+                                val = getattr(func, 'value', None)
+                                if isinstance(val, ast.Name):
+                                    resolved = aliases.get(val.id, val.id)
+                                    if resolved == 'platform':
+                                        has_platform_uname = 1.0
+                                        break
+                except SyntaxError:
+                    pass
+
+            return [has_sys_gettrace, has_ctypes_virtual_alloc, has_marshal_loads,
+                    has_zlib_decompress, has_platform_uname]
+        except Exception:
+            return [0.0] * 5
+
+    # ------------------------------------------------------------------
+    # P1: short_script_malware_score (index 26)
+    # ------------------------------------------------------------------
+
+    def _short_script_malware_score(self, code: str) -> float:
+        try:
+            if len(code.splitlines()) >= 30:
+                return 0.0
+            score = 0.0
+            has_exec = bool(re.search(
+                r'\bos\.(?:system|popen)\s*\('
+                r'|\bsubprocess\.(?:run|Popen|call|check_output|check_call)\s*\(',
+                code,
+            ))
+            has_exfil = bool(re.search(
+                r'\burllib\.request\.urlopen\s*\('
+                r'|\brequests\.(?:get|post|put|patch)\s*\('
+                r'|\.send\s*\('
+                r'|\bsocket\.connect\s*\(',
+                code,
+            ))
+            has_encode = bool(re.search(
+                r'\bb64encode\s*\(|\.hex\s*\(\)|\.encode\s*\(',
+                code,
+            ))
+            if has_exec and has_exfil:
+                score += 0.8
+            if has_encode and has_exfil:
+                score += 0.5
+            return min(score, 1.0)
+        except Exception:
+            return 0.0
+
+    # ------------------------------------------------------------------
+    # P2: benign_context_ratio (index 27)
+    # ------------------------------------------------------------------
+
+    def _benign_context_ratio(self, code: str, aliases: dict[str, str] | None = None) -> float:
+        aliases = aliases or {}
+        _STRONG = frozenset({'ansible', 'pytest', 'unittest', 'aiohttp', 'flask', 'boto3', 'boto'})
+        _UTILS  = frozenset({'logging', 'argparse', 'click', 'pathlib'})
+        _OS_EXEC_ATTRS = frozenset({
+            'system', 'popen', 'execv', 'execl', 'execvp', 'execve', 'spawnl', 'spawnle', 'spawnlp',
+        })
+        try:
+            score = 0.0
+            try:
+                tree = self._parse_ast(code)
+                imported: set[str] = set()
+                for node in ast.walk(tree):
+                    if isinstance(node, ast.Import):
+                        for alias in node.names:
+                            imported.add(alias.name.split('.')[0])
+                    elif isinstance(node, ast.ImportFrom) and node.module:
+                        imported.add(node.module.split('.')[0])
+
+                score += 0.4 * sum(1 for m in imported if m in _STRONG)
+                score += 0.15 * sum(1 for m in imported if m in _UTILS)
+
+                # +0.3 if a logging call and an os/subprocess exec call share the same Try node
+                for try_node in ast.walk(tree):
+                    if not isinstance(try_node, ast.Try):
+                        continue
+                    has_log_call = False
+                    has_exec_call = False
+                    sections = [try_node.body, try_node.handlers, try_node.orelse]
+                    if hasattr(try_node, 'finalbody'):
+                        sections.append(try_node.finalbody)
+                    for section in sections:
+                        for stmt in section:
+                            for n in ast.walk(stmt):
+                                if not isinstance(n, ast.Call):
+                                    continue
+                                func = getattr(n, 'func', None)
+                                if not isinstance(func, ast.Attribute):
+                                    continue
+                                val = getattr(func, 'value', None)
+                                if not isinstance(val, ast.Name):
+                                    continue
+                                mod = aliases.get(val.id, val.id)
+                                if mod == 'logging':
+                                    has_log_call = True
+                                elif mod == 'os' and func.attr in _OS_EXEC_ATTRS:
+                                    has_exec_call = True
+                                elif mod == 'subprocess':
+                                    has_exec_call = True
+                    if has_log_call and has_exec_call:
+                        score += 0.3
+                        break
+
+            except SyntaxError:
+                # Regex fallback when AST parse fails
+                for fw in _STRONG:
+                    if re.search(rf'\b{re.escape(fw)}\b', code, re.I):
+                        score += 0.4
+                for fw in _UTILS:
+                    if re.search(rf'\b{re.escape(fw)}\b', code, re.I):
+                        score += 0.15
+
+            return min(score, 1.0)
+        except Exception:
+            return 0.0
+
+    # ------------------------------------------------------------------
+    # P3: package_infra_score (index 28)
+    # ------------------------------------------------------------------
+
+    def _package_infra_score(self, code: str) -> float:
+        try:
+            score = 0.0
+            # pip._internal / pip._vendor subpackage imports
+            if re.search(r'\bfrom pip\._(?:internal|vendor)\b|\bimport pip\._(?:internal|vendor)\b', code):
+                score += 0.8
+            # importlib.metadata or email.message structural imports
+            if re.search(r'\b(?:importlib\.metadata|email\.message)\b', code):
+                score += 0.4
+            # Infra bonus: defines abstract type with zero IO calls
+            has_infra_type = bool(re.search(
+                r'\bnamedtuple\s*\(|\bTypedDict\b|\bProtocol\b',
+                code,
+            ))
+            has_io = bool(re.search(
+                r'\bopen\s*\(|\bsocket\b|\brequests\b|\burllib\b',
+                code,
+            ))
+            if has_infra_type and not has_io:
+                score += 0.3
+            return min(score, 1.0)
+        except Exception:
+            return 0.0
+
+    # ------------------------------------------------------------------
+    # P4: direct_exec_chain_score (index 29)
+    # ------------------------------------------------------------------
+
+    def _direct_exec_chain_score(self, code: str) -> float:
+        try:
+            score = 0.0
+            has_net = bool(re.search(
+                r'\brequests\.(?:get|post)\s*\('
+                r'|\burllib\.request\b'
+                r'|\.send\s*\('
+                r'|\bsocket\.connect\s*\(',
+                code,
+            ))
+
+            # Rule 1: recon (whoami / hostname / getuser) + outbound network
+            has_recon = bool(re.search(
+                r'\bwhoami\b|\bhostname\b|\bgetpass\.getuser\s*\(',
+                code, re.I,
+            ))
+            if has_recon and has_net:
+                score += 0.6
+
+            # Rule 2: subprocess shell=True with hardcoded URL or IPv4 literal
+            has_shell_true = (
+                bool(re.search(r'\bsubprocess\.\w+\b', code))
+                and bool(re.search(r'\bshell\s*=\s*True\b', code))
+            )
+            has_url_or_ip = bool(re.search(
+                r'https?://\S+|(?:\d{1,3}\.){3}\d{1,3}',
+                code,
+            ))
+            if has_shell_true and has_url_or_ip:
+                score += 0.5
+
+            # Rule 3: ctypes import + any network call in same module
+            has_ctypes = bool(re.search(r'\bimport ctypes\b|\bfrom ctypes\b', code))
+            if has_ctypes and has_net:
+                score += 0.5
+
+            return min(score, 1.0)
+        except Exception:
+            return 0.0

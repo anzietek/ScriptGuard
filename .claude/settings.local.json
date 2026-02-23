@@ -7,7 +7,9 @@
       "Bash(python -m pytest:*)",
       "Bash(uv run pytest:*)",
       "Bash(uv run python:*)",
-      "Bash(PYTHONUTF8=1 python:*)"
+      "Bash(PYTHONUTF8=1 python:*)",
+      "Bash(cd /c/Users/anzie/workspace/ScriptGuard && python scripts/sg_deep_analysis.py 2>&1)",
+      "Bash(cd /c/Users/anzie/workspace/ScriptGuard && docker start scriptguard-postgres-dev 2>&1 && sleep 3 && docker inspect scriptguard-postgres-dev --format '{{range .NetworkSettings.Ports}}{{.}}{{end}}' 2>&)"
     ]
   }
 }

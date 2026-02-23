@@ -6,7 +6,7 @@ the `samples.features` JSONB column of PostgreSQL.
 Schema version history:
   v1 — 61-dim raw vector (deprecated, caused by pre-refactor dimension)
   v2 — 23-dim output (deprecated, FEATURE_DIM=23 refactor)
-  v3 — 25-dim output (FEATURE_DIM=25: added max_str_literal_len, long_line_ratio)
+  v3 — 25-dim output (=25: added max_str_literal_len, long_line_ratio)
   v4 — 33-dim output (FEATURE_DIM=33: added 8 FP/FN mitigation features)
   v5 — 27-dim output (FEATURE_DIM=27: removed 6 zero-delta features, kept benign_framework_score + repetitive_identifier_ratio)
   v6 — 26-dim output (FEATURE_DIM=26: removed repetitive_identifier_ratio, Δ=-0.018 wrong direction)
