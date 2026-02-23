@@ -88,7 +88,7 @@ def cache_features(
         # Obfuscation structural (2)
         "max_str_literal_len", "long_line_ratio",
         # FP/FN mitigation features (2)
-        "benign_framework_score", "identifier_entropy",
+        "benign_framework_score", "repetitive_identifier_ratio",
         # Aggregated binary flags (1)
         "malware_api_score",
     ]
