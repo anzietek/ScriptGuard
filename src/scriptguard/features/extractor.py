@@ -38,7 +38,7 @@ class FeatureExtractor:
         22:    max_str_literal_len — length of longest string literal in code
         23:    long_line_ratio — fraction of lines longer than 500 chars [0, 1]
         24:    benign_framework_score — weighted score of legitimate framework imports
-        25:    identifier_entropy — Shannon entropy of identifier distribution
+        25:    repetitive_identifier_ratio — fraction of short/obfuscated identifiers [0, 1]
         26:    malware_api_score — sum of 39 binary indicator flags
 
     Sub-methods produce a 65-feature raw vector which is post-processed in
@@ -99,17 +99,24 @@ class FeatureExtractor:
         Returns [0.0] * 25 on any top-level exception.
         """
         try:
+            # First pass: build alias map before any feature extraction
+            _aliases: dict[str, str] = {}
+            try:
+                _aliases = self._build_alias_map(self._parse_ast(code))
+            except SyntaxError:
+                pass
+
             raw = (
-                self._ast_features(code)            # 13  indices 0-12
-                + self._import_features(code)       # 11  indices 13-23
-                + self._entropy_features(code)      # 4   indices 24-27
-                + self._obfuscation_features(code)  # 11  indices 28-38
-                + self._network_features(code)      # 6   indices 39-44
-                + self._persistence_features(code)  # 4   indices 45-48
-                + self._crypto_features(code)       # 4   indices 49-52
-                + self._recon_fs_features(code)     # 3   indices 53-55
-                + self._statistical_features(code)  # 7   indices 56-62
-                + self._extra_features(code)        # 2   indices 63-64
+                self._ast_features(code, _aliases)            # 13  indices 0-12
+                + self._import_features(code, _aliases)       # 11  indices 13-23
+                + self._entropy_features(code)                # 4   indices 24-27
+                + self._obfuscation_features(code, _aliases)  # 11  indices 28-38
+                + self._network_features(code)                # 6   indices 39-44
+                + self._persistence_features(code)            # 4   indices 45-48
+                + self._crypto_features(code)                 # 4   indices 49-52
+                + self._recon_fs_features(code)               # 3   indices 53-55
+                + self._statistical_features(code)            # 7   indices 56-62
+                + self._extra_features(code)                  # 2   indices 63-64
             )
             assert len(raw) == self._RAW_DIM, (
                 f"Raw dimension mismatch: expected {self._RAW_DIM}, got {len(raw)}"
@@ -130,11 +137,41 @@ class FeatureExtractor:
             warnings.simplefilter("ignore", SyntaxWarning)
             return ast.parse(code)
 
+    @staticmethod
+    def _build_alias_map(tree: ast.AST) -> dict[str, str]:
+        """First-pass alias resolver: maps local names → canonical qualified names.
+
+        Handles:
+          import os as o              → {"o": "os"}
+          from os import system       → {"system": "os.system"}
+          from os import system as s  → {"s": "os.system"}
+
+        Star imports (from x import *) are skipped — cannot be resolved statically.
+        Returns empty dict on any error so callers degrade gracefully.
+        """
+        aliases: dict[str, str] = {}
+        try:
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Import):
+                    for alias in node.names:
+                        local = alias.asname if alias.asname else alias.name
+                        aliases[local] = alias.name
+                elif isinstance(node, ast.ImportFrom) and node.module:
+                    for alias in node.names:
+                        if alias.name == "*":
+                            continue
+                        local = alias.asname if alias.asname else alias.name
+                        aliases[local] = f"{node.module}.{alias.name}"
+        except Exception:
+            pass
+        return aliases
+
     # ------------------------------------------------------------------
     # AST features (13)
     # ------------------------------------------------------------------
 
-    def _ast_features(self, code: str) -> list[float]:
+    def _ast_features(self, code: str, aliases: dict[str, str] | None = None) -> list[float]:
+        aliases = aliases or {}
         try:
             tree = self._parse_ast(code)
         except SyntaxError:
@@ -177,11 +214,14 @@ class FeatureExtractor:
                 elif isinstance(node, (ast.Try, ast.ExceptHandler)):
                     node_count_try += 1
                 elif isinstance(node, ast.Expr):
-                    # Check for exec() call
+                    # Check for exec() call — resolve aliases so `e("cmd")` where
+                    # aliases["e"] == "exec" (or "builtins.exec") is also counted
                     if isinstance(getattr(node, 'value', None), ast.Call):
                         func = getattr(node.value, 'func', None)
-                        if isinstance(func, ast.Name) and func.id == 'exec':
-                            node_count_exec += 1
+                        if isinstance(func, ast.Name):
+                            resolved = aliases.get(func.id, func.id)
+                            if resolved == 'exec':
+                                node_count_exec += 1
 
             # has_nested_functions
             has_nested_functions = 0.0
@@ -195,19 +235,22 @@ class FeatureExtractor:
                     break
 
             # exec_eval_depth: max nesting depth of exec(eval(...)) patterns
-            exec_eval_depth = self._compute_exec_eval_depth(tree)
+            exec_eval_depth = self._compute_exec_eval_depth(tree, aliases)
 
             # has_decode_chain: chained b64decode/decompress/exec pattern
             has_decode_chain = self._has_decode_chain(code, tree)
 
             # has_dynamic_import: use of __import__() or importlib.import_module
+            # Also detects aliased forms: `from importlib import import_module as im; im('os')`
             has_dynamic_import = 0.0
             for node in ast.walk(tree):
                 if isinstance(node, ast.Call):
                     func = getattr(node, 'func', None)
-                    if isinstance(func, ast.Name) and func.id == '__import__':
-                        has_dynamic_import = 1.0
-                        break
+                    if isinstance(func, ast.Name):
+                        resolved = aliases.get(func.id, func.id)
+                        if resolved == '__import__' or resolved.endswith('.import_module'):
+                            has_dynamic_import = 1.0
+                            break
                     if isinstance(func, ast.Attribute) and func.attr == 'import_module':
                         has_dynamic_import = 1.0
                         break
@@ -230,8 +273,16 @@ class FeatureExtractor:
         except Exception:
             return [0.0] * 13
 
-    def _compute_exec_eval_depth(self, tree: ast.AST) -> float:
-        """Compute max nesting depth of exec(eval(...)) call chains."""
+    def _compute_exec_eval_depth(
+        self, tree: ast.AST, aliases: dict[str, str] | None = None
+    ) -> float:
+        """Compute max nesting depth of exec(eval(...)) call chains.
+
+        Resolves aliases so `e(v("cmd"))` where aliases["e"]=="exec",
+        aliases["v"]=="eval" is counted as depth 2.
+        """
+        _aliases = aliases or {}
+        _EXEC_NAMES = frozenset({"exec", "eval", "compile"})
         max_depth = 0
 
         def _depth(node: ast.AST) -> int:
@@ -240,8 +291,8 @@ class FeatureExtractor:
             func = getattr(node, 'func', None)
             name = None
             if isinstance(func, ast.Name):
-                name = func.id
-            if name in ('exec', 'eval', 'compile'):
+                name = _aliases.get(func.id, func.id)
+            if name in _EXEC_NAMES:
                 args = getattr(node, 'args', [])
                 if args and isinstance(args[0], ast.Call):
                     return 1 + _depth(args[0])
@@ -294,7 +345,8 @@ class FeatureExtractor:
     # Import features (11)
     # ------------------------------------------------------------------
 
-    def _import_features(self, code: str) -> list[float]:
+    def _import_features(self, code: str, aliases: dict[str, str] | None = None) -> list[float]:
+        aliases = aliases or {}
         try:
             tree = self._parse_ast(code)
         except SyntaxError:
@@ -319,6 +371,11 @@ class FeatureExtractor:
             has_cryptography = float("cryptography" in imported_modules)
 
             # has_os_exec: specific OS execution calls — not just `import os` (fires on everything)
+            # Alias-aware: detects all of:
+            #   os.system("cmd")               — direct Attribute access
+            #   import os as o; o.system("cmd") — aliased module, Attribute access
+            #   from os import system as s; s("cmd") — aliased function, bare Name call
+            #   from os import system; system("cmd") — direct function import, bare Name call
             has_os_exec = 0.0
             _os_exec_attrs = frozenset(
                 ('system', 'popen', 'execv', 'execl', 'execvp', 'execve', 'execvpe', 'spawnl', 'spawnle', 'spawnlp')
@@ -328,7 +385,17 @@ class FeatureExtractor:
                     func = getattr(node, 'func', None)
                     if isinstance(func, ast.Attribute) and func.attr in _os_exec_attrs:
                         val = getattr(func, 'value', None)
-                        if isinstance(val, ast.Name) and val.id == 'os':
+                        if isinstance(val, ast.Name):
+                            # Resolve module alias: `import os as o` → aliases["o"] == "os"
+                            resolved_mod = aliases.get(val.id, val.id)
+                            if resolved_mod == 'os':
+                                has_os_exec = 1.0
+                                break
+                    elif isinstance(func, ast.Name):
+                        # Bare call via alias: `from os import system as s; s("cmd")`
+                        # aliases["s"] == "os.system" → resolved starts with "os."
+                        resolved = aliases.get(func.id, '')
+                        if resolved.startswith('os.') and resolved[3:] in _os_exec_attrs:
                             has_os_exec = 1.0
                             break
             if not has_os_exec:
@@ -412,7 +479,8 @@ class FeatureExtractor:
     # Obfuscation features (11)
     # ------------------------------------------------------------------
 
-    def _obfuscation_features(self, code: str) -> list[float]:
+    def _obfuscation_features(self, code: str, aliases: dict[str, str] | None = None) -> list[float]:
+        aliases = aliases or {}
         try:
             try:
                 tree = self._parse_ast(code)
@@ -436,13 +504,15 @@ class FeatureExtractor:
                     if isinstance(node, ast.Call):
                         func = getattr(node, 'func', None)
                         if isinstance(func, ast.Name):
-                            if func.id == 'exec':
+                            # Resolve alias before checking: `from builtins import exec as e`
+                            resolved = aliases.get(func.id, func.id)
+                            if resolved == 'exec':
                                 has_exec = 1.0
-                            elif func.id == 'eval':
+                            elif resolved == 'eval':
                                 has_eval = 1.0
-                            elif func.id == 'compile':
+                            elif resolved == 'compile':
                                 has_compile = 1.0
-                            elif func.id == '__import__':
+                            elif resolved == '__import__':
                                 has_dunder_import = 1.0
 
                 # lambda chain: lambda that returns a lambda
@@ -878,7 +948,13 @@ class FeatureExtractor:
             except Exception:
                 pass
 
-        identifier_entropy = 0.0
+        # repetitive_identifier_ratio: fraction of identifiers that are short or
+        # match the pattern [a-z][0-9]+ (e.g. a, b, s1, x99).
+        # Malicious code uses obfuscated single-letter / indexed names;
+        # benign code uses descriptive multi-word identifiers.
+        # Expected Δ: malicious > benign.
+        _SHORT_IDENT = re.compile(r'^[a-z][0-9]+$')
+        repetitive_identifier_ratio = 0.0
         if parse_ok and tree is not None:
             try:
                 identifiers: list[str] = []
@@ -891,13 +967,12 @@ class FeatureExtractor:
                         identifiers.append(node.name)
                 n = len(identifiers)
                 if n > 0:
-                    freq: dict[str, int] = {}
-                    for ident in identifiers:
-                        freq[ident] = freq.get(ident, 0) + 1
-                    identifier_entropy = -sum(
-                        (c / n) * math.log2(c / n) for c in freq.values()
+                    short_count = sum(
+                        1 for ident in identifiers
+                        if len(ident) <= 2 or _SHORT_IDENT.match(ident)
                     )
+                    repetitive_identifier_ratio = float(short_count) / n
             except Exception:
                 pass
 
-        return [benign_framework_score, identifier_entropy]
+        return [benign_framework_score, repetitive_identifier_ratio]
