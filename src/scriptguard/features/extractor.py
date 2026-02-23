@@ -25,9 +25,9 @@ from scriptguard.utils.logger import logger
 
 class FeatureExtractor:
     """
-    Extracts 27-dimensional feature vector from Python source code.
+    Extracts 26-dimensional feature vector from Python source code.
 
-    Output layout (indices 0-26):
+    Output layout (indices 0-25):
         0-9:   AST counts (tree_depth, n_calls, n_imports, n_funcdefs, n_classdefs,
                            n_for, n_while, n_try, n_exec_nodes, exec_eval_depth)
         10-11: Import counts (total_imports, high_risk_imports)
@@ -38,11 +38,10 @@ class FeatureExtractor:
         22:    max_str_literal_len — length of longest string literal in code
         23:    long_line_ratio — fraction of lines longer than 500 chars [0, 1]
         24:    benign_framework_score — weighted score of legitimate framework imports
-        25:    repetitive_identifier_ratio — fraction of short/obfuscated identifiers [0, 1]
-        26:    malware_api_score — sum of 39 binary indicator flags
+        25:    malware_api_score — sum of 39 binary indicator flags
 
-    Sub-methods produce a 65-feature raw vector which is post-processed in
-    extract() to yield this 27-dimensional output.
+    Sub-methods produce a 64-feature raw vector which is post-processed in
+    extract() to yield this 26-dimensional output.
     """
 
     _HIGH_RISK_IMPORTS = {
@@ -81,7 +80,7 @@ class FeatureExtractor:
         39, 40,                       # unique_ip_count, unique_url_count
         56, 57, 58, 59, 60,           # statistical (5)
         61, 62,                       # max_str_literal_len, long_line_ratio
-        63, 64,                           # benign_framework_score, identifier_entropy
+        63,                               # benign_framework_score
     )
 
     # Derived — never edit these manually; change the index sets above instead.
@@ -116,7 +115,7 @@ class FeatureExtractor:
                 + self._crypto_features(code)                 # 4   indices 49-52
                 + self._recon_fs_features(code)               # 3   indices 53-55
                 + self._statistical_features(code)            # 7   indices 56-62
-                + self._extra_features(code)                  # 2   indices 63-64
+                + self._extra_features(code)                  # 1   index 63
             )
             assert len(raw) == self._RAW_DIM, (
                 f"Raw dimension mismatch: expected {self._RAW_DIM}, got {len(raw)}"
@@ -918,7 +917,7 @@ class FeatureExtractor:
             return [0.0] * 7
 
     # ------------------------------------------------------------------
-    # Extra features (2) — FP/FN root-cause mitigations
+    # Extra features (1) — FP/FN root-cause mitigations
     # ------------------------------------------------------------------
 
     def _extra_features(self, code: str) -> list[float]:
@@ -948,31 +947,4 @@ class FeatureExtractor:
             except Exception:
                 pass
 
-        # repetitive_identifier_ratio: fraction of identifiers that are short or
-        # match the pattern [a-z][0-9]+ (e.g. a, b, s1, x99).
-        # Malicious code uses obfuscated single-letter / indexed names;
-        # benign code uses descriptive multi-word identifiers.
-        # Expected Δ: malicious > benign.
-        _SHORT_IDENT = re.compile(r'^[a-z][0-9]+$')
-        repetitive_identifier_ratio = 0.0
-        if parse_ok and tree is not None:
-            try:
-                identifiers: list[str] = []
-                for node in ast.walk(tree):
-                    if isinstance(node, ast.Name):
-                        identifiers.append(node.id)
-                    elif isinstance(node, ast.arg):
-                        identifiers.append(node.arg)
-                    elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
-                        identifiers.append(node.name)
-                n = len(identifiers)
-                if n > 0:
-                    short_count = sum(
-                        1 for ident in identifiers
-                        if len(ident) <= 2 or _SHORT_IDENT.match(ident)
-                    )
-                    repetitive_identifier_ratio = float(short_count) / n
-            except Exception:
-                pass
-
-        return [benign_framework_score, repetitive_identifier_ratio]
+        return [benign_framework_score]
