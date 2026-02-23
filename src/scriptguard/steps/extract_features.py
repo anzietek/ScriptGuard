@@ -106,6 +106,9 @@ def cache_features(
         # Data-density & shadowing P16-P19 — indices 41-44
         "keyword_to_char_density", "non_ascii_ratio",
         "dead_string_ratio", "suspicious_builtin_shadowing",
+        # Byte-buster features P20-P23 — indices 45-48
+        "byte_transform_ratio", "bitwise_logic_density",
+        "immediate_eval_flatness", "hex_payload_coverage",
     ]
 
     all_vectors = {**cached, **newly_computed}

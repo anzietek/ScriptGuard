@@ -1,8 +1,8 @@
 """
 Feature extractor for ScriptGuard fusion model.
-Extracts a 45-dimensional feature vector from Python source code.
+Extracts a 49-dimensional feature vector from Python source code.
 
-Output vector (FEATURE_DIM=45):
+Output vector (FEATURE_DIM=49):
   - 25 continuous/count features: AST structure metrics, import risk counts,
     entropy values, network counts, statistical measures, and obfuscation
     structural signals (max string literal length, long-line ratio).
@@ -25,11 +25,13 @@ Output vector (FEATURE_DIM=45):
   - 1 ghost-script detector (P15): lone_call_in_global_scope.
   - 4 data-density & shadowing features (P16-P19): keyword_to_char_density,
     non_ascii_ratio, dead_string_ratio, suspicious_builtin_shadowing.
+  - 4 byte-buster features (P20-P23): byte_transform_ratio,
+    bitwise_logic_density, immediate_eval_flatness, hex_payload_coverage.
 
 Sub-methods compute an intermediate 69-feature raw vector; extract() post-
-processes it into the final 45-dimensional form by separating continuous
+processes it into the final 49-dimensional form by separating continuous
 features from binary flags, applying log1p to 5 heavy features, aggregating
-the binary flags into malware_api_score, and appending the 19 targeted features.
+the binary flags into malware_api_score, and appending the 23 targeted features.
 """
 
 import ast
@@ -42,9 +44,9 @@ from scriptguard.utils.logger import logger
 
 class FeatureExtractor:
     """
-    Extracts 45-dimensional feature vector from Python source code.
+    Extracts 49-dimensional feature vector from Python source code.
 
-    Output layout (indices 0-44):
+    Output layout (indices 0-48):
         0-9:   AST counts (tree_depth, n_calls*, n_imports, n_funcdefs, n_classdefs,
                            n_for, n_while, n_try, n_exec_nodes, exec_eval_depth)
                * log1p-scaled
@@ -72,13 +74,17 @@ class FeatureExtractor:
         38:    structural_malware_ratio (P13) — ln(n_calls)/(1+ln(n_funcdefs+n_classdefs))
         39:    line_length_legitimacy_filter (P14) — FP suppressor [-2, 0]
         40:    lone_call_in_global_scope (P15) — global-scope exec in <50-line scripts [0/1]
-        41:    keyword_to_char_density (P16) — keyword count / log1p(total chars)
+        41:    keyword_to_char_density (P16) — (keywords + bitwise ops) / log1p(total chars)
         42:    non_ascii_ratio (P17) — fraction of non-ASCII characters [0, 1]
         43:    dead_string_ratio (P18) — log1p(string lens) / log1p(AST nodes)
         44:    suspicious_builtin_shadowing (P19) — assignment to exec/eval/etc. [0/1]
+        45:    byte_transform_ratio (P20) — ln(1+byte_calls) / (1+ln(1+n_calls))
+        46:    bitwise_logic_density (P21) — bitwise_ops / ln(1+total_chars)
+        47:    immediate_eval_flatness (P22) — flat+exec combo [0/1]
+        48:    hex_payload_coverage (P23) — hex-string bytes / total_chars
 
     Sub-methods produce a 69-feature raw vector which is post-processed in
-    extract() to yield this 45-dimensional output.
+    extract() to yield this 49-dimensional output.
     """
 
     _HIGH_RISK_IMPORTS = {
@@ -133,20 +139,21 @@ class FeatureExtractor:
     # Positions: n_calls=1, total_lines=17, avg_line_len=19, max_line_len=20, max_str_literal_len=22
     _LOG1P_INDICES: tuple[int, ...] = (1, 17, 19, 20, 22)
 
-    # 25 + 1 malware_api_score + 4 (P1-P4) + 6 (P5-P10) + 4 (P11-P14) + 1 (P15) + 4 (P16-P19)
-    FEATURE_DIM: int = len(_CONTINUOUS_INDICES) + 1 + 4 + 6 + 4 + 1 + 4
+    # 25 + 1 malware_api_score + 4 (P1-P4) + 6 (P5-P10) + 4 (P11-P14) + 1 (P15) + 4 (P16-P19) + 4 (P20-P23)
+    FEATURE_DIM: int = len(_CONTINUOUS_INDICES) + 1 + 4 + 6 + 4 + 1 + 4 + 4
 
     def extract(self, code: str) -> list[float]:
         """
-        Extract 41-dimensional feature vector from Python source code.
+        Extract 49-dimensional feature vector from Python source code.
 
         Internally computes 69 raw features, then:
           - keeps the 25 continuous/count features in order
           - sums all 44 binary flags into malware_api_score (index 25)
           - applies math.log1p to 5 heavy features (indices 1,17,19,20,22)
-          - appends 15 targeted features P1-P15 (indices 26-40)
+          - appends 19 targeted features P1-P19 (indices 26-44)
+          - appends 4 byte-buster features P20-P23 (indices 45-48)
 
-        Returns [0.0] * 41 on any top-level exception.
+        Returns [0.0] * 49 on any top-level exception.
         """
         try:
             _aliases: dict[str, str] = {}
@@ -203,8 +210,13 @@ class FeatureExtractor:
             features.append(self._non_ascii_ratio(code))
             features.append(self._dead_string_ratio(code))
             features.append(self._suspicious_builtin_shadowing(code))
+            # P20-P23: byte-buster signals (v8.0)
+            features.append(self._byte_transform_ratio(code, features))     # 45
+            features.append(self._bitwise_logic_density(code))              # 46
+            features.append(self._immediate_eval_flatness(code, features))  # 47
+            features.append(self._hex_payload_coverage(code))               # 48
 
-            assert len(features) == self.FEATURE_DIM  # 45
+            assert len(features) == self.FEATURE_DIM  # 49
 
             # Sanity pass: replace non-finite values with 0.0, cap > 20.0
             for _i in range(len(features)):
@@ -1637,10 +1649,13 @@ class FeatureExtractor:
     # P16: keyword_to_char_density (index 41)
     # ------------------------------------------------------------------
 
+    # v8.0: bitwise operators (^, &, |, <<, >>) added as "logic verbs"
+    # so that import-free XOR/shift decryptors score correctly on P16.
     _KW_PATTERN: re.Pattern[str] = re.compile(
         r'\b(?:if|else|elif|for|while|import|from|exec|def|class|return|with|'
         r'try|except|finally|raise|pass|break|continue|and|or|not|in|is|'
         r'lambda|yield|global|nonlocal|del|assert|True|False|None|as|print)\b'
+        r'|<<|>>|\^|[&|]'
     )
 
     def _keyword_to_char_density(self, code: str) -> float:
@@ -1713,5 +1728,136 @@ class FeatureExtractor:
                     if isinstance(val, ast.Name) and val.id == '__builtins__':
                         return 1.0
             return 0.0
+        except Exception:
+            return 0.0
+
+    # ------------------------------------------------------------------
+    # P20: byte_transform_ratio (index 45)
+    # Detects scripts that reconstruct code from raw bytes.
+    # Formula: ln(1 + count_byte_calls) / (1 + ln(1 + n_calls))
+    # features[1] is already log1p(n_calls) from extract().
+    # ------------------------------------------------------------------
+
+    _BYTE_NAMES: frozenset[str] = frozenset({'bytes', 'bytearray', 'chr', 'ord'})
+
+    def _byte_transform_ratio(self, code: str, features: list[float]) -> float:
+        try:
+            count = 0
+            try:
+                tree = self._parse_ast(code)
+                for node in ast.walk(tree):
+                    if not isinstance(node, ast.Call):
+                        continue
+                    func = getattr(node, 'func', None)
+                    if isinstance(func, ast.Name) and func.id in self._BYTE_NAMES:
+                        count += 1
+                    elif isinstance(func, ast.Attribute):
+                        if func.attr == 'fromhex':
+                            count += 1
+                        elif func.attr == 'from_bytes':
+                            val = getattr(func, 'value', None)
+                            if isinstance(val, ast.Name) and val.id == 'int':
+                                count += 1
+            except SyntaxError:
+                count = len(re.findall(
+                    r'\b(?:bytes|bytearray|chr|ord)\s*\('
+                    r'|\.fromhex\s*\('
+                    r'|\bint\.from_bytes\s*\(',
+                    code,
+                ))
+            ln_n_calls = features[1]  # already log1p(n_calls) from extract()
+            return math.log1p(count) / (1.0 + ln_n_calls)
+        except Exception:
+            return 0.0
+
+    # ------------------------------------------------------------------
+    # P21: bitwise_logic_density (index 46)
+    # Detects XOR-based obfuscation / custom decryption loops.
+    # Formula: count_bitwise_ops / ln(1 + total_chars)
+    # ------------------------------------------------------------------
+
+    _BITWISE_OP_TYPES: tuple = (
+        ast.BitXor, ast.BitAnd, ast.BitOr, ast.LShift, ast.RShift,
+    )
+
+    def _bitwise_logic_density(self, code: str) -> float:
+        try:
+            total_chars = len(code)
+            if total_chars == 0:
+                return 0.0
+            count = 0
+            try:
+                tree = self._parse_ast(code)
+                for node in ast.walk(tree):
+                    if isinstance(node, ast.BinOp) and isinstance(node.op, self._BITWISE_OP_TYPES):
+                        count += 1
+            except SyntaxError:
+                # Regex fallback: count ^, &, |, <<, >> in source text
+                count = len(re.findall(r'<<|>>|\^|[&|]', code))
+            return count / math.log1p(total_chars)
+        except Exception:
+            return 0.0
+
+    # ------------------------------------------------------------------
+    # P22: immediate_eval_flatness (index 47, binary 0/1)
+    # Detects "flat loaders": shallow scripts that boot a payload immediately.
+    # Fires when tree_depth < 6 AND exec/eval/compile present AND n_funcdefs <= 1.
+    # features[0] = tree_depth (raw), features[3] = n_funcdefs (raw).
+    # ------------------------------------------------------------------
+
+    _EVAL_NAMES: frozenset[str] = frozenset({'exec', 'eval', 'compile'})
+
+    def _immediate_eval_flatness(self, code: str, features: list[float]) -> float:
+        try:
+            tree_depth = features[0]
+            n_funcdefs = features[3]
+            if tree_depth >= 6 or n_funcdefs > 1:
+                return 0.0
+            try:
+                tree = self._parse_ast(code)
+                for node in ast.walk(tree):
+                    if isinstance(node, ast.Call):
+                        func = getattr(node, 'func', None)
+                        if isinstance(func, ast.Name) and func.id in self._EVAL_NAMES:
+                            return 1.0
+            except SyntaxError:
+                if re.search(r'\b(?:exec|eval|compile)\s*\(', code):
+                    return 1.0
+            return 0.0
+        except Exception:
+            return 0.0
+
+    # ------------------------------------------------------------------
+    # P23: hex_payload_coverage (index 48)
+    # Detects hardcoded hex-encoded shellcode / payloads.
+    # Identifies string literals where > 80% of chars are hex digits and len > 20.
+    # Formula: sum(len(hex_strings)) / total_chars
+    # ------------------------------------------------------------------
+
+    _HEX_CHARS: frozenset[str] = frozenset('0123456789abcdefABCDEF')
+
+    def _hex_payload_coverage(self, code: str) -> float:
+        try:
+            total_chars = len(code)
+            if total_chars == 0:
+                return 0.0
+            hex_total = 0
+            try:
+                tree = self._parse_ast(code)
+                for node in ast.walk(tree):
+                    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+                        s = node.value
+                        if len(s) > 20:
+                            hex_count = sum(1 for c in s if c in self._HEX_CHARS)
+                            if hex_count / len(s) > 0.80:
+                                hex_total += len(s)
+            except SyntaxError:
+                for m in re.finditer(r'(?:"(?:[^"\\]|\\.)*"|\'(?:[^\'\\]|\\.)*\')', code):
+                    s = m.group()[1:-1]  # strip outer quotes
+                    if len(s) > 20:
+                        hex_count = sum(1 for c in s if c in self._HEX_CHARS)
+                        if hex_count / len(s) > 0.80:
+                            hex_total += len(s)
+            return hex_total / total_chars
         except Exception:
             return 0.0
