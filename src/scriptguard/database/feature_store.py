@@ -7,6 +7,7 @@ Schema version history:
   v1 — 61-dim raw vector (deprecated, caused by pre-refactor dimension)
   v2 — 23-dim output (deprecated, FEATURE_DIM=23 refactor)
   v3 — 25-dim output (FEATURE_DIM=25: added max_str_literal_len, long_line_ratio)
+  v4 — 33-dim output (FEATURE_DIM=33: added 8 FP/FN mitigation features)
 """
 
 import json
@@ -16,7 +17,7 @@ from scriptguard.database.db_schema import get_connection, return_connection
 from scriptguard.features.extractor import FeatureExtractor
 from scriptguard.utils.logger import logger
 
-_SCHEMA_VERSION = 3
+_SCHEMA_VERSION = 4
 
 
 def load_features_from_db(sample_ids: list[int]) -> dict[int, list[float]]:
@@ -82,7 +83,7 @@ def save_features_to_db(features_by_id: dict[int, list[float]]) -> None:
     Args:
         features_by_id: Dict mapping sample_id → 25-float feature list.
 
-    Stores as JSONB: {"v": 3, "values": [25 floats]} for schema versioning.
+    Stores as JSONB: {"v": 4, "values": [33 floats]} for schema versioning.
     Uses a single batch UPDATE for efficiency.
     """
     if not features_by_id:

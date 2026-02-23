@@ -25,9 +25,9 @@ from scriptguard.utils.logger import logger
 
 class FeatureExtractor:
     """
-    Extracts 25-dimensional feature vector from Python source code.
+    Extracts 33-dimensional feature vector from Python source code.
 
-    Output layout (indices 0-24):
+    Output layout (indices 0-32):
         0-9:   AST counts (tree_depth, n_calls, n_imports, n_funcdefs, n_classdefs,
                            n_for, n_while, n_try, n_exec_nodes, exec_eval_depth)
         10-11: Import counts (total_imports, high_risk_imports)
@@ -37,10 +37,18 @@ class FeatureExtractor:
                             max_line_len, line_len_cv)
         22:    max_str_literal_len — length of longest string literal in code
         23:    long_line_ratio — fraction of lines longer than 500 chars [0, 1]
-        24:    malware_api_score — sum of 39 binary indicator flags
+        24:    benign_framework_score — weighted score of legitimate framework imports
+        25:    has_runpy_exec — runpy.run_path/run_module/run detected
+        26:    has_importlib_exec — importlib dynamic import execution detected
+        27:    pem_cert_count — number of -----BEGIN ...----- lines
+        28:    identifier_entropy — Shannon entropy of identifier distribution
+        29:    n_indirect_exec — count of immediate indirect exec/eval invocations
+        30:    is_generated_resource — protobuf-generated or data-URI-heavy file
+        31:    os_metadata_only_ratio — ratio of safe vs dangerous os API usage
+        32:    malware_api_score — sum of 39 binary indicator flags
 
-    Sub-methods produce a 63-feature raw vector which is post-processed in
-    extract() to yield this 25-dimensional output.
+    Sub-methods produce a 71-feature raw vector which is post-processed in
+    extract() to yield this 33-dimensional output.
     """
 
     _HIGH_RISK_IMPORTS = {
@@ -79,6 +87,7 @@ class FeatureExtractor:
         39, 40,                       # unique_ip_count, unique_url_count
         56, 57, 58, 59, 60,           # statistical (5)
         61, 62,                       # max_str_literal_len, long_line_ratio
+        63, 64, 65, 66, 67, 68, 69, 70,  # extra features (8)
     )
 
     # Derived — never edit these manually; change the index sets above instead.
@@ -106,6 +115,7 @@ class FeatureExtractor:
                 + self._crypto_features(code)       # 4   indices 49-52
                 + self._recon_fs_features(code)     # 3   indices 53-55
                 + self._statistical_features(code)  # 7   indices 56-62
+                + self._extra_features(code)        # 8   indices 63-70
             )
             assert len(raw) == self._RAW_DIM, (
                 f"Raw dimension mismatch: expected {self._RAW_DIM}, got {len(raw)}"
@@ -842,3 +852,253 @@ class FeatureExtractor:
             ]
         except Exception:
             return [0.0] * 7
+
+    # ------------------------------------------------------------------
+    # Extra features (8) — FP/FN root-cause mitigations
+    # ------------------------------------------------------------------
+
+    def _extra_features(self, code: str) -> list[float]:
+        try:
+            tree = self._parse_ast(code)
+            parse_ok = True
+        except SyntaxError:
+            tree = None
+            parse_ok = False
+
+        # ── F26: benign_framework_score ────────────────────────────────
+        _HARD = frozenset({"django", "flask", "fastapi", "sqlalchemy", "celery", "pydantic"})
+        _EASY = frozenset({"logging", "typing", "argparse", "unittest", "pytest", "setuptools"})
+        benign_framework_score = 0.0
+        if parse_ok and tree is not None:
+            try:
+                mods: set[str] = set()
+                for node in ast.walk(tree):
+                    if isinstance(node, ast.Import):
+                        for alias in node.names:
+                            mods.add(alias.name.split(".")[0])
+                    elif isinstance(node, ast.ImportFrom) and node.module:
+                        mods.add(node.module.split(".")[0])
+                benign_framework_score = (
+                    1.0 * sum(1 for m in mods if m in _HARD)
+                    + 0.2 * sum(1 for m in mods if m in _EASY)
+                )
+            except Exception:
+                pass
+
+        # ── F27: has_runpy_exec ────────────────────────────────────────
+        has_runpy_exec = 0.0
+        if parse_ok and tree is not None:
+            try:
+                for node in ast.walk(tree):
+                    if isinstance(node, ast.Call):
+                        func = getattr(node, "func", None)
+                        if (
+                            isinstance(func, ast.Attribute)
+                            and func.attr in ("run_path", "run_module", "run")
+                            and isinstance(getattr(func, "value", None), ast.Name)
+                            and func.value.id == "runpy"
+                        ):
+                            has_runpy_exec = 1.0
+                            break
+            except Exception:
+                pass
+
+        # ── F28: has_importlib_exec ────────────────────────────────────
+        has_importlib_exec = 0.0
+        if parse_ok and tree is not None:
+            try:
+                for node in ast.walk(tree):
+                    if not isinstance(node, ast.Call):
+                        continue
+                    func = getattr(node, "func", None)
+                    # importlib.import_module(...)
+                    if (
+                        isinstance(func, ast.Attribute)
+                        and func.attr == "import_module"
+                        and isinstance(getattr(func, "value", None), ast.Name)
+                        and func.value.id == "importlib"
+                    ):
+                        has_importlib_exec = 1.0
+                        break
+                    # importlib.util.spec_from_file_location(...) / module_from_spec(...)
+                    if (
+                        isinstance(func, ast.Attribute)
+                        and func.attr in ("spec_from_file_location", "module_from_spec")
+                        and isinstance(getattr(func, "value", None), ast.Attribute)
+                        and func.value.attr == "util"
+                        and isinstance(getattr(func.value, "value", None), ast.Name)
+                        and func.value.value.id == "importlib"
+                    ):
+                        has_importlib_exec = 1.0
+                        break
+            except Exception:
+                pass
+
+        # ── F29: pem_cert_count ────────────────────────────────────────
+        pem_cert_count = float(len(re.findall(r"-----BEGIN [A-Z ]+-----", code)))
+
+        # ── F30: identifier_entropy ────────────────────────────────────
+        identifier_entropy = 0.0
+        if parse_ok and tree is not None:
+            try:
+                identifiers: list[str] = []
+                for node in ast.walk(tree):
+                    if isinstance(node, ast.Name):
+                        identifiers.append(node.id)
+                    elif isinstance(node, ast.arg):
+                        identifiers.append(node.arg)
+                    elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                        identifiers.append(node.name)
+                n = len(identifiers)
+                if n > 0:
+                    freq: dict[str, int] = {}
+                    for ident in identifiers:
+                        freq[ident] = freq.get(ident, 0) + 1
+                    identifier_entropy = -sum(
+                        (c / n) * math.log2(c / n) for c in freq.values()
+                    )
+            except Exception:
+                pass
+
+        # ── F31: n_indirect_exec ───────────────────────────────────────
+        # Counts immediate-invocation indirect execution bypassing standard exec/eval.
+        # Patterns: getattr(obj,"exec")(...), globals()["exec"](...), __builtins__["exec"](...),
+        # operator.methodcaller("exec",...)(...). Excludes stored-variable patterns (f=getattr...; f()).
+        _DANGER = frozenset({"exec", "eval", "compile", "__import__"})
+        n_indirect_exec = 0
+        if parse_ok and tree is not None:
+            try:
+                for node in ast.walk(tree):
+                    if not isinstance(node, ast.Call):
+                        continue
+                    func = getattr(node, "func", None)
+
+                    # getattr(obj, "exec")(...)
+                    if (
+                        isinstance(func, ast.Call)
+                        and isinstance(getattr(func, "func", None), ast.Name)
+                        and func.func.id == "getattr"
+                        and len(func.args) >= 2
+                        and isinstance(func.args[1], ast.Constant)
+                        and func.args[1].value in _DANGER
+                    ):
+                        n_indirect_exec += 1
+                        continue
+
+                    # globals()/locals()/vars()["exec"](...) or __builtins__["exec"](...)
+                    if (
+                        isinstance(func, ast.Subscript)
+                        and isinstance(func.slice, ast.Constant)
+                        and func.slice.value in _DANGER
+                    ):
+                        val = func.value
+                        if isinstance(val, ast.Name) and val.id == "__builtins__":
+                            n_indirect_exec += 1
+                            continue
+                        if (
+                            isinstance(val, ast.Call)
+                            and isinstance(getattr(val, "func", None), ast.Name)
+                            and val.func.id in ("globals", "locals", "vars")
+                        ):
+                            n_indirect_exec += 1
+                            continue
+
+                    # operator.methodcaller("exec", ...)(...)
+                    if (
+                        isinstance(func, ast.Call)
+                        and isinstance(getattr(func, "func", None), ast.Attribute)
+                        and func.func.attr == "methodcaller"
+                        and isinstance(getattr(func.func, "value", None), ast.Name)
+                        and func.func.value.id == "operator"
+                        and func.args
+                        and isinstance(func.args[0], ast.Constant)
+                        and func.args[0].value in _DANGER
+                    ):
+                        n_indirect_exec += 1
+            except Exception:
+                pass
+
+        # ── F32: is_generated_resource ────────────────────────────────
+        if "Generated by the protocol buffer compiler" in code:
+            is_generated_resource = 1.0
+        elif len(re.findall(r"data:[^;]*;base64,", code)) >= 2:
+            is_generated_resource = 1.0
+        else:
+            is_generated_resource = 0.0
+
+        # ── F33: os_metadata_only_ratio ────────────────────────────────
+        os_metadata_only_ratio = 0.0
+        if parse_ok and tree is not None:
+            try:
+                S = 0
+                D = 0
+                for node in ast.walk(tree):
+                    if isinstance(node, ast.Attribute):
+                        val = getattr(node, "value", None)
+                        # os.path.* — safe
+                        if (
+                            isinstance(val, ast.Attribute)
+                            and val.attr == "path"
+                            and isinstance(getattr(val, "value", None), ast.Name)
+                            and val.value.id == "os"
+                        ):
+                            S += 1
+                        # os.getenv / os.getcwd — safe
+                        elif (
+                            node.attr in ("getenv", "getcwd")
+                            and isinstance(val, ast.Name)
+                            and val.id == "os"
+                        ):
+                            S += 1
+                        # os.system / os.chmod / os.popen / os.kill — dangerous
+                        elif (
+                            node.attr in ("system", "chmod", "popen", "kill")
+                            and isinstance(val, ast.Name)
+                            and val.id == "os"
+                        ):
+                            D += 1
+                    elif isinstance(node, ast.Call):
+                        func = getattr(node, "func", None)
+                        # os.environ.get(...) — safe
+                        if (
+                            isinstance(func, ast.Attribute)
+                            and func.attr == "get"
+                            and isinstance(getattr(func, "value", None), ast.Attribute)
+                            and func.value.attr == "environ"
+                            and isinstance(getattr(func.value, "value", None), ast.Name)
+                            and func.value.value.id == "os"
+                        ):
+                            S += 1
+                    elif isinstance(node, (ast.Assign, ast.AugAssign)):
+                        # os.environ[key] = value — dangerous
+                        targets = (
+                            [node.target]
+                            if isinstance(node, ast.AugAssign)
+                            else node.targets
+                        )
+                        for tgt in targets:
+                            if (
+                                isinstance(tgt, ast.Subscript)
+                                and isinstance(getattr(tgt, "value", None), ast.Attribute)
+                                and tgt.value.attr == "environ"
+                                and isinstance(getattr(tgt.value, "value", None), ast.Name)
+                                and tgt.value.value.id == "os"
+                            ):
+                                D += 1
+
+                if S + D > 0:
+                    ratio = S / (S + D)
+                    os_metadata_only_ratio = min(ratio, 0.5) if D > 0 else ratio
+            except Exception:
+                pass
+
+        return [
+            benign_framework_score,
+            has_runpy_exec,
+            has_importlib_exec,
+            pem_cert_count,
+            identifier_entropy,
+            float(n_indirect_exec),
+            is_generated_resource,
+            os_metadata_only_ratio,
+        ]

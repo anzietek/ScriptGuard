@@ -6,7 +6,8 @@
       "Bash(python -c:*)",
       "Bash(python -m pytest:*)",
       "Bash(uv run pytest:*)",
-      "Bash(uv run python:*)"
+      "Bash(uv run python:*)",
+      "Bash(PYTHONUTF8=1 python:*)"
     ]
   }
 }
