@@ -98,6 +98,11 @@ def cache_features(
         "write_exec_chain_score", "in_memory_exec_score",
         "string_fragmentation_ratio", "persistence_indicator",
         "anti_debug_score", "execution_compactness_score",
+        # Stealth & structural features P11-P14 — indices 36-39
+        "dynamic_attribute_score", "network_exfil_fuzzy_score",
+        "structural_malware_ratio", "line_length_legitimacy_filter",
+        # Ghost-script detector P15 — index 40
+        "lone_call_in_global_scope",
     ]
 
     all_vectors = {**cached, **newly_computed}

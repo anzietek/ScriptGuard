@@ -1,11 +1,14 @@
 """
 Feature extractor for ScriptGuard fusion model.
-Extracts a 36-dimensional feature vector from Python source code.
+Extracts a 41-dimensional feature vector from Python source code.
 
-Output vector (FEATURE_DIM=36):
+Output vector (FEATURE_DIM=41):
   - 25 continuous/count features: AST structure metrics, import risk counts,
     entropy values, network counts, statistical measures, and obfuscation
     structural signals (max string literal length, long-line ratio).
+    NOTE: indices 1, 17, 19, 20, 22 are log1p-scaled (n_calls, total_lines,
+    avg_line_len, max_line_len, max_str_literal_len) to prevent high-variance
+    length features from drowning out behavioural signals.
   - 1 malware_api_score: integer sum of 44 binary indicator flags covering
     dangerous API imports, obfuscation patterns, persistence mechanisms,
     network C2 indicators, crypto operations, filesystem recon, and 5 extended
@@ -16,11 +19,15 @@ Output vector (FEATURE_DIM=36):
   - 6 behavioral-chain features (P5-P10): write_exec_chain_score,
     in_memory_exec_score, string_fragmentation_ratio, persistence_indicator,
     anti_debug_score, execution_compactness_score.
+  - 4 stealth & structural features (P11-P14): dynamic_attribute_score,
+    network_exfil_fuzzy_score, structural_malware_ratio,
+    line_length_legitimacy_filter.
+  - 1 ghost-script detector (P15): lone_call_in_global_scope.
 
 Sub-methods compute an intermediate 69-feature raw vector; extract() post-
-processes it into the final 36-dimensional form by separating continuous
-features from binary flags, aggregating the latter into malware_api_score,
-and appending the 10 targeted features.
+processes it into the final 41-dimensional form by separating continuous
+features from binary flags, applying log1p to 5 heavy features, aggregating
+the binary flags into malware_api_score, and appending the 15 targeted features.
 """
 
 import ast
@@ -33,21 +40,22 @@ from scriptguard.utils.logger import logger
 
 class FeatureExtractor:
     """
-    Extracts 36-dimensional feature vector from Python source code.
+    Extracts 41-dimensional feature vector from Python source code.
 
-    Output layout (indices 0-35):
-        0-9:   AST counts (tree_depth, n_calls, n_imports, n_funcdefs, n_classdefs,
+    Output layout (indices 0-40):
+        0-9:   AST counts (tree_depth, n_calls*, n_imports, n_funcdefs, n_classdefs,
                            n_for, n_while, n_try, n_exec_nodes, exec_eval_depth)
+               * log1p-scaled
         10-11: Import counts (total_imports, high_risk_imports)
         12-14: Entropy values (mean_str_entropy, max_str_entropy, high_entropy_count)
         15-16: Network counts (unique_ip_count, unique_url_count)
-        17-21: Statistical (total_lines, comment_density, avg_line_len,
-                            max_line_len, line_len_cv)
-        22:    max_str_literal_len — length of longest string literal in code
+        17-21: Statistical (total_lines*, comment_density, avg_line_len*,
+                            max_line_len*, line_len_cv)  * log1p-scaled
+        22:    max_str_literal_len* — log1p-scaled  * log1p-scaled
         23:    long_line_ratio — fraction of lines longer than 500 chars [0, 1]
         24:    benign_framework_score — weighted score of legitimate framework imports
         25:    malware_api_score — sum of 44 binary indicator flags
-        26:    short_script_malware_score (P1) — exec+exfil in compact scripts
+        26:    short_script_malware_score (P1) — exec+exfil in compact scripts (<100 lines)
         27:    benign_context_ratio (P2) — FP suppressor: benign framework context
         28:    package_infra_score (P3) — pip/stdlib infrastructure code signal
         29:    direct_exec_chain_score (P4) — recon+exfil or ctypes+net chains
@@ -57,9 +65,14 @@ class FeatureExtractor:
         33:    persistence_indicator (P8) — crontab/registry/startup patterns [0/1]
         34:    anti_debug_score (P9) — sandbox/debugger evasion signals
         35:    execution_compactness_score (P10) — dropper/stager compactness
+        36:    dynamic_attribute_score (P11) — getattr/dunder stealth access
+        37:    network_exfil_fuzzy_score (P12) — fuzzy exfil via any HTTP method
+        38:    structural_malware_ratio (P13) — log1p(n_calls)/(n_funcdefs+n_classdefs)
+        39:    line_length_legitimacy_filter (P14) — FP suppressor [-2,0]
+        40:    lone_call_in_global_scope (P15) — global-scope exec in <50-line scripts [0/1]
 
     Sub-methods produce a 69-feature raw vector which is post-processed in
-    extract() to yield this 36-dimensional output.
+    extract() to yield this 41-dimensional output.
     """
 
     _HIGH_RISK_IMPORTS = {
@@ -108,19 +121,26 @@ class FeatureExtractor:
     # _RAW_DIM auto-computed; _CONTINUOUS_INDICES covers raw indices 0-63,
     # _BINARY_INDICES covers raw indices 0-55 plus 64-68 (extended API flags).
     _RAW_DIM: int = len(_BINARY_INDICES) + len(_CONTINUOUS_INDICES)
-    # 25 continuous + 1 malware_api_score + 4 targeted (P1-P4) + 6 behavioral-chain (P5-P10)
-    FEATURE_DIM: int = len(_CONTINUOUS_INDICES) + 1 + 4 + 6
+
+    # Indices in the final feature vector where math.log1p() is applied to prevent
+    # high-variance length/count features from dominating the behavioural signals.
+    # Positions: n_calls=1, total_lines=17, avg_line_len=19, max_line_len=20, max_str_literal_len=22
+    _LOG1P_INDICES: tuple[int, ...] = (1, 17, 19, 20, 22)
+
+    # 25 continuous + 1 malware_api_score + 4 (P1-P4) + 6 (P5-P10) + 4 (P11-P14) + 1 (P15)
+    FEATURE_DIM: int = len(_CONTINUOUS_INDICES) + 1 + 4 + 6 + 4 + 1
 
     def extract(self, code: str) -> list[float]:
         """
-        Extract 30-dimensional feature vector from Python source code.
+        Extract 41-dimensional feature vector from Python source code.
 
         Internally computes 69 raw features, then:
           - keeps the 25 continuous/count features in order
           - sums all 44 binary flags into malware_api_score (index 25)
-          - appends 4 targeted features P1-P4 (indices 26-29)
+          - applies math.log1p to 5 heavy features (indices 1,17,19,20,22)
+          - appends 15 targeted features P1-P15 (indices 26-40)
 
-        Returns [0.0] * 30 on any top-level exception.
+        Returns [0.0] * 41 on any top-level exception.
         """
         try:
             _aliases: dict[str, str] = {}
@@ -149,7 +169,13 @@ class FeatureExtractor:
             malware_api_score = float(sum(raw[i] for i in self._BINARY_INDICES))
             features = continuous + [malware_api_score]
 
-            # Append 10 targeted features (P1-P10)
+            # Log-scale heavy count/length features to balance the feature space.
+            # Indices: n_calls=1, total_lines=17, avg_line_len=19,
+            #          max_line_len=20, max_str_literal_len=22
+            for _idx in self._LOG1P_INDICES:
+                features[_idx] = math.log1p(features[_idx])
+
+            # Append 15 targeted features (P1-P15)
             features.append(self._short_script_malware_score(code))
             features.append(self._benign_context_ratio(code, _aliases))
             features.append(self._package_infra_score(code))
@@ -160,8 +186,14 @@ class FeatureExtractor:
             features.append(self._persistence_indicator(code))
             features.append(self._anti_debug_score(code))
             features.append(self._execution_compactness_score(code))
+            # P11-P14 read from features[] — sees log1p-scaled values at [1,17,19,20,22]
+            features.append(self._dynamic_attribute_score(code))
+            features.append(self._network_exfil_fuzzy_score(code))
+            features.append(self._structural_malware_ratio(features))
+            features.append(self._line_length_legitimacy_filter(features))
+            features.append(self._lone_call_in_global_scope(code))
 
-            assert len(features) == self.FEATURE_DIM  # 36
+            assert len(features) == self.FEATURE_DIM  # 41
             return features
         except Exception as e:
             logger.warning(f"FeatureExtractor.extract failed: {e}")
@@ -985,7 +1017,7 @@ class FeatureExtractor:
 
     def _short_script_malware_score(self, code: str) -> float:
         try:
-            if len(code.splitlines()) >= 30:
+            if len(code.splitlines()) >= 100:
                 return 0.0
             score = 0.0
             has_exec = bool(re.search(
@@ -1350,6 +1382,231 @@ class FeatureExtractor:
                 return 0.8
             if func_count <= 2:
                 return 0.6
+            return 0.0
+        except Exception:
+            return 0.0
+
+    # ------------------------------------------------------------------
+    # P11: dynamic_attribute_score (index 36)
+    # ------------------------------------------------------------------
+
+    def _dynamic_attribute_score(self, code: str) -> float:
+        _DANGEROUS_ATTRS: frozenset[str] = frozenset({'exec', 'eval', 'system', 'popen', 'spawn'})
+        _DUNDER_NAMES: frozenset[str] = frozenset({'__dict__', '__subclasses__', '__builtins__'})
+        _INTROSPECT_OBJECTS: frozenset[str] = frozenset({'builtins', 'os'})
+        try:
+            try:
+                tree = self._parse_ast(code)
+            except SyntaxError:
+                return 0.0
+
+            # Collect node IDs of method bodies where first arg is self/cls
+            # (legitimate OOP introspection — skip those entirely)
+            method_body_ids: set[int] = set()
+            for class_node in ast.walk(tree):
+                if not isinstance(class_node, ast.ClassDef):
+                    continue
+                for item in ast.iter_child_nodes(class_node):
+                    if not isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                        continue
+                    fn_args = item.args
+                    if fn_args.args and fn_args.args[0].arg in ('self', 'cls'):
+                        for child in ast.walk(item):
+                            method_body_ids.add(id(child))
+
+            # Collect node IDs inside `if __name__ == "__main__":` blocks
+            main_block_ids: set[int] = set()
+            for node in ast.walk(tree):
+                if not isinstance(node, ast.If):
+                    continue
+                test = node.test
+                if (
+                    isinstance(test, ast.Compare)
+                    and isinstance(test.left, ast.Name)
+                    and test.left.id == '__name__'
+                    and len(test.ops) == 1
+                    and isinstance(test.ops[0], ast.Eq)
+                    and len(test.comparators) == 1
+                    and isinstance(test.comparators[0], ast.Constant)
+                    and test.comparators[0].value == '__main__'
+                ):
+                    for child in ast.walk(node):
+                        main_block_ids.add(id(child))
+
+            score = 0.0
+
+            for node in ast.walk(tree):
+                if not isinstance(node, ast.Call):
+                    continue
+                func = getattr(node, 'func', None)
+                if not isinstance(func, ast.Name) or func.id != 'getattr':
+                    continue
+                # Skip if inside a self/cls method body
+                if id(node) in method_body_ids:
+                    continue
+                args = node.args
+                if len(args) < 2:
+                    continue
+                obj = args[0]
+                attr_expr = args[1]
+                # Skip if the accessed object is self or cls
+                if isinstance(obj, ast.Name) and obj.id in ('self', 'cls'):
+                    continue
+                # +0.8 if getattr on builtins/os with a concatenated attribute name
+                if (
+                    isinstance(obj, ast.Name)
+                    and obj.id in _INTROSPECT_OBJECTS
+                    and isinstance(attr_expr, ast.BinOp)
+                    and isinstance(attr_expr.op, ast.Add)
+                ):
+                    score += 0.8
+                elif not isinstance(attr_expr, ast.Constant) or not isinstance(attr_expr.value, str):
+                    score += 0.5
+                elif attr_expr.value in _DANGEROUS_ATTRS:
+                    score += 0.2
+
+            # +0.3 if any dunder access exists outside __main__ and method bodies (once)
+            found_dunder = False
+            for node in ast.walk(tree):
+                if id(node) in main_block_ids or id(node) in method_body_ids:
+                    continue
+                if isinstance(node, ast.Attribute) and node.attr in _DUNDER_NAMES:
+                    found_dunder = True
+                    break
+                if isinstance(node, ast.Name) and node.id in _DUNDER_NAMES:
+                    found_dunder = True
+                    break
+            if found_dunder:
+                score += 0.3
+
+            return min(score, 1.0)
+        except Exception:
+            return 0.0
+
+    # ------------------------------------------------------------------
+    # P12: network_exfil_fuzzy_score (index 37)
+    # ------------------------------------------------------------------
+
+    def _network_exfil_fuzzy_score(self, code: str) -> float:
+        _NET_METHODS: frozenset[str] = frozenset({'get', 'post', 'request', 'connect', 'send'})
+        _URL_IP_PAT: re.Pattern[str] = re.compile(
+            r'https?://|ftps?://|(?:\d{1,3}\.){3}\d{1,3}'
+        )
+        try:
+            try:
+                tree = self._parse_ast(code)
+            except SyntaxError:
+                if re.search(
+                    r'\.(?:get|post|request|connect|send)\s*\([^)]*'
+                    r'(?:https?://|ftps?://|\d{1,3}(?:\.\d{1,3}){3})',
+                    code,
+                ):
+                    return 0.7
+                return 0.0
+
+            # Collect locally-defined function names (to exclude as caller objects)
+            local_fn_names: set[str] = set()
+            for node in ast.walk(tree):
+                if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    local_fn_names.add(node.name)
+
+            for node in ast.walk(tree):
+                if not isinstance(node, ast.Call):
+                    continue
+                func = getattr(node, 'func', None)
+                if not isinstance(func, ast.Attribute) or func.attr not in _NET_METHODS:
+                    continue
+                # Skip calls on locally-defined function names
+                caller = getattr(func, 'value', None)
+                if isinstance(caller, ast.Name) and caller.id in local_fn_names:
+                    continue
+                # Check all positional + keyword arguments for URL/IP string literals
+                kw_values = [kw.value for kw in node.keywords]
+                for arg in list(node.args) + kw_values:
+                    if isinstance(arg, ast.Constant) and isinstance(arg.value, str):
+                        if _URL_IP_PAT.search(arg.value):
+                            return 0.7
+
+            return 0.0
+        except Exception:
+            return 0.0
+
+    # ------------------------------------------------------------------
+    # P13: structural_malware_ratio (index 38)
+    # Uses pre-computed base feature values: n_calls[1], n_funcdefs[3], n_classdefs[4]
+    # ------------------------------------------------------------------
+
+    def _structural_malware_ratio(self, features: list[float]) -> float:
+        try:
+            n_calls = features[1]
+            n_funcdefs = features[3]
+            n_classdefs = features[4]
+            return n_calls / max(1.0, n_funcdefs + n_classdefs)
+        except Exception:
+            return 0.0
+
+    # ------------------------------------------------------------------
+    # P14: line_length_legitimacy_filter (index 39)
+    # Reads log1p-scaled features[20] (max_line_len), features[4] (n_classdefs),
+    # features[18] (comment_density), features[24] (benign_framework_score).
+    # Threshold is log1p(1000) ≈ 6.908 because max_line_len is already log-scaled.
+    # Returns -2.0 (strong suppressor) for long lines in legitimate libraries.
+    # ------------------------------------------------------------------
+
+    def _line_length_legitimacy_filter(self, features: list[float]) -> float:
+        try:
+            log_max_line = features[20]  # already log1p-scaled in extract()
+            if log_max_line <= math.log1p(1000):
+                return 0.0
+            n_classdefs = features[4]
+            comment_density = features[18]
+            benign_framework_score = features[24]
+            if n_classdefs > 2 and comment_density > 0.05 and benign_framework_score > 0.15:
+                return -2.0
+            return 0.0
+        except Exception:
+            return 0.0
+
+    # ------------------------------------------------------------------
+    # P15: lone_call_in_global_scope (index 40)
+    # ------------------------------------------------------------------
+
+    def _lone_call_in_global_scope(self, code: str) -> float:
+        _EXEC_NAMES: frozenset[str] = frozenset({'exec', 'eval', 'compile'})
+        try:
+            if len(code.splitlines()) >= 50:
+                return 0.0
+            try:
+                tree = self._parse_ast(code)
+            except SyntaxError:
+                return 0.0
+
+            def _has_exec_at_scope(node: ast.AST) -> bool:
+                """BFS that does NOT descend into nested FunctionDef/ClassDef."""
+                stack = [node]
+                while stack:
+                    cur = stack.pop()
+                    if isinstance(cur, ast.Call):
+                        func = getattr(cur, 'func', None)
+                        if isinstance(func, ast.Name) and func.id in _EXEC_NAMES:
+                            return True
+                        if isinstance(func, ast.Attribute):
+                            val = getattr(func, 'value', None)
+                            if func.attr in ('system', 'popen') and isinstance(val, ast.Name):
+                                return True
+                            if isinstance(val, ast.Name) and val.id == 'subprocess':
+                                return True
+                    for child in ast.iter_child_nodes(cur):
+                        if not isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                            stack.append(child)
+                return False
+
+            for stmt in ast.iter_child_nodes(tree):
+                if isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                    continue
+                if _has_exec_at_scope(stmt):
+                    return 1.0
+
             return 0.0
         except Exception:
             return 0.0
