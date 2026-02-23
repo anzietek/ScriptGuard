@@ -1,8 +1,8 @@
 """
 Feature extractor for ScriptGuard fusion model.
-Extracts a 30-dimensional feature vector from Python source code.
+Extracts a 36-dimensional feature vector from Python source code.
 
-Output vector (FEATURE_DIM=30):
+Output vector (FEATURE_DIM=36):
   - 25 continuous/count features: AST structure metrics, import risk counts,
     entropy values, network counts, statistical measures, and obfuscation
     structural signals (max string literal length, long-line ratio).
@@ -11,13 +11,16 @@ Output vector (FEATURE_DIM=30):
     network C2 indicators, crypto operations, filesystem recon, and 5 extended
     API flags (sys.gettrace, ctypes.VirtualAlloc, marshal.loads,
     zlib.decompress, platform.uname).
-  - 4 appended targeted features (P1-P4): short_script_malware_score,
+  - 4 targeted features (P1-P4): short_script_malware_score,
     benign_context_ratio, package_infra_score, direct_exec_chain_score.
+  - 6 behavioral-chain features (P5-P10): write_exec_chain_score,
+    in_memory_exec_score, string_fragmentation_ratio, persistence_indicator,
+    anti_debug_score, execution_compactness_score.
 
 Sub-methods compute an intermediate 69-feature raw vector; extract() post-
-processes it into the final 30-dimensional form by separating continuous
+processes it into the final 36-dimensional form by separating continuous
 features from binary flags, aggregating the latter into malware_api_score,
-and appending the 4 targeted features.
+and appending the 10 targeted features.
 """
 
 import ast
@@ -30,9 +33,9 @@ from scriptguard.utils.logger import logger
 
 class FeatureExtractor:
     """
-    Extracts 30-dimensional feature vector from Python source code.
+    Extracts 36-dimensional feature vector from Python source code.
 
-    Output layout (indices 0-29):
+    Output layout (indices 0-35):
         0-9:   AST counts (tree_depth, n_calls, n_imports, n_funcdefs, n_classdefs,
                            n_for, n_while, n_try, n_exec_nodes, exec_eval_depth)
         10-11: Import counts (total_imports, high_risk_imports)
@@ -48,9 +51,15 @@ class FeatureExtractor:
         27:    benign_context_ratio (P2) — FP suppressor: benign framework context
         28:    package_infra_score (P3) — pip/stdlib infrastructure code signal
         29:    direct_exec_chain_score (P4) — recon+exfil or ctypes+net chains
+        30:    write_exec_chain_score (P5) — net→file→exec workflow
+        31:    in_memory_exec_score (P6) — decode+exec within same FunctionDef
+        32:    string_fragmentation_ratio (P7) — chr()/concat obfuscation
+        33:    persistence_indicator (P8) — crontab/registry/startup patterns [0/1]
+        34:    anti_debug_score (P9) — sandbox/debugger evasion signals
+        35:    execution_compactness_score (P10) — dropper/stager compactness
 
     Sub-methods produce a 69-feature raw vector which is post-processed in
-    extract() to yield this 30-dimensional output.
+    extract() to yield this 36-dimensional output.
     """
 
     _HIGH_RISK_IMPORTS = {
@@ -99,8 +108,8 @@ class FeatureExtractor:
     # _RAW_DIM auto-computed; _CONTINUOUS_INDICES covers raw indices 0-63,
     # _BINARY_INDICES covers raw indices 0-55 plus 64-68 (extended API flags).
     _RAW_DIM: int = len(_BINARY_INDICES) + len(_CONTINUOUS_INDICES)
-    # 25 continuous + 1 malware_api_score + 4 appended targeted features (P1-P4)
-    FEATURE_DIM: int = len(_CONTINUOUS_INDICES) + 1 + 4
+    # 25 continuous + 1 malware_api_score + 4 targeted (P1-P4) + 6 behavioral-chain (P5-P10)
+    FEATURE_DIM: int = len(_CONTINUOUS_INDICES) + 1 + 4 + 6
 
     def extract(self, code: str) -> list[float]:
         """
@@ -140,13 +149,19 @@ class FeatureExtractor:
             malware_api_score = float(sum(raw[i] for i in self._BINARY_INDICES))
             features = continuous + [malware_api_score]
 
-            # Append 4 targeted features (P1-P4)
+            # Append 10 targeted features (P1-P10)
             features.append(self._short_script_malware_score(code))
             features.append(self._benign_context_ratio(code, _aliases))
             features.append(self._package_infra_score(code))
             features.append(self._direct_exec_chain_score(code))
+            features.append(self._write_exec_chain_score(code))
+            features.append(self._in_memory_exec_score(code, _aliases))
+            features.append(self._string_fragmentation_ratio(code))
+            features.append(self._persistence_indicator(code))
+            features.append(self._anti_debug_score(code))
+            features.append(self._execution_compactness_score(code))
 
-            assert len(features) == self.FEATURE_DIM
+            assert len(features) == self.FEATURE_DIM  # 36
             return features
         except Exception as e:
             logger.warning(f"FeatureExtractor.extract failed: {e}")
@@ -1136,5 +1151,205 @@ class FeatureExtractor:
                 score += 0.5
 
             return min(score, 1.0)
+        except Exception:
+            return 0.0
+
+    # ------------------------------------------------------------------
+    # P5: write_exec_chain_score (index 30)
+    # ------------------------------------------------------------------
+
+    def _write_exec_chain_score(self, code: str) -> float:
+        try:
+            has_net = bool(re.search(
+                r'\brequests\.(?:get|post|put|patch|head|delete)\s*\('
+                r'|\burllib\.request\b'
+                r'|\bsocket\.(?:connect|send|recv|sendall)\s*\(',
+                code,
+            ))
+            has_file_write = bool(re.search(
+                r'\bopen\s*\([^)]*["\'][wa]b?["\']'
+                r'|\.write_text\s*\('
+                r'|\.write_bytes\s*\(',
+                code,
+            ))
+            has_exec_call = bool(re.search(
+                r'\bos\.(?:system|popen)\s*\('
+                r'|\bsubprocess\.\w+\s*\('
+                r'|\bexec\s*\('
+                r'|\beval\s*\(',
+                code,
+            ))
+            return 0.6 if (has_net and has_file_write and has_exec_call) else 0.0
+        except Exception:
+            return 0.0
+
+    # ------------------------------------------------------------------
+    # P6: in_memory_exec_score (index 31)
+    # ------------------------------------------------------------------
+
+    def _in_memory_exec_score(self, code: str, aliases: dict[str, str] | None = None) -> float:
+        aliases = aliases or {}
+        _DECODE_ATTRS: frozenset[str] = frozenset({'b64decode', 'decompress', 'loads'})
+        _EXEC_NAMES: frozenset[str] = frozenset({'exec', 'eval', 'compile'})
+        try:
+            try:
+                tree = self._parse_ast(code)
+            except SyntaxError:
+                return 0.0
+            for fn in ast.walk(tree):
+                if not isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    continue
+                has_decode = False
+                has_exec = False
+                for node in ast.walk(fn):
+                    if not isinstance(node, ast.Call):
+                        continue
+                    func = getattr(node, 'func', None)
+                    if isinstance(func, ast.Attribute) and func.attr in _DECODE_ATTRS:
+                        has_decode = True
+                    elif isinstance(func, ast.Name):
+                        resolved = aliases.get(func.id, func.id)
+                        if resolved in _EXEC_NAMES:
+                            has_exec = True
+                    if has_decode and has_exec:
+                        return 0.7
+            return 0.0
+        except Exception:
+            return 0.0
+
+    # ------------------------------------------------------------------
+    # P7: string_fragmentation_ratio (index 32)
+    # ------------------------------------------------------------------
+
+    def _string_fragmentation_ratio(self, code: str) -> float:
+        try:
+            try:
+                tree = self._parse_ast(code)
+            except SyntaxError:
+                return 0.0
+
+            # Rule 1: ≥5 consecutive + operators in a BinOp left-chain
+            def _add_depth(node: ast.expr) -> int:
+                depth = 0
+                cur: ast.expr = node
+                while isinstance(cur, ast.BinOp) and isinstance(cur.op, ast.Add):
+                    depth += 1
+                    cur = cur.left
+                return depth
+
+            for node in ast.walk(tree):
+                if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
+                    if _add_depth(node) >= 5:
+                        return 0.6
+
+            # Rule 2: ≥5 chr() calls within the same FunctionDef
+            for fn in ast.walk(tree):
+                if not isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    continue
+                chr_count = sum(
+                    1 for n in ast.walk(fn)
+                    if isinstance(n, ast.Call)
+                    and isinstance(getattr(n, 'func', None), ast.Name)
+                    and n.func.id == 'chr'  # type: ignore[union-attr]
+                )
+                if chr_count >= 5:
+                    return 0.6
+
+            # Rule 3: "".join([...]) with ≥5 literal/chr() elements
+            for node in ast.walk(tree):
+                if not isinstance(node, ast.Call):
+                    continue
+                func = getattr(node, 'func', None)
+                if not isinstance(func, ast.Attribute) or func.attr != 'join':
+                    continue
+                args = getattr(node, 'args', [])
+                if not args or not isinstance(args[0], (ast.List, ast.Tuple)):
+                    continue
+                elts = args[0].elts
+                if len(elts) < 5:
+                    continue
+                all_simple = all(
+                    isinstance(e, ast.Constant)
+                    or (
+                        isinstance(e, ast.Call)
+                        and isinstance(getattr(e, 'func', None), ast.Name)
+                        and e.func.id == 'chr'  # type: ignore[union-attr]
+                    )
+                    for e in elts
+                )
+                if all_simple:
+                    return 0.6
+
+            return 0.0
+        except Exception:
+            return 0.0
+
+    # ------------------------------------------------------------------
+    # P8: persistence_indicator (index 33)
+    # ------------------------------------------------------------------
+
+    def _persistence_indicator(self, code: str) -> float:
+        try:
+            _PATTERNS: list[str] = [
+                r'crontab',
+                r'\.bashrc',
+                r'\bStartup\b',
+                r'CurrentVersion\\Run',
+                r'HKCU\\',
+                r'HKLM\\',
+            ]
+            for pat in _PATTERNS:
+                if re.search(pat, code, re.IGNORECASE):
+                    return 1.0
+            return 0.0
+        except Exception:
+            return 0.0
+
+    # ------------------------------------------------------------------
+    # P9: anti_debug_score (index 34)
+    # ------------------------------------------------------------------
+
+    def _anti_debug_score(self, code: str) -> float:
+        try:
+            score = 0.0
+            if re.search(r'\bsys\.gettrace\s*\(\)', code):
+                score += 0.5
+            if re.search(r'\bIsDebuggerPresent\b', code):
+                score += 0.5
+            if re.search(r'\bctypes\.windll\.kernel32\b', code):
+                score += 0.5
+            if re.search(r'\bwireshark\b|\bprocmon\b|\bvbox\b|\bvmware\b', code, re.IGNORECASE):
+                score += 0.4
+            return min(score, 1.0)
+        except Exception:
+            return 0.0
+
+    # ------------------------------------------------------------------
+    # P10: execution_compactness_score (index 35)
+    # ------------------------------------------------------------------
+
+    def _execution_compactness_score(self, code: str) -> float:
+        try:
+            try:
+                tree = self._parse_ast(code)
+            except SyntaxError:
+                return 0.0
+            func_count = sum(
+                1 for n in ast.walk(tree)
+                if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
+            )
+            has_exec = bool(re.search(
+                r'\bexec\s*\(|\beval\s*\(|\bcompile\s*\('
+                r'|\bos\.(?:system|popen)\s*\('
+                r'|\bsubprocess\.\w+\s*\(',
+                code,
+            ))
+            if not has_exec:
+                return 0.0
+            if func_count == 0:
+                return 0.8
+            if func_count <= 2:
+                return 0.6
+            return 0.0
         except Exception:
             return 0.0
