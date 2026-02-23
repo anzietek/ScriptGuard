@@ -1,8 +1,8 @@
 """
 Feature extractor for ScriptGuard fusion model.
-Extracts a 41-dimensional feature vector from Python source code.
+Extracts a 45-dimensional feature vector from Python source code.
 
-Output vector (FEATURE_DIM=41):
+Output vector (FEATURE_DIM=45):
   - 25 continuous/count features: AST structure metrics, import risk counts,
     entropy values, network counts, statistical measures, and obfuscation
     structural signals (max string literal length, long-line ratio).
@@ -23,11 +23,13 @@ Output vector (FEATURE_DIM=41):
     network_exfil_fuzzy_score, structural_malware_ratio,
     line_length_legitimacy_filter.
   - 1 ghost-script detector (P15): lone_call_in_global_scope.
+  - 4 data-density & shadowing features (P16-P19): keyword_to_char_density,
+    non_ascii_ratio, dead_string_ratio, suspicious_builtin_shadowing.
 
 Sub-methods compute an intermediate 69-feature raw vector; extract() post-
-processes it into the final 41-dimensional form by separating continuous
+processes it into the final 45-dimensional form by separating continuous
 features from binary flags, applying log1p to 5 heavy features, aggregating
-the binary flags into malware_api_score, and appending the 15 targeted features.
+the binary flags into malware_api_score, and appending the 19 targeted features.
 """
 
 import ast
@@ -40,9 +42,9 @@ from scriptguard.utils.logger import logger
 
 class FeatureExtractor:
     """
-    Extracts 41-dimensional feature vector from Python source code.
+    Extracts 45-dimensional feature vector from Python source code.
 
-    Output layout (indices 0-40):
+    Output layout (indices 0-44):
         0-9:   AST counts (tree_depth, n_calls*, n_imports, n_funcdefs, n_classdefs,
                            n_for, n_while, n_try, n_exec_nodes, exec_eval_depth)
                * log1p-scaled
@@ -51,7 +53,7 @@ class FeatureExtractor:
         15-16: Network counts (unique_ip_count, unique_url_count)
         17-21: Statistical (total_lines*, comment_density, avg_line_len*,
                             max_line_len*, line_len_cv)  * log1p-scaled
-        22:    max_str_literal_len* — log1p-scaled  * log1p-scaled
+        22:    max_str_literal_len* — log1p-scaled
         23:    long_line_ratio — fraction of lines longer than 500 chars [0, 1]
         24:    benign_framework_score — weighted score of legitimate framework imports
         25:    malware_api_score — sum of 44 binary indicator flags
@@ -67,12 +69,16 @@ class FeatureExtractor:
         35:    execution_compactness_score (P10) — dropper/stager compactness
         36:    dynamic_attribute_score (P11) — getattr/dunder stealth access
         37:    network_exfil_fuzzy_score (P12) — fuzzy exfil via any HTTP method
-        38:    structural_malware_ratio (P13) — log1p(n_calls)/(n_funcdefs+n_classdefs)
-        39:    line_length_legitimacy_filter (P14) — FP suppressor [-2,0]
+        38:    structural_malware_ratio (P13) — ln(n_calls)/(1+ln(n_funcdefs+n_classdefs))
+        39:    line_length_legitimacy_filter (P14) — FP suppressor [-2, 0]
         40:    lone_call_in_global_scope (P15) — global-scope exec in <50-line scripts [0/1]
+        41:    keyword_to_char_density (P16) — keyword count / log1p(total chars)
+        42:    non_ascii_ratio (P17) — fraction of non-ASCII characters [0, 1]
+        43:    dead_string_ratio (P18) — log1p(string lens) / log1p(AST nodes)
+        44:    suspicious_builtin_shadowing (P19) — assignment to exec/eval/etc. [0/1]
 
     Sub-methods produce a 69-feature raw vector which is post-processed in
-    extract() to yield this 41-dimensional output.
+    extract() to yield this 45-dimensional output.
     """
 
     _HIGH_RISK_IMPORTS = {
@@ -127,8 +133,8 @@ class FeatureExtractor:
     # Positions: n_calls=1, total_lines=17, avg_line_len=19, max_line_len=20, max_str_literal_len=22
     _LOG1P_INDICES: tuple[int, ...] = (1, 17, 19, 20, 22)
 
-    # 25 continuous + 1 malware_api_score + 4 (P1-P4) + 6 (P5-P10) + 4 (P11-P14) + 1 (P15)
-    FEATURE_DIM: int = len(_CONTINUOUS_INDICES) + 1 + 4 + 6 + 4 + 1
+    # 25 + 1 malware_api_score + 4 (P1-P4) + 6 (P5-P10) + 4 (P11-P14) + 1 (P15) + 4 (P16-P19)
+    FEATURE_DIM: int = len(_CONTINUOUS_INDICES) + 1 + 4 + 6 + 4 + 1 + 4
 
     def extract(self, code: str) -> list[float]:
         """
@@ -192,8 +198,22 @@ class FeatureExtractor:
             features.append(self._structural_malware_ratio(features))
             features.append(self._line_length_legitimacy_filter(features))
             features.append(self._lone_call_in_global_scope(code))
+            # P16-P19: data-density and shadowing signals
+            features.append(self._keyword_to_char_density(code))
+            features.append(self._non_ascii_ratio(code))
+            features.append(self._dead_string_ratio(code))
+            features.append(self._suspicious_builtin_shadowing(code))
 
-            assert len(features) == self.FEATURE_DIM  # 41
+            assert len(features) == self.FEATURE_DIM  # 45
+
+            # Sanity pass: replace non-finite values with 0.0, cap > 20.0
+            for _i in range(len(features)):
+                _v = features[_i]
+                if not math.isfinite(_v):
+                    features[_i] = 0.0
+                elif _v > 20.0:
+                    features[_i] = 20.0
+
             return features
         except Exception as e:
             logger.warning(f"FeatureExtractor.extract failed: {e}")
@@ -1533,15 +1553,17 @@ class FeatureExtractor:
 
     # ------------------------------------------------------------------
     # P13: structural_malware_ratio (index 38)
-    # Uses pre-computed base feature values: n_calls[1], n_funcdefs[3], n_classdefs[4]
+    # Formula: log1p(n_calls) / (1 + log1p(n_funcdefs + n_classdefs))
+    # features[1] is already log1p-scaled (n_calls); features[3,4] are raw counts.
+    # Amplifies flat structure: many calls with few abstractions → high ratio.
     # ------------------------------------------------------------------
 
     def _structural_malware_ratio(self, features: list[float]) -> float:
         try:
-            n_calls = features[1]
+            ln_n_calls = features[1]        # already log1p-scaled by extract()
             n_funcdefs = features[3]
             n_classdefs = features[4]
-            return n_calls / max(1.0, n_funcdefs + n_classdefs)
+            return ln_n_calls / (1.0 + math.log1p(n_funcdefs + n_classdefs))
         except Exception:
             return 0.0
 
@@ -1607,6 +1629,89 @@ class FeatureExtractor:
                 if _has_exec_at_scope(stmt):
                     return 1.0
 
+            return 0.0
+        except Exception:
+            return 0.0
+
+    # ------------------------------------------------------------------
+    # P16: keyword_to_char_density (index 41)
+    # ------------------------------------------------------------------
+
+    _KW_PATTERN: re.Pattern[str] = re.compile(
+        r'\b(?:if|else|elif|for|while|import|from|exec|def|class|return|with|'
+        r'try|except|finally|raise|pass|break|continue|and|or|not|in|is|'
+        r'lambda|yield|global|nonlocal|del|assert|True|False|None|as|print)\b'
+    )
+
+    def _keyword_to_char_density(self, code: str) -> float:
+        try:
+            total_chars = len(code)
+            if total_chars == 0:
+                return 0.0
+            kw_count = len(self._KW_PATTERN.findall(code))
+            return kw_count / math.log1p(total_chars)
+        except Exception:
+            return 0.0
+
+    # ------------------------------------------------------------------
+    # P17: non_ascii_ratio (index 42)
+    # ------------------------------------------------------------------
+
+    def _non_ascii_ratio(self, code: str) -> float:
+        try:
+            total = len(code)
+            if total == 0:
+                return 0.0
+            return sum(1 for c in code if ord(c) > 127) / total
+        except Exception:
+            return 0.0
+
+    # ------------------------------------------------------------------
+    # P18: dead_string_ratio (index 43)
+    # ------------------------------------------------------------------
+
+    def _dead_string_ratio(self, code: str) -> float:
+        try:
+            string_lits = re.findall(
+                r'(?:"(?:[^"\\]|\\.)*"|\'(?:[^\'\\]|\\.)*\')', code
+            )
+            sum_lens = sum(len(s) - 2 for s in string_lits if len(s) >= 2)
+            try:
+                tree = self._parse_ast(code)
+                n_ast_nodes = sum(1 for _ in ast.walk(tree))
+            except SyntaxError:
+                n_ast_nodes = max(1, len(code.splitlines()))
+            return math.log1p(max(0, sum_lens)) / math.log1p(max(1, n_ast_nodes))
+        except Exception:
+            return 0.0
+
+    # ------------------------------------------------------------------
+    # P19: suspicious_builtin_shadowing (index 44)
+    # ------------------------------------------------------------------
+
+    def _suspicious_builtin_shadowing(self, code: str) -> float:
+        _CORE_BUILTINS: frozenset[str] = frozenset({
+            'exec', 'eval', '__import__', 'compile', 'open',
+            'getattr', 'setattr', 'delattr', 'hasattr',
+            'globals', 'locals', 'vars',
+        })
+        try:
+            try:
+                tree = self._parse_ast(code)
+            except SyntaxError:
+                return 0.0
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Assign):
+                    for target in node.targets:
+                        if isinstance(target, ast.Name) and target.id in _CORE_BUILTINS:
+                            return 1.0
+                elif isinstance(node, ast.AnnAssign):
+                    if isinstance(node.target, ast.Name) and node.target.id in _CORE_BUILTINS:
+                        return 1.0
+                elif isinstance(node, ast.Subscript):
+                    val = getattr(node, 'value', None)
+                    if isinstance(val, ast.Name) and val.id == '__builtins__':
+                        return 1.0
             return 0.0
         except Exception:
             return 0.0

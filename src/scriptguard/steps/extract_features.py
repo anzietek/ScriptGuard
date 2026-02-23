@@ -103,6 +103,9 @@ def cache_features(
         "structural_malware_ratio", "line_length_legitimacy_filter",
         # Ghost-script detector P15 — index 40
         "lone_call_in_global_scope",
+        # Data-density & shadowing P16-P19 — indices 41-44
+        "keyword_to_char_density", "non_ascii_ratio",
+        "dead_string_ratio", "suspicious_builtin_shadowing",
     ]
 
     all_vectors = {**cached, **newly_computed}
