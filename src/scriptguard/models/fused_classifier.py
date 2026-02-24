@@ -226,6 +226,7 @@ class FusedWeightedTrainer(WeightedTrainer):
         dataloader = self.get_eval_dataloader(eval_ds)
 
         all_malicious_probs: list[float] = []
+        alpha_means: list[float] = []
         self.model.eval()
         with torch.no_grad():
             for batch in dataloader:
@@ -235,7 +236,7 @@ class FusedWeightedTrainer(WeightedTrainer):
                 probs = torch.softmax(outputs.logits, dim=-1)
                 all_malicious_probs.extend(probs[:, 1].cpu().tolist())
                 if hasattr(outputs, "alpha"):
-                    logger.info(f"mean gate alpha: {outputs.alpha.mean().item():.4f}")
+                    alpha_means.append(outputs.alpha.mean().item())
 
         # Aggregate chunks → scripts using max malicious_prob (same as inference)
         chunk_mal_probs: dict[int, list[float]] = {}
@@ -274,10 +275,11 @@ class FusedWeightedTrainer(WeightedTrainer):
             f"{metric_key_prefix}_mcc":         mcc,
         }
 
+        alpha_str = f"  gate_alpha={sum(alpha_means)/len(alpha_means):.4f}" if alpha_means else ""
         logger.info(
             f"[script-level val] recall={metrics[f'{metric_key_prefix}_recall']:.4f}  "
             f"fpr={fpr:.4f}  f1={metrics[f'{metric_key_prefix}_f1']:.4f}  "
-            f"mcc={mcc:.4f}  scripts={len(final_true)}"
+            f"mcc={mcc:.4f}  scripts={len(final_true)}{alpha_str}"
         )
 
         # Log metrics so they appear in training state/history.
