@@ -139,6 +139,7 @@ def train_codebert(
             max_grad_norm=codebert_cfg.get("max_grad_norm", 1.0),
             eval_strategy="epoch",
             save_strategy="epoch",
+            dataloader_drop_last=True,  # BatchNorm1d requires batch_size > 1
             load_best_model_at_end=True,
             metric_for_best_model=metric_for_best_model,
             greater_is_better=True,
