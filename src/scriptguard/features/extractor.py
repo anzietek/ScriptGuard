@@ -1,41 +1,26 @@
 """
 Feature extractor for ScriptGuard fusion model.
-Extracts a 55-dimensional feature vector from Python source code.
+Extracts a 28-dimensional feature vector from Python source code.
 
-Output vector (FEATURE_DIM=55):
-  - 25 continuous/count features: AST structure metrics, import risk counts,
-    entropy values, network counts, statistical measures, and obfuscation
-    structural signals (max string literal length, long-line ratio).
-    NOTE: indices 1, 17, 19, 20, 22 are log1p-scaled (n_calls, total_lines,
-    avg_line_len, max_line_len, max_str_literal_len) to prevent high-variance
-    length features from drowning out behavioural signals.
+Output vector (FEATURE_DIM=28):
+  - 21 continuous/count features: AST structure metrics, import risk counts,
+    entropy values, network counts, and statistical measures.
+    NOTE: indices 1, 15, 16, 17 are log1p-scaled (n_calls, total_lines,
+    avg_line_len, max_line_len) to prevent high-variance length features
+    from drowning out behavioural signals.
   - 1 malware_api_score: integer sum of 44 binary indicator flags covering
     dangerous API imports, obfuscation patterns, persistence mechanisms,
     network C2 indicators, crypto operations, filesystem recon, and 5 extended
     API flags (sys.gettrace, ctypes.VirtualAlloc, marshal.loads,
     zlib.decompress, platform.uname).
-  - 4 targeted features (P1-P4): short_script_malware_score,
-    benign_context_ratio, package_infra_score, direct_exec_chain_score.
-  - 6 behavioral-chain features (P5-P10): write_exec_chain_score,
-    in_memory_exec_score, string_fragmentation_ratio, persistence_indicator,
-    anti_debug_score, execution_compactness_score.
-  - 4 stealth & structural features (P11-P14): dynamic_attribute_score,
-    network_exfil_fuzzy_score, structural_malware_ratio,
-    line_length_legitimacy_filter.
-  - 1 ghost-script detector (P15): lone_call_in_global_scope.
-  - 4 data-density & shadowing features (P16-P19): keyword_to_char_density,
-    non_ascii_ratio, dead_string_ratio, suspicious_builtin_shadowing.
-  - 4 byte-buster features (P20-P23): byte_transform_ratio,
-    bitwise_logic_density, immediate_eval_flatness, hex_payload_coverage.
-  - 3 reflection & data-structure features (P24-P26): reflection_proxy_score,
-    string_mutation_density, data_to_logic_ratio.
-  - 3 ghostbuster features (P27-P29): logic_less_payload_volume,
-    top_level_execution_density, builtin_cast_anomaly.
+  - 6 targeted features retained by |Δ| >= 0.05 diagnostics:
+      structural_malware_ratio, dead_string_ratio, bitwise_logic_density,
+      string_mutation_density, data_to_logic_ratio, logic_less_payload_volume.
 
 Sub-methods compute an intermediate 69-feature raw vector; extract() post-
-processes it into the final 55-dimensional form by separating continuous
-features from binary flags, applying log1p to 5 heavy features, aggregating
-the binary flags into malware_api_score, and appending the 29 targeted features.
+processes it into the final 28-dimensional form by separating continuous
+features from binary flags, applying log1p to 4 heavy features, aggregating
+the binary flags into malware_api_score, and appending the 6 targeted features.
 """
 
 import ast
@@ -48,53 +33,27 @@ from scriptguard.utils.logger import logger
 
 class FeatureExtractor:
     """
-    Extracts 55-dimensional feature vector from Python source code.
+    Extracts 28-dimensional feature vector from Python source code.
 
-    Output layout (indices 0-54):
-        0-9:   AST counts (tree_depth, n_calls*, n_imports, n_funcdefs, n_classdefs,
-                           n_for, n_while, n_try, n_exec_nodes, exec_eval_depth)
-               * log1p-scaled
-        10-11: Import counts (total_imports, high_risk_imports)
-        12-14: Entropy values (mean_str_entropy, max_str_entropy, high_entropy_count)
-        15-16: Network counts (unique_ip_count, unique_url_count)
-        17-21: Statistical (total_lines*, comment_density, avg_line_len*,
-                            max_line_len*, line_len_cv)  * log1p-scaled
-        22:    max_str_literal_len* — log1p-scaled
-        23:    long_line_ratio — fraction of lines longer than 500 chars [0, 1]
-        24:    benign_framework_score — weighted score of legitimate framework imports
-        25:    malware_api_score — sum of 44 binary indicator flags
-        26:    short_script_malware_score (P1) — exec+exfil in compact scripts (<100 lines)
-        27:    benign_context_ratio (P2) — FP suppressor: benign framework context
-        28:    package_infra_score (P3) — pip/stdlib infrastructure code signal
-        29:    direct_exec_chain_score (P4) — recon+exfil or ctypes+net chains
-        30:    write_exec_chain_score (P5) — net→file→exec workflow
-        31:    in_memory_exec_score (P6) — decode+exec within same FunctionDef
-        32:    string_fragmentation_ratio (P7) — chr()/concat obfuscation
-        33:    persistence_indicator (P8) — crontab/registry/startup patterns [0/1]
-        34:    anti_debug_score (P9) — sandbox/debugger evasion signals
-        35:    execution_compactness_score (P10) — dropper/stager compactness
-        36:    dynamic_attribute_score (P11) — getattr/dunder stealth access
-        37:    network_exfil_fuzzy_score (P12) — fuzzy exfil via any HTTP method
-        38:    structural_malware_ratio (P13) — ln(n_calls)/(1+ln(n_funcdefs+n_classdefs))
-        39:    line_length_legitimacy_filter (P14) — FP suppressor [-2, 0]
-        40:    lone_call_in_global_scope (P15) — global-scope exec in <50-line scripts [0/1]
-        41:    keyword_to_char_density (P16) — (keywords + bitwise ops) / log1p(total chars)
-        42:    non_ascii_ratio (P17) — fraction of non-ASCII characters [0, 1]
-        43:    dead_string_ratio (P18) — log1p(string lens) / log1p(AST nodes)
-        44:    suspicious_builtin_shadowing (P19) — assignment to exec/eval/etc. [0/1]
-        45:    byte_transform_ratio (P20) — ln(1+byte_calls) / (1+ln(1+n_calls))
-        46:    bitwise_logic_density (P21) — bitwise_ops / ln(1+total_chars)
-        47:    immediate_eval_flatness (P22) — flat+exec combo [0/1]
-        48:    hex_payload_coverage (P23) — hex-string bytes / total_chars
-        49:    reflection_proxy_score (P24) — getattr/dunder/dir-loop reflection [0, 1]
-        50:    string_mutation_density (P25) — ln(1+str_mutations) / (1+ln(1+n_calls))
-        51:    data_to_logic_ratio (P26) — (Expr+Assign) / (1+If+For+While+Try)
-        52:    logic_less_payload_volume (P27) — ln(1+lit_lens) / ln(1+n_ast_nodes)
-        53:    top_level_execution_density (P28) — top_expr / total_expr [0, 1]
-        54:    builtin_cast_anomaly (P29) — ln(1+nested_cast_count)
+    Output layout (indices 0-27):
+        0-7:   AST counts (tree_depth, n_calls*, n_imports, n_funcdefs, n_classdefs,
+                           n_for, n_while, n_try)  * log1p-scaled
+        8-9:   Import counts (total_imports, high_risk_imports)
+        10-12: Entropy values (mean_str_entropy, max_str_entropy, high_entropy_count)
+        13-14: Network counts (unique_ip_count, unique_url_count)
+        15-19: Statistical (total_lines*, avg_line_len*, max_line_len*, line_len_cv,
+                            long_line_ratio)  * log1p-scaled
+        20:    benign_framework_score — weighted score of legitimate framework imports
+        21:    malware_api_score — sum of 44 binary indicator flags
+        22:    structural_malware_ratio — ln(n_calls)/(1+ln(n_funcdefs+n_classdefs))
+        23:    dead_string_ratio — log1p(string lens) / log1p(AST nodes)
+        24:    bitwise_logic_density — bitwise_ops / ln(1+total_chars)
+        25:    string_mutation_density — ln(1+str_mutations) / (1+ln(1+n_calls))
+        26:    data_to_logic_ratio — (Expr+Assign) / (1+If+For+While+Try)
+        27:    logic_less_payload_volume — ln(1+lit_lens) / ln(1+n_ast_nodes)
 
     Sub-methods produce a 69-feature raw vector which is post-processed in
-    extract() to yield this 55-dimensional output.
+    extract() to yield this 28-dimensional output.
     """
 
     _HIGH_RISK_IMPORTS = {
@@ -129,15 +88,14 @@ class FeatureExtractor:
     })
 
     # Indices of continuous/count features kept in output (order preserved).
+    # Removed: 8 (n_exec_nodes), 10 (exec_eval_depth), 57 (comment_density), 61 (max_str_literal_len)
     _CONTINUOUS_INDICES: tuple = (
-        0, 1, 2, 3, 4, 5, 6, 7, 8,  # AST counts (tree_depth … n_exec_nodes)
-        10,                           # exec_eval_depth (count, can be > 1)
-        22, 23,                       # total_imports, high_risk_imports
-        24, 25, 26,                   # mean/max entropy, high_entropy_count
-        39, 40,                       # unique_ip_count, unique_url_count
-        56, 57, 58, 59, 60,           # statistical (5)
-        61, 62,                       # max_str_literal_len, long_line_ratio
-        63,                           # benign_framework_score
+        0, 1, 2, 3, 4, 5, 6, 7,  # AST counts (tree_depth … n_try)
+        22, 23,                   # total_imports, high_risk_imports
+        24, 25, 26,               # mean/max entropy, high_entropy_count
+        39, 40,                   # unique_ip_count, unique_url_count
+        56, 58, 59, 60, 62,       # statistical: total_lines, avg_line_len, max_line_len, line_len_cv, long_line_ratio
+        63,                       # benign_framework_score
     )
 
     # _RAW_DIM auto-computed; _CONTINUOUS_INDICES covers raw indices 0-63,
@@ -146,26 +104,23 @@ class FeatureExtractor:
 
     # Indices in the final feature vector where math.log1p() is applied to prevent
     # high-variance length/count features from dominating the behavioural signals.
-    # Positions: n_calls=1, total_lines=17, avg_line_len=19, max_line_len=20, max_str_literal_len=22
-    _LOG1P_INDICES: tuple[int, ...] = (1, 17, 19, 20, 22)
+    # Positions: n_calls=1, total_lines=15, avg_line_len=16, max_line_len=17
+    _LOG1P_INDICES: tuple[int, ...] = (1, 15, 16, 17)
 
-    # 25 + 1 malware_api_score + 4 (P1-P4) + 6 (P5-P10) + 4 (P11-P14) + 1 (P15) + 4 (P16-P19) + 4 (P20-P23) + 3 (P24-P26) + 3 (P27-P29)
-    FEATURE_DIM: int = len(_CONTINUOUS_INDICES) + 1 + 4 + 6 + 4 + 1 + 4 + 4 + 3 + 3
+    # 21 continuous + 1 malware_api_score + 6 targeted
+    FEATURE_DIM: int = len(_CONTINUOUS_INDICES) + 1 + 6
 
     def extract(self, code: str) -> list[float]:
         """
-        Extract 55-dimensional feature vector from Python source code.
+        Extract 28-dimensional feature vector from Python source code.
 
         Internally computes 69 raw features, then:
-          - keeps the 25 continuous/count features in order
-          - sums all 44 binary flags into malware_api_score (index 25)
-          - applies math.log1p to 5 heavy features (indices 1,17,19,20,22)
-          - appends 19 targeted features P1-P19 (indices 26-44)
-          - appends 4 byte-buster features P20-P23 (indices 45-48)
-          - appends 3 reflection & data-structure features P24-P26 (indices 49-51)
-          - appends 3 ghostbuster features P27-P29 (indices 52-54)
+          - keeps 21 continuous/count features in order
+          - sums all 44 binary flags into malware_api_score (index 21)
+          - applies math.log1p to 4 heavy features (indices 1, 15, 16, 17)
+          - appends 6 targeted features (indices 22-27)
 
-        Returns [0.0] * 55 on any top-level exception.
+        Returns [0.0] * 28 on any top-level exception.
         """
         try:
             _aliases: dict[str, str] = {}
@@ -195,57 +150,21 @@ class FeatureExtractor:
             features = continuous + [malware_api_score]
 
             # Log-scale heavy count/length features to balance the feature space.
-            # Indices: n_calls=1, total_lines=17, avg_line_len=19,
-            #          max_line_len=20, max_str_literal_len=22
+            # Indices: n_calls=1, total_lines=15, avg_line_len=16, max_line_len=17
             for _idx in self._LOG1P_INDICES:
                 features[_idx] = math.log1p(features[_idx])
 
-            # Append 15 targeted features (P1-P15)
-            features.append(self._short_script_malware_score(code))
-            features.append(self._benign_context_ratio(code, _aliases))
-            features.append(self._package_infra_score(code))
-            features.append(self._direct_exec_chain_score(code))
-            features.append(self._write_exec_chain_score(code))
-            features.append(self._in_memory_exec_score(code, _aliases))
-            features.append(self._string_fragmentation_ratio(code))
-            features.append(self._persistence_indicator(code))
-            features.append(self._anti_debug_score(code))
-            features.append(self._execution_compactness_score(code))
-            # P11-P14 read from features[] — sees log1p-scaled values at [1,17,19,20,22]
-            features.append(self._dynamic_attribute_score(code))
-            features.append(self._network_exfil_fuzzy_score(code))
-            features.append(self._structural_malware_ratio(features))
-            features.append(self._line_length_legitimacy_filter(features))
-            features.append(self._lone_call_in_global_scope(code))
-            # P16-P19: data-density and shadowing signals
-            features.append(self._keyword_to_char_density(code))
-            features.append(self._non_ascii_ratio(code))
-            features.append(self._dead_string_ratio(code))
-            features.append(self._suspicious_builtin_shadowing(code))
-            # P20-P23: byte-buster signals (v8.0)
-            features.append(self._byte_transform_ratio(code, features))     # 45
-            features.append(self._bitwise_logic_density(code))              # 46
-            features.append(self._immediate_eval_flatness(code, features))  # 47
-            features.append(self._hex_payload_coverage(code))               # 48
-            # P24-P26: reflection & data-structure signals (v9.0)
-            for _p9_name, _p9_val in (
-                ("reflection_proxy_score",  self._reflection_proxy_score(code)),
-                ("string_mutation_density", self._string_mutation_density(code, features)),
-                ("data_to_logic_ratio",     self._data_to_logic_ratio(code)),
-            ):
-                if not math.isfinite(_p9_val):
-                    logger.warning(
-                        f"FeatureExtractor: {_p9_name} returned non-finite value "
-                        f"{_p9_val!r}; substituting 0.0"
-                    )
-                    _p9_val = 0.0
-                features.append(_p9_val)
-            # P27-P29: ghostbuster signals (v10.0)
-            features.append(self._logic_less_payload_volume(code))       # 52
-            features.append(self._top_level_execution_density(code))     # 53
-            features.append(self._builtin_cast_anomaly(code))            # 54
+            # Append 6 targeted features (indices 22-27)
+            # structural_malware_ratio reads features[1] (log1p n_calls), [3] (n_funcdefs), [4] (n_classdefs)
+            features.append(self._structural_malware_ratio(features))          # 22
+            features.append(self._dead_string_ratio(code))                     # 23
+            features.append(self._bitwise_logic_density(code))                 # 24
+            # string_mutation_density reads features[1] (log1p n_calls)
+            features.append(self._string_mutation_density(code, features))     # 25
+            features.append(self._data_to_logic_ratio(code))                   # 26
+            features.append(self._logic_less_payload_volume(code))             # 27
 
-            assert len(features) == self.FEATURE_DIM  # 55
+            assert len(features) == self.FEATURE_DIM  # 28
 
             # Sanity pass: replace non-finite values with 0.0, cap > 20.0
             for _i in range(len(features)):
