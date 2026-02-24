@@ -47,23 +47,43 @@ def compute_metrics(pred: EvalPrediction) -> dict:
 
 
 class FocalLoss(nn.Module):
-    def __init__(self, gamma: float = 2.0, weight: Optional[torch.Tensor] = None):
+    def __init__(
+        self,
+        gamma: float = 2.0,
+        weight: Optional[torch.Tensor] = None,
+        alpha: Optional[torch.Tensor] = None,
+    ):
         super().__init__()
         self.gamma = gamma
         self.weight = weight
+        # alpha: per-class focal scaling, e.g. [0.25, 0.75] for [benign, malicious].
+        # Applied after (1-p_t)^gamma modulation: FL = alpha_t * (1-p_t)^gamma * CE
+        self.alpha = alpha
 
     def forward(self, logits: torch.Tensor, labels: torch.Tensor) -> torch.Tensor:
         ce_loss = F.cross_entropy(logits, labels, weight=self.weight, reduction='none')
         p_t = torch.exp(-ce_loss)
         focal_loss = (1 - p_t) ** self.gamma * ce_loss
+        if self.alpha is not None:
+            alpha_t = self.alpha.to(device=logits.device, dtype=logits.dtype)[labels]
+            focal_loss = alpha_t * focal_loss
         return focal_loss.mean()
 
 
 class WeightedTrainer(Trainer):
-    def __init__(self, *args: Any, class_weights: Optional[torch.Tensor] = None, focal_gamma: float = 2.0, **kwargs: Any) -> None:
+    def __init__(
+        self,
+        *args: Any,
+        class_weights: Optional[torch.Tensor] = None,
+        focal_gamma: float = 2.0,
+        focal_alpha: Optional[torch.Tensor] = None,
+        **kwargs: Any,
+    ) -> None:
         super().__init__(*args, **kwargs)
         self.class_weights = class_weights
         self.focal_gamma = focal_gamma
+        # focal_alpha: per-class alpha for focal loss, e.g. tensor([0.25, 0.75])
+        self.focal_alpha = focal_alpha
 
     def compute_loss(
         self,
@@ -76,7 +96,8 @@ class WeightedTrainer(Trainer):
         outputs = model(**inputs)
         logits = outputs.logits
         weight = self.class_weights.to(device=logits.device, dtype=logits.dtype) if self.class_weights is not None else None
-        loss_fct = FocalLoss(gamma=self.focal_gamma, weight=weight)
+        focal_alpha = self.focal_alpha.to(device=logits.device, dtype=logits.dtype) if self.focal_alpha is not None else None
+        loss_fct = FocalLoss(gamma=self.focal_gamma, weight=weight, alpha=focal_alpha)
         loss = loss_fct(logits.view(-1, logits.size(-1)), labels.view(-1))
         return (loss, outputs) if return_outputs else loss
 

@@ -208,9 +208,12 @@ codebert:
   weight_decay: 0.1
   num_epochs: 1
   eval_threshold: 0.92
-  focal_gamma: 2.0  # Focal Loss gamma: 0=CrossEntropy, 2=standard focal, higher=harder examples focus
-  max_grad_norm: 1.0  # Gradient clipping threshold (lower = more aggressive clipping)
-  decision_threshold: 0.50  # Malicious class probability threshold (lower = more aggressive detection)
+  focal_gamma: 2.0              # Focal Loss gamma: 0=CrossEntropy, 2=standard focal, higher=harder examples focus
+  focal_alpha_malicious: 0.75  # Per-class focal alpha [benign=0.25, malicious=0.75]; balances FN vs FP
+  lr_backbone: 1.0e-5          # GraphCodeBERT backbone learning rate (differential LR stage 2+)
+  lr_fusion_head: 1.0e-4       # Projection + gate + cls_head learning rate
+  max_grad_norm: 1.0           # Gradient clipping threshold (lower = more aggressive clipping)
+  decision_threshold: 0.50     # Malicious class probability threshold (lower = more aggressive detection)
   output_dir: ${MODEL_OUTPUT_DIR:-/workspace/models/codebert}
   report_to: "none"
   # Training loop

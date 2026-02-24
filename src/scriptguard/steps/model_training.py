@@ -3,6 +3,8 @@ import os
 from typing import Any, Dict
 from zenml import step, ArtifactConfig
 from typing import Annotated
+import joblib
+import numpy as np
 import torch
 import torch.nn as nn
 from transformers import (
@@ -94,6 +96,16 @@ def train_codebert(
     save_total_limit: int = codebert_cfg.get("save_total_limit", 2)
     metric_for_best_model: str = codebert_cfg.get("metric_for_best_model", "eval_recall")
 
+    # Differential learning rates (Fix 2)
+    lr_backbone: float = codebert_cfg.get("lr_backbone", 1e-5)
+    lr_fusion_head: float = codebert_cfg.get("lr_fusion_head", 1e-4)
+
+    # Focal alpha: per-class scaling [benign_alpha, malicious_alpha] (Fix 1)
+    focal_alpha_malicious: float = codebert_cfg.get("focal_alpha_malicious", 0.75)
+    focal_alpha: torch.Tensor = torch.tensor(
+        [1.0 - focal_alpha_malicious, focal_alpha_malicious], dtype=torch.float32
+    )
+
     os.makedirs(output_dir, exist_ok=True)
 
     try:
@@ -126,6 +138,22 @@ def train_codebert(
         class_weights = _get_class_weights(labels)
 
         focal_gamma: float = codebert_cfg.get("focal_gamma", 2.0)
+
+        # Zero-API ghost cluster threshold: Z-scored value corresponding to raw
+        # malware_api_score == 0, used to subset recall logging during evaluation.
+        # feature_vector index 21 = malware_api_score (StandardScaler-transformed).
+        zero_api_zscore: float | None = None
+        try:
+            _scaler = joblib.load(scaler_path)
+            _api_mean: float = float(_scaler.mean_[21])
+            _api_std: float = float(_scaler.scale_[21])
+            zero_api_zscore = (0.0 - _api_mean) / _api_std if _api_std > 0 else None
+            logger.info(
+                f"Zero-API Z-score threshold: {zero_api_zscore:.4f} "
+                f"(mean={_api_mean:.4f}, std={_api_std:.4f})"
+            )
+        except Exception as e:
+            logger.warning(f"Could not compute zero_api_zscore from scaler: {e}")
 
         training_args = TrainingArguments(
             output_dir=output_dir,
@@ -161,7 +189,11 @@ def train_codebert(
             data_collator=collator,
             class_weights=class_weights,
             focal_gamma=focal_gamma,
+            focal_alpha=focal_alpha,
             decision_threshold=decision_threshold,
+            lr_backbone=lr_backbone,
+            lr_fusion_head=lr_fusion_head,
+            zero_api_zscore=zero_api_zscore,
             callbacks=[
             EarlyStoppingCallback(early_stopping_patience=early_stopping_patience),
             *(

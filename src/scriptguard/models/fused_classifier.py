@@ -195,14 +195,103 @@ class FusedWeightedTrainer(WeightedTrainer):
     FusedCodeBERTClassifier which is not a HuggingFace PreTrainedModel.
 
     Key overrides:
-      - evaluate()        → script-level aggregation (max malicious_prob), consistent with inference
-      - save_model()      → st_save_file state dict to checkpoint/model.safetensors
+      - create_optimizer() → differential LRs: lr_backbone for BERT, lr_fusion_head for the rest
+      - compute_loss()     → gate alpha logging per 50 steps (malicious vs benign split)
+      - evaluate()         → script-level aggregation + optional zero-API ghost cluster recall
+      - save_model()       → st_save_file state dict to checkpoint/model.safetensors
       - _load_best_model() → st_load_file state dict from checkpoint/model.safetensors
     """
 
-    def __init__(self, *args: Any, decision_threshold: float = 0.5, **kwargs: Any) -> None:
+    def __init__(
+        self,
+        *args: Any,
+        decision_threshold: float = 0.5,
+        lr_backbone: float = 1e-5,
+        lr_fusion_head: float = 1e-4,
+        zero_api_zscore: Optional[float] = None,
+        **kwargs: Any,
+    ) -> None:
         super().__init__(*args, **kwargs)
         self.decision_threshold = decision_threshold
+        self._lr_backbone = lr_backbone
+        self._lr_fusion_head = lr_fusion_head
+        # Z-scored threshold for the zero-API ghost cluster (malware_api_score == 0).
+        # Computed externally as (0 - scaler.mean_[21]) / scaler.scale_[21].
+        self._zero_api_zscore = zero_api_zscore
+
+    def create_optimizer(self) -> torch.optim.Optimizer:
+        """
+        Differential learning rates:
+          - BERT backbone parameters: lr_backbone (default 1e-5)
+          - Projection + gate + classification head: lr_fusion_head (default 1e-4)
+
+        All parameters — including frozen backbone params — are registered from the
+        start so that unfreezing mid-training (BackboneUnfreezeCallback) immediately
+        picks up the correct LR without optimizer reconstruction.
+        """
+        model = self.model
+        backbone_params = list(model.bert.parameters())
+        backbone_ids = {id(p) for p in backbone_params}
+        fusion_params = [p for p in model.parameters() if id(p) not in backbone_ids]
+
+        optimizer_grouped_parameters = [
+            {
+                "params": backbone_params,
+                "lr": self._lr_backbone,
+                "weight_decay": self.args.weight_decay,
+            },
+            {
+                "params": fusion_params,
+                "lr": self._lr_fusion_head,
+                "weight_decay": self.args.weight_decay,
+            },
+        ]
+        try:
+            self.optimizer = torch.optim.AdamW(optimizer_grouped_parameters)
+        except RuntimeError as e:
+            logger.warning(f"FusedWeightedTrainer.create_optimizer failed: {e}; falling back to default optimizer")
+            return super().create_optimizer()
+        logger.info(
+            f"FusedWeightedTrainer: differential LRs — backbone={self._lr_backbone:.2e}  "
+            f"fusion_head={self._lr_fusion_head:.2e}"
+        )
+        return self.optimizer
+
+    def compute_loss(
+        self,
+        model: Any,
+        inputs: dict,
+        return_outputs: bool = False,
+        **kwargs: Any,
+    ) -> Any:
+        """
+        Overrides WeightedTrainer.compute_loss to add per-class gate alpha logging
+        every 50 training steps.  Logs mean alpha separately for malicious and benign
+        samples so gate collapse or over-reliance on features is immediately visible.
+        """
+        # Peek at labels before super() pops them from the inputs dict.
+        labels_tensor: Optional[torch.Tensor] = inputs.get("labels")
+
+        # Delegate loss + forward to parent; always request outputs for alpha access.
+        loss, outputs = super().compute_loss(model, inputs, return_outputs=True, **kwargs)
+
+        # Gate monitoring every 50 steps during training (state is None during eval).
+        step: int = self.state.global_step if self.state is not None else -1
+        if step >= 0 and step % 50 == 0 and hasattr(outputs, "alpha") and labels_tensor is not None:
+            try:
+                with torch.no_grad():
+                    alpha_mean = outputs.alpha.mean(dim=-1)  # [B] — mean over fusion dim
+                    mal_mask = labels_tensor == 1
+                    ben_mask = labels_tensor == 0
+                    alpha_mal = alpha_mean[mal_mask].mean().item() if mal_mask.any() else float("nan")
+                    alpha_ben = alpha_mean[ben_mask].mean().item() if ben_mask.any() else float("nan")
+                logger.info(
+                    f"[step {step}] gate alpha — malicious: {alpha_mal:.4f}  benign: {alpha_ben:.4f}"
+                )
+            except RuntimeError as e:
+                logger.warning(f"Gate monitoring failed at step {step}: {e}")
+
+        return (loss, outputs) if return_outputs else loss
 
     def evaluate(
         self,
@@ -248,10 +337,38 @@ class FusedWeightedTrainer(WeightedTrainer):
 
         final_preds: list[int] = []
         final_true: list[int] = []
+        final_sids: list[int] = []
         for sid, probs_list in chunk_mal_probs.items():
             best_prob = max(probs_list)
             final_preds.append(1 if best_prob >= self.decision_threshold else 0)
             final_true.append(chunk_true[sid])
+            final_sids.append(sid)
+
+        # Zero-API ghost cluster recall — scripts whose malware_api_score == 0.
+        # These are the hardest FNs; we track them separately per epoch.
+        if self._zero_api_zscore is not None:
+            try:
+                all_fvecs: list[list[float]] = eval_ds["feature_vector"]
+                # A script is "zero-API" when ALL its chunks have API score ≤ threshold.
+                # feature_vector index 21 = malware_api_score (Z-scored).
+                _thresh = self._zero_api_zscore + 1e-3
+                zero_api_by_sid: dict[int, bool] = {}
+                for i, fvec in enumerate(all_fvecs):
+                    sid = script_ids[i]
+                    if sid not in zero_api_by_sid:
+                        zero_api_by_sid[sid] = True
+                    zero_api_by_sid[sid] = zero_api_by_sid[sid] and (fvec[21] <= _thresh)
+
+                za_preds = [p for sid, p in zip(final_sids, final_preds) if zero_api_by_sid.get(sid, False)]
+                za_true  = [t for sid, t in zip(final_sids, final_true)  if zero_api_by_sid.get(sid, False)]
+                if za_preds:
+                    za_recall = float(recall_score(za_true, za_preds, average="binary", zero_division=0))
+                    n_mal_za = sum(za_true)
+                    logger.info(
+                        f"[zero-API ghost cluster] n={len(za_preds)}  malicious={n_mal_za}  recall={za_recall:.4f}"
+                    )
+            except RuntimeError as e:
+                logger.warning(f"Zero-API ghost cluster logging failed: {e}")
 
         labels_arr = np.array(final_true)
         preds_arr = np.array(final_preds)
