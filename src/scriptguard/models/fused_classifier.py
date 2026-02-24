@@ -533,12 +533,51 @@ def load_fused_model(
     model_name: str = cfg.pop("model_name")
     num_labels: int = cfg.pop("num_labels", 2)
 
+    # Load weights first so we can detect old architecture from key names
+    state = st_load_file(
+        os.path.join(model_dir, "model.safetensors"),
+        device=str(device),
+    )
+
     if "fusion_architecture" not in cfg:
-        logger.warning(
-            "fused_model_config.json missing 'fusion_architecture'; defaulting to 'concat'. "
-            "This checkpoint was saved with an older version of FusedCodeBERTClassifier."
+        # Detect architecture from state-dict keys (old checkpoints didn't store this)
+        _is_old_gated = any(
+            k.startswith("feat_proj.") or k.startswith("cls_head.")
+            for k in state
         )
-        cfg["fusion_architecture"] = "concat"
+        if _is_old_gated:
+            logger.warning(
+                "fused_model_config.json missing 'fusion_architecture'; detected gated "
+                "architecture from checkpoint keys (feat_proj/cls_head). "
+                "Mapping old keys → new layout."
+            )
+            cfg["fusion_architecture"] = "gated"
+            # Map old config keys → new gated_* names
+            if "mlp_hidden_dim" in cfg:
+                cfg["gated_proj_hidden_1"] = cfg.pop("mlp_hidden_dim")
+            if "fusion_hidden_dim" in cfg:
+                cfg["gated_proj_hidden_2"] = cfg.pop("fusion_hidden_dim")
+            if "dropout_rate" in cfg:
+                cfg["gated_proj_dropout"] = cfg.pop("dropout_rate")
+            if "cls_head_dropout" in cfg:
+                cfg["gated_fusion_dropout"] = cfg.pop("cls_head_dropout")
+            # Derive gated_fusion_hidden from cls_head.0.weight shape [hidden, proj_hidden_2]
+            if "cls_head.0.weight" in state:
+                cfg.setdefault("gated_fusion_hidden", int(state["cls_head.0.weight"].shape[0]))
+        else:
+            logger.warning(
+                "fused_model_config.json missing 'fusion_architecture'; defaulting to 'concat'. "
+                "This checkpoint was saved with an older version of FusedCodeBERTClassifier."
+            )
+            cfg["fusion_architecture"] = "concat"
+            if "mlp_hidden_dim" in cfg and "concat_mlp_hidden" not in cfg:
+                cfg["concat_mlp_hidden"] = cfg.pop("mlp_hidden_dim")
+            if "fusion_hidden_dim" in cfg and "concat_fusion_hidden" not in cfg:
+                cfg["concat_fusion_hidden"] = cfg.pop("fusion_hidden_dim")
+            if "dropout_rate" in cfg and "concat_dropout" not in cfg:
+                cfg["concat_dropout"] = cfg.pop("dropout_rate")
+            for _stale in ("cls_head_dropout",):
+                cfg.pop(_stale, None)
 
     fusion_config = SimpleNamespace(**cfg)
 
@@ -548,11 +587,18 @@ def load_fused_model(
         config=fusion_config,
     )
 
-    state = st_load_file(
-        os.path.join(model_dir, "model.safetensors"),
-        device=str(device),
-    )
-    model.load_state_dict(state)
+    # Rename old gated state-dict keys to current names before loading
+    _KEY_PREFIX_RENAMES = {"feat_proj": "projection", "cls_head": "fusion_head"}
+    remapped_state = {}
+    for k, v in state.items():
+        new_k = k
+        for old_prefix, new_prefix in _KEY_PREFIX_RENAMES.items():
+            if k.startswith(old_prefix + "."):
+                new_k = new_prefix + k[len(old_prefix):]
+                break
+        remapped_state[new_k] = v
+
+    model.load_state_dict(remapped_state)
     model.to(device)
     model.eval()
 
