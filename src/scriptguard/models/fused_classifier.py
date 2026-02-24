@@ -1,12 +1,16 @@
 """
-Fused CodeBERT Classifier for ScriptGuard.
+Fused CodeBERT Classifier for ScriptGuard — Gated Fusion v2.0.
 
 Architecture:
-    input_ids, attention_mask → GraphCodeBERT → [CLS] [B×768]
-                                                              ↘
-                                                               Concat [B×896] → Linear(896→256) → GELU → Dropout → Linear(256→2)
-                                                              ↗
-    feature_vector [B×27] → BatchNorm1d(27) → Linear(27→128) → GELU → Dropout
+    feature_vector [B×F] → log1p → Linear(F→128) → BN → GELU → Dropout(0.2)
+                                  → Linear(128→256) → BN → GELU → Dropout(0.2)
+                                  → v_proj [B×256]
+                                                           ↘
+    input_ids → GraphCodeBERT → [CLS] [B×768]              cat([e,v]) [B×1024]
+                                              ↘            → Linear(1024→256)
+                                               alpha [B×256] = sigmoid(...)
+                                               z = alpha ⊙ v_proj + (1-alpha) ⊙ e[:,:256]
+                                               → Linear(256→128) → GELU → Dropout(0.3) → Linear(128→2)
 
 This module also provides FusedDataCollator, FusedWeightedTrainer,
 save_fused_model, and load_fused_model.
@@ -61,10 +65,10 @@ class FusedCodeBERTClassifier(nn.Module):
         self,
         model_name: str,
         num_labels: int = 2,
-        feature_dim: int = 61,
+        feature_dim: int = 55,
         mlp_hidden_dim: int = 128,
         fusion_hidden_dim: int = 256,
-        dropout_rate: float = 0.3,
+        dropout_rate: float = 0.2,
     ) -> None:
         super().__init__()
         self.model_name = model_name
@@ -76,23 +80,32 @@ class FusedCodeBERTClassifier(nn.Module):
 
         # BERT backbone — raw encoder, not classification head
         self.bert = AutoModel.from_pretrained(model_name)
-        bert_hidden = self.bert.config.hidden_size  # 768 for base models
+        bert_hidden: int = self.bert.config.hidden_size  # 768 for base models
 
-        # Feature branch
-        self.feature_bn = nn.BatchNorm1d(feature_dim)
-        self.feature_mlp = nn.Sequential(
+        # Feature projection: feature_dim → mlp_hidden_dim → fusion_hidden_dim
+        # dropout_rate (0.2) applied after each BN+GELU block
+        self.feat_proj = nn.Sequential(
             nn.Linear(feature_dim, mlp_hidden_dim),
+            nn.BatchNorm1d(mlp_hidden_dim),
+            nn.GELU(),
+            nn.Dropout(dropout_rate),
+            nn.Linear(mlp_hidden_dim, fusion_hidden_dim),
+            nn.BatchNorm1d(fusion_hidden_dim),
             nn.GELU(),
             nn.Dropout(dropout_rate),
         )
 
-        # Fusion head
-        fusion_input_dim = bert_hidden + mlp_hidden_dim
-        self.fusion_head = nn.Sequential(
-            nn.Linear(fusion_input_dim, fusion_hidden_dim),
+        # Gated fusion: Linear(bert_hidden + fusion_hidden_dim → fusion_hidden_dim)
+        # concat([e_trans, v_proj]) ∈ R^(768+256=1024) → alpha ∈ R^256
+        self.gate = nn.Linear(bert_hidden + fusion_hidden_dim, fusion_hidden_dim)
+
+        # Classification head: fusion_hidden_dim → mlp_hidden_dim → num_labels
+        # Dropout 0.3 hardcoded per spec
+        self.cls_head = nn.Sequential(
+            nn.Linear(fusion_hidden_dim, mlp_hidden_dim),
             nn.GELU(),
-            nn.Dropout(dropout_rate),
-            nn.Linear(fusion_hidden_dim, num_labels),
+            nn.Dropout(0.3),
+            nn.Linear(mlp_hidden_dim, num_labels),
         )
 
     def forward(
@@ -115,17 +128,27 @@ class FusedCodeBERTClassifier(nn.Module):
         """
         # BERT path → [CLS] representation
         bert_out = self.bert(input_ids=input_ids, attention_mask=attention_mask)
-        cls_embedding = bert_out.last_hidden_state[:, 0, :]  # [B, 768]
+        e_trans: torch.Tensor = bert_out.last_hidden_state[:, 0, :]  # [B, 768]
 
-        # Feature branch — cast to BERT dtype to stay consistent under fp16/bf16 autocast
-        feat_norm = self.feature_bn(feature_vector.to(dtype=cls_embedding.dtype))
-        feat_repr = self.feature_mlp(feat_norm)  # [B, 128]
+        # Feature projection branch
+        # Cast to BERT dtype for fp16/bf16 autocast consistency, then apply log1p
+        v_feat: torch.Tensor = feature_vector.to(dtype=e_trans.dtype)
+        # Signed log1p: sign(x)·log1p(|x|) — numerically stable on Z-scored inputs
+        # (plain log1p(x) returns NaN for x < -1; signed form handles all reals)
+        v_feat_scaled: torch.Tensor = torch.sign(v_feat) * torch.log1p(v_feat.abs())
+        v_proj: torch.Tensor = self.feat_proj(v_feat_scaled)        # [B, 256]
 
-        # Fusion
-        fused = torch.cat([cls_embedding, feat_repr], dim=-1)  # [B, 896]
-        logits = self.fusion_head(fused)  # [B, 2]
+        # Gated fusion
+        concat: torch.Tensor = torch.cat([e_trans, v_proj], dim=-1) # [B, 1024]
+        alpha: torch.Tensor = torch.sigmoid(self.gate(concat))       # [B, 256]
+        z: torch.Tensor = (
+            alpha * v_proj + (1.0 - alpha) * e_trans[:, : self.fusion_hidden_dim]
+        )                                                             # [B, 256]
 
-        return SimpleNamespace(logits=logits)
+        # Classification head
+        logits: torch.Tensor = self.cls_head(z)                      # [B, 2]
+
+        return SimpleNamespace(logits=logits, alpha=alpha)
 
 
 # ---------------------------------------------------------------------------
@@ -209,6 +232,8 @@ class FusedWeightedTrainer(WeightedTrainer):
                 outputs = self.model(**batch)
                 probs = torch.softmax(outputs.logits, dim=-1)
                 all_malicious_probs.extend(probs[:, 1].cpu().tolist())
+                if hasattr(outputs, "alpha"):
+                    logger.info(f"mean gate alpha: {outputs.alpha.mean().item():.4f}")
 
         # Aggregate chunks → scripts using max malicious_prob (same as inference)
         chunk_mal_probs: dict[int, list[float]] = {}

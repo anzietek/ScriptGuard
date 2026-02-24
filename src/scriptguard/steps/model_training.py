@@ -4,9 +4,13 @@ from typing import Any, Dict
 from zenml import step, ArtifactConfig
 from typing import Annotated
 import torch
+import torch.nn as nn
 from transformers import (
     AutoTokenizer,
     EarlyStoppingCallback,
+    TrainerCallback,
+    TrainerControl,
+    TrainerState,
     TrainingArguments,
 )
 from datasets import Dataset
@@ -19,6 +23,37 @@ from scriptguard.models.fused_classifier import (
 )
 from scriptguard.exceptions import ModelTrainingError
 from scriptguard.utils.logger import logger
+
+
+class BackboneUnfreezeCallback(TrainerCallback):
+    # Unfreezes the BERT backbone at the start of epoch `freeze_epochs` (0-indexed).
+    # Epoch 0 = first epoch (backbone frozen), epoch freeze_epochs = unfreeze point.
+
+    def __init__(self, freeze_epochs: int) -> None:
+        self.freeze_epochs = freeze_epochs
+        self._unfrozen: bool = False
+
+    def on_epoch_begin(
+        self,
+        args: TrainingArguments,
+        state: TrainerState,
+        control: TrainerControl,
+        **kwargs: Any,
+    ) -> None:
+        if self._unfrozen:
+            return
+        model: Any = kwargs.get("model")
+        if model is None or not hasattr(model, "bert"):
+            return
+        current_epoch: int = int(state.epoch) if state.epoch is not None else 0
+        if current_epoch >= self.freeze_epochs:
+            for param in model.bert.parameters():
+                param.requires_grad = True
+            self._unfrozen = True
+            logger.info(
+                f"BackboneUnfreezeCallback: unfroze BERT backbone at epoch {current_epoch} "
+                f"(freeze_epochs={self.freeze_epochs})"
+            )
 
 
 def _get_class_weights(labels: list[int], num_labels: int = 2) -> torch.Tensor:
@@ -74,6 +109,17 @@ def train_codebert(
             dropout_rate=dropout_rate,
         )
 
+        # Backbone freeze: keep BERT frozen for the first N epochs so the fusion
+        # head and projection learn a stable basis before full fine-tuning begins.
+        backbone_freeze_epochs: int = codebert_cfg.get("backbone_freeze_epochs", 1)
+        if backbone_freeze_epochs > 0:
+            for param in model.bert.parameters():
+                param.requires_grad = False
+            logger.info(
+                f"BERT backbone frozen for first {backbone_freeze_epochs} epoch(s); "
+                "will unfreeze via BackboneUnfreezeCallback"
+            )
+
         labels: list[int] = train_dataset["label"]
         class_weights = _get_class_weights(labels)
 
@@ -113,7 +159,14 @@ def train_codebert(
             class_weights=class_weights,
             focal_gamma=focal_gamma,
             decision_threshold=decision_threshold,
-            callbacks=[EarlyStoppingCallback(early_stopping_patience=early_stopping_patience)],
+            callbacks=[
+            EarlyStoppingCallback(early_stopping_patience=early_stopping_patience),
+            *(
+                [BackboneUnfreezeCallback(freeze_epochs=backbone_freeze_epochs)]
+                if backbone_freeze_epochs > 0
+                else []
+            ),
+        ],
         )
 
         logger.info(f"Starting fused CodeBERT fine-tuning → {output_dir}")
