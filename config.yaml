@@ -208,25 +208,30 @@ codebert:
   weight_decay: 0.1
   num_epochs: 3
   eval_threshold: 0.92
-  focal_gamma: 2.0              # Focal Loss gamma: 0=CrossEntropy, 2=standard focal, higher=harder examples focus
-  focal_alpha_malicious: 0.75  # Per-class focal alpha [benign=0.25, malicious=0.75]; balances FN vs FP
-  lr_backbone: 1.0e-5          # GraphCodeBERT backbone learning rate (differential LR stage 2+)
-  lr_fusion_head: 1.0e-4       # Projection + gate + cls_head learning rate
-  max_grad_norm: 1.0           # Gradient clipping threshold (lower = more aggressive clipping)
-  decision_threshold: 0.50     # Malicious class probability threshold (lower = more aggressive detection)
+  focal_gamma: 2.0              # Focal Loss gamma: 0=CrossEntropy, 2=standard focal
+  focal_alpha_malicious: 0.75  # Per-class focal alpha [benign=0.25, malicious=0.75]
+  max_grad_norm: 1.0           # Gradient clipping threshold
+  decision_threshold: 0.50     # Malicious class probability threshold
   output_dir: ${MODEL_OUTPUT_DIR:-/workspace/models/codebert}
   report_to: "none"
   # Training loop
   logging_steps: 50
   save_total_limit: 2
   metric_for_best_model: "eval_mcc"
-  # Fusion model architecture (Gated Fusion v2.0)
   num_labels: 2
-  mlp_hidden_dim: 128
-  fusion_hidden_dim: 256
-  dropout_rate: 0.3       # projection branch dropout (feat_proj)
-  cls_head_dropout: 0.3   # classification head dropout
-  backbone_freeze_epochs: 1  # freeze BERT for epoch 0, unfreeze from epoch 1
+  # Fusion architecture selector — options: "concat" | "gated"
+  fusion_architecture: "concat"
+  feature_dim: 26              # must match FeatureExtractor.FEATURE_DIM
+  # Concat architecture params
+  concat_mlp_hidden: 128
+  concat_fusion_hidden: 256
+  concat_dropout: 0.3
+  # Gated architecture params
+  gated_proj_hidden_1: 128
+  gated_proj_hidden_2: 256
+  gated_proj_dropout: 0.2
+  gated_fusion_hidden: 128
+  gated_fusion_dropout: 0.3
 
 # ============================================================================
 # DATA VALIDATION & AUGMENTATION

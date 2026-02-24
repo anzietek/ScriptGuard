@@ -1,16 +1,19 @@
 """
-Fused CodeBERT Classifier for ScriptGuard — Gated Fusion v2.0.
+Fused CodeBERT Classifier for ScriptGuard.
 
-Architecture:
-    feature_vector [B×F] → log1p → Linear(F→128) → BN → GELU → Dropout(0.2)
-                                  → Linear(128→256) → BN → GELU → Dropout(0.2)
-                                  → v_proj [B×256]
-                                                           ↘
-    input_ids → GraphCodeBERT → [CLS] [B×768]              cat([e,v]) [B×1024]
-                                              ↘            → Linear(1024→256)
-                                               alpha [B×256] = sigmoid(...)
-                                               z = alpha ⊙ v_proj + (1-alpha) ⊙ e[:,:256]
-                                               → Linear(256→128) → GELU → Dropout(0.3) → Linear(128→2)
+Supports two fusion architectures, selected by config.fusion_architecture:
+
+  "concat":
+    feature_vector [B×F] → MLP(F→H_mlp) [GELU+Dropout]
+    fused = cat([CLS, feat_proj]) [B × (768+H_mlp)]
+    logits = fusion_head(fused)
+
+  "gated":
+    feature_vector [B×F] → signed-log1p → projection(F→H2) [BN+GELU blocks]
+    alpha = sigmoid(gate(cat([CLS, feat_proj])))   [B×H2]
+    z = alpha * feat_proj + (1-alpha) * CLS[:, :H2]
+    logits = fusion_head(z)
+    (also returns alpha for gate monitoring)
 
 This module also provides FusedDataCollator, FusedWeightedTrainer,
 save_fused_model, and load_fused_model.
@@ -50,65 +53,96 @@ from scriptguard.utils.logger import logger
 
 class FusedCodeBERTClassifier(nn.Module):
     """
-    GraphCodeBERT [CLS] embedding fused with a hand-crafted feature branch.
+    GraphCodeBERT [CLS] fused with hand-crafted features.
+
+    Fusion architecture is controlled by config.fusion_architecture:
+      "concat": features → MLP → cat([CLS, feat]) → fusion_head → logits
+      "gated":  features → projection → gated_combine → fusion_head → logits
+                also returns alpha for gate monitoring
 
     Args:
-        model_name:         HuggingFace model identifier (e.g. "microsoft/graphcodebert-base")
-        num_labels:         Number of output classes (2 for binary classification)
-        feature_dim:        Dimensionality of the hand-crafted feature vector (28)
-        mlp_hidden_dim:     Hidden units in the feature MLP branch (128)
-        fusion_hidden_dim:  Hidden units in the fusion head (256)
-        dropout_rate:       Dropout probability applied in the feature projection branch (0.2)
-        cls_head_dropout:   Dropout probability applied in the classification head (0.3)
+        model_name:  HuggingFace model identifier (e.g. "microsoft/graphcodebert-base")
+        num_labels:  Number of output classes (default 2)
+        config:      SimpleNamespace with architecture parameters:
+                       both arch:  feature_dim
+                       concat:     concat_mlp_hidden, concat_fusion_hidden, concat_dropout
+                       gated:      gated_proj_hidden_1, gated_proj_hidden_2, gated_proj_dropout,
+                                   gated_fusion_hidden, gated_fusion_dropout
+                     Defaults to concat with feature_dim=26 if None.
     """
 
     def __init__(
         self,
         model_name: str,
         num_labels: int = 2,
-        feature_dim: int = 26,
-        mlp_hidden_dim: int = 128,
-        fusion_hidden_dim: int = 256,
-        dropout_rate: float = 0.2,
-        cls_head_dropout: float = 0.3,
+        config: Optional[SimpleNamespace] = None,
     ) -> None:
         super().__init__()
         self.model_name = model_name
         self.num_labels = num_labels
-        self.feature_dim = feature_dim
-        self.mlp_hidden_dim = mlp_hidden_dim
-        self.fusion_hidden_dim = fusion_hidden_dim
-        self.dropout_rate = dropout_rate
-        self.cls_head_dropout = cls_head_dropout
 
-        # BERT backbone — raw encoder, not classification head
+        if config is None:
+            logger.warning(
+                "FusedCodeBERTClassifier: no config provided; defaulting to concat "
+                "architecture with feature_dim=26, concat_mlp_hidden=128, "
+                "concat_fusion_hidden=256, concat_dropout=0.3"
+            )
+            config = SimpleNamespace(
+                fusion_architecture="concat",
+                feature_dim=26,
+                concat_mlp_hidden=128,
+                concat_fusion_hidden=256,
+                concat_dropout=0.3,
+            )
+        self.config = config
+
+        # BERT backbone — raw encoder, no classification head
         self.bert = AutoModel.from_pretrained(model_name)
         bert_hidden: int = self.bert.config.hidden_size  # 768 for base models
 
-        # Feature projection: feature_dim → mlp_hidden_dim → fusion_hidden_dim
-        # dropout_rate (0.2) applied after each BN+GELU block
-        self.feat_proj = nn.Sequential(
-            nn.Linear(feature_dim, mlp_hidden_dim),
-            nn.BatchNorm1d(mlp_hidden_dim),
-            nn.GELU(),
-            nn.Dropout(dropout_rate),
-            nn.Linear(mlp_hidden_dim, fusion_hidden_dim),
-            nn.BatchNorm1d(fusion_hidden_dim),
-            nn.GELU(),
-            nn.Dropout(dropout_rate),
-        )
+        arch = config.fusion_architecture
 
-        # Gated fusion: Linear(bert_hidden + fusion_hidden_dim → fusion_hidden_dim)
-        # concat([e_trans, v_proj]) ∈ R^(768+256=1024) → alpha ∈ R^256
-        self.gate = nn.Linear(bert_hidden + fusion_hidden_dim, fusion_hidden_dim)
+        if arch == "concat":
+            # feature → MLP → concat([CLS, feat]) → fusion_head
+            self.mlp = nn.Sequential(
+                nn.Linear(config.feature_dim, config.concat_mlp_hidden),
+                nn.GELU(),
+                nn.Dropout(config.concat_dropout),
+            )
+            concat_dim = bert_hidden + config.concat_mlp_hidden
+            self.fusion_head = nn.Sequential(
+                nn.Linear(concat_dim, config.concat_fusion_hidden),
+                nn.GELU(),
+                nn.Dropout(config.concat_dropout),
+                nn.Linear(config.concat_fusion_hidden, num_labels),
+            )
 
-        # Classification head: fusion_hidden_dim → mlp_hidden_dim → num_labels
-        self.cls_head = nn.Sequential(
-            nn.Linear(fusion_hidden_dim, mlp_hidden_dim),
-            nn.GELU(),
-            nn.Dropout(cls_head_dropout),
-            nn.Linear(mlp_hidden_dim, num_labels),
-        )
+        elif arch == "gated":
+            # feature → signed-log1p → projection [BN blocks] → gated combine
+            self.projection = nn.Sequential(
+                nn.Linear(config.feature_dim, config.gated_proj_hidden_1),
+                nn.BatchNorm1d(config.gated_proj_hidden_1),
+                nn.GELU(),
+                nn.Dropout(config.gated_proj_dropout),
+                nn.Linear(config.gated_proj_hidden_1, config.gated_proj_hidden_2),
+                nn.BatchNorm1d(config.gated_proj_hidden_2),
+                nn.GELU(),
+                nn.Dropout(config.gated_proj_dropout),
+            )
+            gate_input_dim = bert_hidden + config.gated_proj_hidden_2
+            self.gate = nn.Linear(gate_input_dim, config.gated_proj_hidden_2)
+            self.fusion_head = nn.Sequential(
+                nn.Linear(config.gated_proj_hidden_2, config.gated_fusion_hidden),
+                nn.GELU(),
+                nn.Dropout(config.gated_fusion_dropout),
+                nn.Linear(config.gated_fusion_hidden, num_labels),
+            )
+
+        else:
+            raise ValueError(
+                f"FusedCodeBERTClassifier: unknown fusion_architecture={arch!r}. "
+                "Expected 'concat' or 'gated'."
+            )
 
     def forward(
         self,
@@ -122,35 +156,44 @@ class FusedCodeBERTClassifier(nn.Module):
         Args:
             input_ids:      [B, seq_len] Long tensor
             attention_mask: [B, seq_len] Long tensor
-            feature_vector: [B, feature_dim] Float tensor
-            labels:         [B] Long tensor (unused in forward; consumed by WeightedTrainer)
+            feature_vector: [B, feature_dim] Float tensor (StandardScaler-normalised)
+            labels:         [B] Long tensor — not used here; consumed by WeightedTrainer
 
         Returns:
-            SimpleNamespace with attribute `logits` of shape [B, num_labels].
+            SimpleNamespace with `logits` [B, num_labels].
+            Gated architecture additionally returns `alpha` [B, gated_proj_hidden_2].
         """
-        # BERT path → [CLS] representation
         bert_out = self.bert(input_ids=input_ids, attention_mask=attention_mask)
-        e_trans: torch.Tensor = bert_out.last_hidden_state[:, 0, :]  # [B, 768]
+        cls: torch.Tensor = bert_out.last_hidden_state[:, 0, :]  # [B, 768]
 
-        # Feature projection branch
-        # Cast to BERT dtype for fp16/bf16 autocast consistency, then apply log1p
-        v_feat: torch.Tensor = feature_vector.to(dtype=e_trans.dtype)
-        # Signed log1p: sign(x)·log1p(|x|) — numerically stable on Z-scored inputs
-        # (plain log1p(x) returns NaN for x < -1; signed form handles all reals)
-        v_feat_scaled: torch.Tensor = torch.sign(v_feat) * torch.log1p(v_feat.abs())
-        v_proj: torch.Tensor = self.feat_proj(v_feat_scaled)        # [B, 256]
+        # Cast feature_vector to BERT dtype for fp16/bf16 autocast consistency
+        features: torch.Tensor = feature_vector.to(dtype=cls.dtype)
 
-        # Gated fusion
-        concat: torch.Tensor = torch.cat([e_trans, v_proj], dim=-1) # [B, 1024]
-        alpha: torch.Tensor = torch.sigmoid(self.gate(concat))       # [B, 256]
-        z: torch.Tensor = (
-            alpha * v_proj + (1.0 - alpha) * e_trans[:, : self.fusion_hidden_dim]
-        )                                                             # [B, 256]
+        arch = self.config.fusion_architecture
 
-        # Classification head
-        logits: torch.Tensor = self.cls_head(z)                      # [B, 2]
+        if arch == "concat":
+            feat_proj: torch.Tensor = self.mlp(features)              # [B, concat_mlp_hidden]
+            fused: torch.Tensor = torch.cat([cls, feat_proj], dim=-1)  # [B, 768+H_mlp]
+            expected_dim = cls.shape[-1] + self.config.concat_mlp_hidden
+            if fused.shape[-1] != expected_dim:
+                logger.warning(
+                    f"Concat dim mismatch: got {fused.shape[-1]}, expected {expected_dim}"
+                )
+            logits: torch.Tensor = self.fusion_head(fused)             # [B, num_labels]
+            return SimpleNamespace(logits=logits)
 
-        return SimpleNamespace(logits=logits, alpha=alpha)
+        else:  # gated
+            # Signed log1p: sign(x)·log1p(|x|) — handles Z-scored values < -1 without NaN
+            feat_scaled: torch.Tensor = torch.sign(features) * torch.log1p(features.abs())
+            feat_proj = self.projection(feat_scaled)                    # [B, gated_proj_hidden_2]
+            concat: torch.Tensor = torch.cat([cls, feat_proj], dim=-1)
+            alpha: torch.Tensor = torch.sigmoid(self.gate(concat))      # [B, gated_proj_hidden_2]
+            z: torch.Tensor = (
+                alpha * feat_proj
+                + (1.0 - alpha) * cls[:, : self.config.gated_proj_hidden_2]
+            )
+            logits = self.fusion_head(z)                                # [B, num_labels]
+            return SimpleNamespace(logits=logits, alpha=alpha)
 
 
 # ---------------------------------------------------------------------------
@@ -451,14 +494,11 @@ def save_fused_model(
 
     st_save_file(model.state_dict(), os.path.join(output_dir, "model.safetensors"))
 
+    # Serialize model_name + num_labels + all fusion config attrs from SimpleNamespace
     model_cfg = {
         "model_name": model.model_name,
         "num_labels": model.num_labels,
-        "feature_dim": model.feature_dim,
-        "mlp_hidden_dim": model.mlp_hidden_dim,
-        "fusion_hidden_dim": model.fusion_hidden_dim,
-        "dropout_rate": model.dropout_rate,
-        "cls_head_dropout": model.cls_head_dropout,
+        **vars(model.config),
     }
     with open(os.path.join(output_dir, "fused_model_config.json"), "w") as f:
         json.dump(model_cfg, f, indent=2)
@@ -471,7 +511,7 @@ def save_fused_model(
     if os.path.abspath(scaler_path) != os.path.abspath(dest_scaler):
         shutil.copy(scaler_path, dest_scaler)
 
-    logger.info(f"Saved fused model to {output_dir}")
+    logger.info(f"Saved fused model ({model.config.fusion_architecture}) to {output_dir}")
 
 
 def load_fused_model(
@@ -490,14 +530,22 @@ def load_fused_model(
     with open(os.path.join(model_dir, "fused_model_config.json")) as f:
         cfg = json.load(f)
 
+    model_name: str = cfg.pop("model_name")
+    num_labels: int = cfg.pop("num_labels", 2)
+
+    if "fusion_architecture" not in cfg:
+        logger.warning(
+            "fused_model_config.json missing 'fusion_architecture'; defaulting to 'concat'. "
+            "This checkpoint was saved with an older version of FusedCodeBERTClassifier."
+        )
+        cfg["fusion_architecture"] = "concat"
+
+    fusion_config = SimpleNamespace(**cfg)
+
     model = FusedCodeBERTClassifier(
-        model_name=cfg["model_name"],
-        num_labels=cfg.get("num_labels", 2),
-        feature_dim=cfg.get("feature_dim", 26),
-        mlp_hidden_dim=cfg.get("mlp_hidden_dim", 128),
-        fusion_hidden_dim=cfg.get("fusion_hidden_dim", 256),
-        dropout_rate=cfg.get("dropout_rate", 0.2),
-        cls_head_dropout=cfg.get("cls_head_dropout", 0.3),
+        model_name=model_name,
+        num_labels=num_labels,
+        config=fusion_config,
     )
 
     state = st_load_file(
@@ -510,5 +558,5 @@ def load_fused_model(
 
     tokenizer = AutoTokenizer.from_pretrained(model_dir)
 
-    logger.info(f"Loaded fused model from {model_dir} on {device}")
+    logger.info(f"Loaded fused model ({fusion_config.fusion_architecture}) from {model_dir} on {device}")
     return model, tokenizer

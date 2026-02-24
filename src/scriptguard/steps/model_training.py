@@ -1,5 +1,6 @@
 import json
 import os
+from types import SimpleNamespace
 from typing import Any, Dict
 from zenml import step, ArtifactConfig
 from typing import Annotated
@@ -87,18 +88,30 @@ def train_codebert(
     decision_threshold: float = codebert_cfg.get("decision_threshold", 0.5)
 
     feature_dim: int = FeatureExtractor.FEATURE_DIM  # single source of truth
-    mlp_hidden_dim: int = codebert_cfg.get("mlp_hidden_dim", 128)
-    fusion_hidden_dim: int = codebert_cfg.get("fusion_hidden_dim", 256)
-    dropout_rate: float = codebert_cfg.get("dropout_rate", 0.2)
-    cls_head_dropout: float = codebert_cfg.get("cls_head_dropout", 0.3)
     num_labels: int = codebert_cfg.get("num_labels", 2)
     logging_steps: int = codebert_cfg.get("logging_steps", 50)
     save_total_limit: int = codebert_cfg.get("save_total_limit", 2)
     metric_for_best_model: str = codebert_cfg.get("metric_for_best_model", "eval_recall")
 
-    # Differential learning rates (Fix 2)
+    # Differential learning rates
     lr_backbone: float = codebert_cfg.get("lr_backbone", 1e-5)
     lr_fusion_head: float = codebert_cfg.get("lr_fusion_head", 1e-4)
+
+    # Build fusion architecture config — all dims read from config, feature_dim from extractor
+    fusion_config = SimpleNamespace(
+        fusion_architecture=codebert_cfg.get("fusion_architecture", "concat"),
+        feature_dim=feature_dim,
+        # Concat architecture params
+        concat_mlp_hidden=codebert_cfg.get("concat_mlp_hidden", 128),
+        concat_fusion_hidden=codebert_cfg.get("concat_fusion_hidden", 256),
+        concat_dropout=codebert_cfg.get("concat_dropout", 0.3),
+        # Gated architecture params
+        gated_proj_hidden_1=codebert_cfg.get("gated_proj_hidden_1", 128),
+        gated_proj_hidden_2=codebert_cfg.get("gated_proj_hidden_2", 256),
+        gated_proj_dropout=codebert_cfg.get("gated_proj_dropout", 0.2),
+        gated_fusion_hidden=codebert_cfg.get("gated_fusion_hidden", 128),
+        gated_fusion_dropout=codebert_cfg.get("gated_fusion_dropout", 0.3),
+    )
 
     # Focal alpha: per-class scaling [benign_alpha, malicious_alpha] (Fix 1)
     focal_alpha_malicious: float = codebert_cfg.get("focal_alpha_malicious", 0.75)
@@ -112,15 +125,14 @@ def train_codebert(
         logger.info(f"Loading tokenizer from {model_name}")
         tokenizer = AutoTokenizer.from_pretrained(model_name)
 
-        logger.info(f"Building FusedCodeBERTClassifier: {model_name}, feature_dim={feature_dim}")
+        logger.info(
+            f"Building FusedCodeBERTClassifier: {model_name}  "
+            f"arch={fusion_config.fusion_architecture}  feature_dim={feature_dim}"
+        )
         model = FusedCodeBERTClassifier(
             model_name=model_name,
             num_labels=num_labels,
-            feature_dim=feature_dim,
-            mlp_hidden_dim=mlp_hidden_dim,
-            fusion_hidden_dim=fusion_hidden_dim,
-            dropout_rate=dropout_rate,
-            cls_head_dropout=cls_head_dropout,
+            config=fusion_config,
         )
 
         # Backbone freeze: keep BERT frozen for the first N epochs so the fusion
