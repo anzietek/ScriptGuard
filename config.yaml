@@ -206,7 +206,7 @@ codebert:
   warmup_steps: 200
   lr_scheduler_type: "cosine"
   weight_decay: 0.1
-  num_epochs: 1
+  num_epochs: 3
   eval_threshold: 0.92
   focal_gamma: 2.0              # Focal Loss gamma: 0=CrossEntropy, 2=standard focal, higher=harder examples focus
   focal_alpha_malicious: 0.75  # Per-class focal alpha [benign=0.25, malicious=0.75]; balances FN vs FP
@@ -224,7 +224,7 @@ codebert:
   num_labels: 2
   mlp_hidden_dim: 128
   fusion_hidden_dim: 256
-  dropout_rate: 0.2       # projection branch dropout (feat_proj)
+  dropout_rate: 0.3       # projection branch dropout (feat_proj)
   cls_head_dropout: 0.3   # classification head dropout
   backbone_freeze_epochs: 1  # freeze BERT for epoch 0, unfreeze from epoch 1
 
