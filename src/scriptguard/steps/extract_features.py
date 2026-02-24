@@ -89,9 +89,8 @@ def cache_features(
         "benign_framework_score",
         # Aggregated binary flags (1) — index 21
         "malware_api_score",
-        # Targeted features — indices 22-27
-        "structural_malware_ratio", "dead_string_ratio",
-        "bitwise_logic_density", "string_mutation_density",
+        # Targeted features — indices 22-25
+        "structural_malware_ratio", "bitwise_logic_density",
         "data_to_logic_ratio", "logic_less_payload_volume",
     ]
 

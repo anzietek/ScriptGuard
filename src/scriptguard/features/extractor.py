@@ -1,8 +1,8 @@
 """
 Feature extractor for ScriptGuard fusion model.
-Extracts a 28-dimensional feature vector from Python source code.
+Extracts a 26-dimensional feature vector from Python source code.
 
-Output vector (FEATURE_DIM=28):
+Output vector (FEATURE_DIM=26):
   - 21 continuous/count features: AST structure metrics, import risk counts,
     entropy values, network counts, and statistical measures.
     NOTE: indices 1, 15, 16, 17 are log1p-scaled (n_calls, total_lines,
@@ -13,14 +13,14 @@ Output vector (FEATURE_DIM=28):
     network C2 indicators, crypto operations, filesystem recon, and 5 extended
     API flags (sys.gettrace, ctypes.VirtualAlloc, marshal.loads,
     zlib.decompress, platform.uname).
-  - 6 targeted features retained by |Δ| >= 0.05 diagnostics:
-      structural_malware_ratio, dead_string_ratio, bitwise_logic_density,
-      string_mutation_density, data_to_logic_ratio, logic_less_payload_volume.
+  - 4 targeted features retained by |Δ| >= 0.05 diagnostics:
+      structural_malware_ratio, bitwise_logic_density,
+      data_to_logic_ratio, logic_less_payload_volume.
 
 Sub-methods compute an intermediate 69-feature raw vector; extract() post-
-processes it into the final 28-dimensional form by separating continuous
+processes it into the final 26-dimensional form by separating continuous
 features from binary flags, applying log1p to 4 heavy features, aggregating
-the binary flags into malware_api_score, and appending the 6 targeted features.
+the binary flags into malware_api_score, and appending the 4 targeted features.
 """
 
 import ast
@@ -33,9 +33,9 @@ from scriptguard.utils.logger import logger
 
 class FeatureExtractor:
     """
-    Extracts 28-dimensional feature vector from Python source code.
+    Extracts 26-dimensional feature vector from Python source code.
 
-    Output layout (indices 0-27):
+    Output layout (indices 0-25):
         0-7:   AST counts (tree_depth, n_calls*, n_imports, n_funcdefs, n_classdefs,
                            n_for, n_while, n_try)  * log1p-scaled
         8-9:   Import counts (total_imports, high_risk_imports)
@@ -46,14 +46,12 @@ class FeatureExtractor:
         20:    benign_framework_score — weighted score of legitimate framework imports
         21:    malware_api_score — sum of 44 binary indicator flags
         22:    structural_malware_ratio — ln(n_calls)/(1+ln(n_funcdefs+n_classdefs))
-        23:    dead_string_ratio — log1p(string lens) / log1p(AST nodes)
-        24:    bitwise_logic_density — bitwise_ops / ln(1+total_chars)
-        25:    string_mutation_density — ln(1+str_mutations) / (1+ln(1+n_calls))
-        26:    data_to_logic_ratio — (Expr+Assign) / (1+If+For+While+Try)
-        27:    logic_less_payload_volume — ln(1+lit_lens) / ln(1+n_ast_nodes)
+        23:    bitwise_logic_density — bitwise_ops / ln(1+total_chars)
+        24:    data_to_logic_ratio — (Expr+Assign) / (1+If+For+While+Try)
+        25:    logic_less_payload_volume — ln(1+lit_lens) / ln(1+n_ast_nodes)
 
     Sub-methods produce a 69-feature raw vector which is post-processed in
-    extract() to yield this 28-dimensional output.
+    extract() to yield this 26-dimensional output.
     """
 
     _HIGH_RISK_IMPORTS = {
@@ -109,20 +107,20 @@ class FeatureExtractor:
     # Positions: n_calls=1, total_lines=15, avg_line_len=16, max_line_len=17
     _LOG1P_INDICES: tuple[int, ...] = (1, 15, 16, 17)
 
-    # 21 continuous + 1 malware_api_score + 6 targeted
-    FEATURE_DIM: int = len(_CONTINUOUS_INDICES) + 1 + 6
+    # 21 continuous + 1 malware_api_score + 4 targeted
+    FEATURE_DIM: int = len(_CONTINUOUS_INDICES) + 1 + 4
 
     def extract(self, code: str) -> list[float]:
         """
-        Extract 28-dimensional feature vector from Python source code.
+        Extract 26-dimensional feature vector from Python source code.
 
         Internally computes 69 raw features, then:
           - keeps 21 continuous/count features in order
           - sums all 44 binary flags into malware_api_score (index 21)
           - applies math.log1p to 4 heavy features (indices 1, 15, 16, 17)
-          - appends 6 targeted features (indices 22-27)
+          - appends 4 targeted features (indices 22-25)
 
-        Returns [0.0] * 28 on any top-level exception.
+        Returns [0.0] * 26 on any top-level exception.
         """
         try:
             _aliases: dict[str, str] = {}
@@ -156,17 +154,14 @@ class FeatureExtractor:
             for _idx in self._LOG1P_INDICES:
                 features[_idx] = math.log1p(features[_idx])
 
-            # Append 6 targeted features (indices 22-27)
+            # Append 4 targeted features (indices 22-25)
             # structural_malware_ratio reads features[1] (log1p n_calls), [3] (n_funcdefs), [4] (n_classdefs)
             features.append(self._structural_malware_ratio(features))          # 22
-            features.append(self._dead_string_ratio(code))                     # 23
-            features.append(self._bitwise_logic_density(code))                 # 24
-            # string_mutation_density reads features[1] (log1p n_calls)
-            features.append(self._string_mutation_density(code, features))     # 25
-            features.append(self._data_to_logic_ratio(code))                   # 26
-            features.append(self._logic_less_payload_volume(code))             # 27
+            features.append(self._bitwise_logic_density(code))                 # 23
+            features.append(self._data_to_logic_ratio(code))                   # 24
+            features.append(self._logic_less_payload_volume(code))             # 25
 
-            assert len(features) == self.FEATURE_DIM  # 28
+            assert len(features) == self.FEATURE_DIM  # 26
 
             # Sanity pass: replace non-finite values with 0.0, cap > 20.0
             for _i in range(len(features)):
@@ -1009,26 +1004,7 @@ class FeatureExtractor:
             return 0.0
 
     # ------------------------------------------------------------------
-    # dead_string_ratio (index 23)
-    # ------------------------------------------------------------------
-
-    def _dead_string_ratio(self, code: str) -> float:
-        try:
-            string_lits = re.findall(
-                r'(?:"(?:[^"\]|\.)*"|\'(?:[^\'\]|\.)*\')', code
-            )
-            sum_lens = sum(len(s) - 2 for s in string_lits if len(s) >= 2)
-            try:
-                tree = self._parse_ast(code)
-                n_ast_nodes = sum(1 for _ in ast.walk(tree))
-            except SyntaxError:
-                n_ast_nodes = max(1, len(code.splitlines()))
-            return math.log1p(max(0, sum_lens)) / math.log1p(max(1, n_ast_nodes))
-        except Exception:
-            return 0.0
-
-    # ------------------------------------------------------------------
-    # bitwise_logic_density (index 24)
+    # bitwise_logic_density (index 23)
     # ------------------------------------------------------------------
 
     _BITWISE_OP_TYPES: tuple = (
@@ -1053,47 +1029,7 @@ class FeatureExtractor:
             return 0.0
 
     # ------------------------------------------------------------------
-    # string_mutation_density (index 25)
-    # features[1] is already log1p(n_calls) from extract().
-    # ------------------------------------------------------------------
-
-    _STRING_MUTATORS: frozenset[str] = frozenset({
-        'replace', 'join', 'split', 'strip', 'lower', 'upper',
-    })
-
-    def _string_mutation_density(self, code: str, features: list[float]) -> float:
-        try:
-            count = 0
-            try:
-                tree = self._parse_ast(code)
-                for node in ast.walk(tree):
-                    if not isinstance(node, ast.Call):
-                        continue
-                    func = getattr(node, 'func', None)
-                    if not isinstance(func, ast.Attribute):
-                        continue
-                    if func.attr not in self._STRING_MUTATORS:
-                        continue
-                    val = getattr(func, 'value', None)
-                    if (
-                        isinstance(val, ast.Constant)
-                        and isinstance(val.value, str)
-                        and len(val.value) > 10
-                    ):
-                        count += 1
-            except SyntaxError:
-                count = len(re.findall(
-                    r'(?:"(?:[^"\]|\.){10,}"|\'(?:[^\'\]|\.){10,}\')\s*\.'
-                    r'(?:replace|join|split|strip|lower|upper)\s*\(',
-                    code,
-                ))
-            ln_n_calls = features[1]  # already log1p(n_calls) from extract()
-            return math.log1p(count) / (1.0 + ln_n_calls)
-        except Exception:
-            return 0.0
-
-    # ------------------------------------------------------------------
-    # data_to_logic_ratio (index 26)
+    # data_to_logic_ratio (index 24)
     # ------------------------------------------------------------------
 
     def _data_to_logic_ratio(self, code: str) -> float:
@@ -1111,7 +1047,7 @@ class FeatureExtractor:
             return 0.0
 
     # ------------------------------------------------------------------
-    # logic_less_payload_volume (index 27)
+    # logic_less_payload_volume (index 25)
     # ------------------------------------------------------------------
 
     def _logic_less_payload_volume(self, code: str) -> float:

@@ -66,7 +66,7 @@ class FusedCodeBERTClassifier(nn.Module):
         self,
         model_name: str,
         num_labels: int = 2,
-        feature_dim: int = 28,
+        feature_dim: int = 26,
         mlp_hidden_dim: int = 128,
         fusion_hidden_dim: int = 256,
         dropout_rate: float = 0.2,
@@ -376,7 +376,7 @@ def load_fused_model(
     model = FusedCodeBERTClassifier(
         model_name=cfg["model_name"],
         num_labels=cfg.get("num_labels", 2),
-        feature_dim=cfg.get("feature_dim", 28),
+        feature_dim=cfg.get("feature_dim", 26),
         mlp_hidden_dim=cfg.get("mlp_hidden_dim", 128),
         fusion_hidden_dim=cfg.get("fusion_hidden_dim", 256),
         dropout_rate=cfg.get("dropout_rate", 0.2),
