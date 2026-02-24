@@ -221,7 +221,8 @@ codebert:
   num_labels: 2
   mlp_hidden_dim: 128
   fusion_hidden_dim: 256
-  dropout_rate: 0.2       # projection branch; cls_head uses 0.3 (hardcoded)
+  dropout_rate: 0.2       # projection branch dropout (feat_proj)
+  cls_head_dropout: 0.3   # classification head dropout
   backbone_freeze_epochs: 1  # freeze BERT for epoch 0, unfreeze from epoch 1
 
 # ============================================================================

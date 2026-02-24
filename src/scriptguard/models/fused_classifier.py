@@ -53,12 +53,13 @@ class FusedCodeBERTClassifier(nn.Module):
     GraphCodeBERT [CLS] embedding fused with a hand-crafted feature branch.
 
     Args:
-        model_name:        HuggingFace model identifier (e.g. "microsoft/graphcodebert-base")
-        num_labels:        Number of output classes (2 for binary classification)
-        feature_dim:       Dimensionality of the hand-crafted feature vector (61)
-        mlp_hidden_dim:    Hidden units in the feature MLP branch (128)
-        fusion_hidden_dim: Hidden units in the fusion head (256)
-        dropout_rate:      Dropout probability applied after each hidden layer (0.3)
+        model_name:         HuggingFace model identifier (e.g. "microsoft/graphcodebert-base")
+        num_labels:         Number of output classes (2 for binary classification)
+        feature_dim:        Dimensionality of the hand-crafted feature vector (55)
+        mlp_hidden_dim:     Hidden units in the feature MLP branch (128)
+        fusion_hidden_dim:  Hidden units in the fusion head (256)
+        dropout_rate:       Dropout probability applied in the feature projection branch (0.2)
+        cls_head_dropout:   Dropout probability applied in the classification head (0.3)
     """
 
     def __init__(
@@ -69,6 +70,7 @@ class FusedCodeBERTClassifier(nn.Module):
         mlp_hidden_dim: int = 128,
         fusion_hidden_dim: int = 256,
         dropout_rate: float = 0.2,
+        cls_head_dropout: float = 0.3,
     ) -> None:
         super().__init__()
         self.model_name = model_name
@@ -77,6 +79,7 @@ class FusedCodeBERTClassifier(nn.Module):
         self.mlp_hidden_dim = mlp_hidden_dim
         self.fusion_hidden_dim = fusion_hidden_dim
         self.dropout_rate = dropout_rate
+        self.cls_head_dropout = cls_head_dropout
 
         # BERT backbone — raw encoder, not classification head
         self.bert = AutoModel.from_pretrained(model_name)
@@ -100,11 +103,10 @@ class FusedCodeBERTClassifier(nn.Module):
         self.gate = nn.Linear(bert_hidden + fusion_hidden_dim, fusion_hidden_dim)
 
         # Classification head: fusion_hidden_dim → mlp_hidden_dim → num_labels
-        # Dropout 0.3 hardcoded per spec
         self.cls_head = nn.Sequential(
             nn.Linear(fusion_hidden_dim, mlp_hidden_dim),
             nn.GELU(),
-            nn.Dropout(0.3),
+            nn.Dropout(cls_head_dropout),
             nn.Linear(mlp_hidden_dim, num_labels),
         )
 
@@ -337,6 +339,7 @@ def save_fused_model(
         "mlp_hidden_dim": model.mlp_hidden_dim,
         "fusion_hidden_dim": model.fusion_hidden_dim,
         "dropout_rate": model.dropout_rate,
+        "cls_head_dropout": model.cls_head_dropout,
     }
     with open(os.path.join(output_dir, "fused_model_config.json"), "w") as f:
         json.dump(model_cfg, f, indent=2)
@@ -371,10 +374,11 @@ def load_fused_model(
     model = FusedCodeBERTClassifier(
         model_name=cfg["model_name"],
         num_labels=cfg.get("num_labels", 2),
-        feature_dim=cfg.get("feature_dim", 61),
+        feature_dim=cfg.get("feature_dim", 55),
         mlp_hidden_dim=cfg.get("mlp_hidden_dim", 128),
         fusion_hidden_dim=cfg.get("fusion_hidden_dim", 256),
-        dropout_rate=cfg.get("dropout_rate", 0.3),
+        dropout_rate=cfg.get("dropout_rate", 0.2),
+        cls_head_dropout=cfg.get("cls_head_dropout", 0.3),
     )
 
     state = st_load_file(

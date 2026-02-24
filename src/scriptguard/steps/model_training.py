@@ -87,7 +87,8 @@ def train_codebert(
     feature_dim: int = FeatureExtractor.FEATURE_DIM  # single source of truth
     mlp_hidden_dim: int = codebert_cfg.get("mlp_hidden_dim", 128)
     fusion_hidden_dim: int = codebert_cfg.get("fusion_hidden_dim", 256)
-    dropout_rate: float = codebert_cfg.get("dropout_rate", 0.3)
+    dropout_rate: float = codebert_cfg.get("dropout_rate", 0.2)
+    cls_head_dropout: float = codebert_cfg.get("cls_head_dropout", 0.3)
     num_labels: int = codebert_cfg.get("num_labels", 2)
     logging_steps: int = codebert_cfg.get("logging_steps", 50)
     save_total_limit: int = codebert_cfg.get("save_total_limit", 2)
@@ -107,6 +108,7 @@ def train_codebert(
             mlp_hidden_dim=mlp_hidden_dim,
             fusion_hidden_dim=fusion_hidden_dim,
             dropout_rate=dropout_rate,
+            cls_head_dropout=cls_head_dropout,
         )
 
         # Backbone freeze: keep BERT frozen for the first N epochs so the fusion
