@@ -74,47 +74,25 @@ def cache_features(
     # Diagnostic: per-feature discrimination report (benign vs malicious mean)
     # ------------------------------------------------------------------
     _FEATURE_NAMES = [
-        # AST counts (10) — indices 0-9
+        # AST counts (8) — indices 0-7
         "tree_depth", "n_calls", "n_imports", "n_funcdefs", "n_classdefs",
-        "n_for", "n_while", "n_try", "n_exec_nodes", "exec_eval_depth",
-        # Import counts (2) — indices 10-11
+        "n_for", "n_while", "n_try",
+        # Import counts (2) — indices 8-9
         "total_imports", "high_risk_imports",
-        # Entropy values (3) — indices 12-14
+        # Entropy values (3) — indices 10-12
         "mean_str_entropy", "max_str_entropy", "high_entropy_count",
-        # Network counts (2) — indices 15-16
+        # Network counts (2) — indices 13-14
         "unique_ip_count", "unique_url_count",
-        # Statistical (5) — indices 17-21
-        "total_lines", "comment_density", "avg_line_len", "max_line_len", "line_len_cv",
-        # Obfuscation structural (2) — indices 22-23
-        "max_str_literal_len", "long_line_ratio",
-        # FP/FN mitigation (1) — index 24
+        # Statistical (5) — indices 15-19
+        "total_lines", "avg_line_len", "max_line_len", "line_len_cv", "long_line_ratio",
+        # FP/FN mitigation (1) — index 20
         "benign_framework_score",
-        # Aggregated binary flags (1) — index 25
+        # Aggregated binary flags (1) — index 21
         "malware_api_score",
-        # Targeted features P1-P4 — indices 26-29
-        "short_script_malware_score", "benign_context_ratio",
-        "package_infra_score", "direct_exec_chain_score",
-        # Behavioral-chain features P5-P10 — indices 30-35
-        "write_exec_chain_score", "in_memory_exec_score",
-        "string_fragmentation_ratio", "persistence_indicator",
-        "anti_debug_score", "execution_compactness_score",
-        # Stealth & structural features P11-P14 — indices 36-39
-        "dynamic_attribute_score", "network_exfil_fuzzy_score",
-        "structural_malware_ratio", "line_length_legitimacy_filter",
-        # Ghost-script detector P15 — index 40
-        "lone_call_in_global_scope",
-        # Data-density & shadowing P16-P19 — indices 41-44
-        "keyword_to_char_density", "non_ascii_ratio",
-        "dead_string_ratio", "suspicious_builtin_shadowing",
-        # Byte-buster features P20-P23 — indices 45-48
-        "byte_transform_ratio", "bitwise_logic_density",
-        "immediate_eval_flatness", "hex_payload_coverage",
-        # Reflection & data-structure features P24-P26 — indices 49-51
-        "reflection_proxy_score", "string_mutation_density",
-        "data_to_logic_ratio",
-        # Ghostbuster features P27-P29 — indices 52-54
-        "logic_less_payload_volume", "top_level_execution_density",
-        "builtin_cast_anomaly",
+        # Targeted features — indices 22-27
+        "structural_malware_ratio", "dead_string_ratio",
+        "bitwise_logic_density", "string_mutation_density",
+        "data_to_logic_ratio", "logic_less_payload_volume",
     ]
 
     all_vectors = {**cached, **newly_computed}

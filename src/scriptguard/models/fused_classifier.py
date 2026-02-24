@@ -55,7 +55,7 @@ class FusedCodeBERTClassifier(nn.Module):
     Args:
         model_name:         HuggingFace model identifier (e.g. "microsoft/graphcodebert-base")
         num_labels:         Number of output classes (2 for binary classification)
-        feature_dim:        Dimensionality of the hand-crafted feature vector (55)
+        feature_dim:        Dimensionality of the hand-crafted feature vector (28)
         mlp_hidden_dim:     Hidden units in the feature MLP branch (128)
         fusion_hidden_dim:  Hidden units in the fusion head (256)
         dropout_rate:       Dropout probability applied in the feature projection branch (0.2)
@@ -66,7 +66,7 @@ class FusedCodeBERTClassifier(nn.Module):
         self,
         model_name: str,
         num_labels: int = 2,
-        feature_dim: int = 55,
+        feature_dim: int = 28,
         mlp_hidden_dim: int = 128,
         fusion_hidden_dim: int = 256,
         dropout_rate: float = 0.2,
@@ -376,7 +376,7 @@ def load_fused_model(
     model = FusedCodeBERTClassifier(
         model_name=cfg["model_name"],
         num_labels=cfg.get("num_labels", 2),
-        feature_dim=cfg.get("feature_dim", 55),
+        feature_dim=cfg.get("feature_dim", 28),
         mlp_hidden_dim=cfg.get("mlp_hidden_dim", 128),
         fusion_hidden_dim=cfg.get("fusion_hidden_dim", 256),
         dropout_rate=cfg.get("dropout_rate", 0.2),
