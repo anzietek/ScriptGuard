@@ -682,14 +682,11 @@ wheels = [
 
 [[package]]
 name = "fickling"
-version = "0.1.7"
+version = "0.1.8"
 source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "stdlib-list" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/79/91/e05428d1891970047c9bb81324391f47bf3c612c4ec39f4eef3e40009e05/fickling-0.1.7.tar.gz", hash = "sha256:03d11db2fbb86eb40bdc12a3c4e7cac1dbb16e1207893511d7df0d91ae000899", size = 284009, upload-time = "2026-01-09T18:14:03.198Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/88/be/cd91e3921f064230ac9462479e4647fb91a7b0d01677103fce89f52e3042/fickling-0.1.8.tar.gz", hash = "sha256:25a0bc7acda76176a9087b405b05f7f5021f76079aa26c6fe3270855ec57d9bf", size = 336756, upload-time = "2026-02-21T00:57:26.106Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/85/44/9ce98b41f8b13bb8f7d5d688b95b8a1190533da39e7eb3d231f45ee38351/fickling-0.1.7-py3-none-any.whl", hash = "sha256:cebee4df382e27b6e33fb98a4c76fee01a333609bb992a26e140673954e561e4", size = 47923, upload-time = "2026-01-09T18:14:02.076Z" },
+    { url = "https://files.pythonhosted.org/packages/02/92/af72f783ac57fa2452f8f921c9441366c42ae1f03f5af41718445114c82f/fickling-0.1.8-py3-none-any.whl", hash = "sha256:97218785cfe00a93150808dcf9e3eb512371e0484e3ce0b05bc460b97240f292", size = 52613, upload-time = "2026-02-21T00:57:24.82Z" },
 ]
 
 [[package]]
@@ -923,6 +920,7 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/f9/c8/9d76a66421d1ae24340dfae7e79c313957f6e3195c144d2c73333b5bfe34/greenlet-3.3.1-cp312-cp312-macosx_11_0_universal2.whl", hash = "sha256:7e806ca53acf6d15a888405880766ec84721aa4181261cd11a457dfe9a7a4975", size = 276443, upload-time = "2026-01-23T15:30:10.066Z" },
     { url = "https://files.pythonhosted.org/packages/81/99/401ff34bb3c032d1f10477d199724f5e5f6fbfb59816ad1455c79c1eb8e7/greenlet-3.3.1-cp312-cp312-manylinux_2_24_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:d842c94b9155f1c9b3058036c24ffb8ff78b428414a19792b2380be9cecf4f36", size = 597359, upload-time = "2026-01-23T16:00:57.394Z" },
     { url = "https://files.pythonhosted.org/packages/2b/bc/4dcc0871ed557792d304f50be0f7487a14e017952ec689effe2180a6ff35/greenlet-3.3.1-cp312-cp312-manylinux_2_24_ppc64le.manylinux_2_28_ppc64le.whl", hash = "sha256:20fedaadd422fa02695f82093f9a98bad3dab5fcda793c658b945fcde2ab27ba", size = 607805, upload-time = "2026-01-23T16:05:28.068Z" },
+    { url = "https://files.pythonhosted.org/packages/3b/cd/7a7ca57588dac3389e97f7c9521cb6641fd8b6602faf1eaa4188384757df/greenlet-3.3.1-cp312-cp312-manylinux_2_24_s390x.manylinux_2_28_s390x.whl", hash = "sha256:c620051669fd04ac6b60ebc70478210119c56e2d5d5df848baec4312e260e4ca", size = 622363, upload-time = "2026-01-23T16:15:54.754Z" },
     { url = "https://files.pythonhosted.org/packages/cf/05/821587cf19e2ce1f2b24945d890b164401e5085f9d09cbd969b0c193cd20/greenlet-3.3.1-cp312-cp312-manylinux_2_24_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:14194f5f4305800ff329cbf02c5fcc88f01886cadd29941b807668a45f0d2336", size = 609947, upload-time = "2026-01-23T15:32:51.004Z" },
     { url = "https://files.pythonhosted.org/packages/a4/52/ee8c46ed9f8babaa93a19e577f26e3d28a519feac6350ed6f25f1afee7e9/greenlet-3.3.1-cp312-cp312-musllinux_1_2_aarch64.whl", hash = "sha256:7b2fe4150a0cf59f847a67db8c155ac36aed89080a6a639e9f16df5d6c6096f1", size = 1567487, upload-time = "2026-01-23T16:04:22.125Z" },
     { url = "https://files.pythonhosted.org/packages/8f/7c/456a74f07029597626f3a6db71b273a3632aecb9afafeeca452cfa633197/greenlet-3.3.1-cp312-cp312-musllinux_1_2_x86_64.whl", hash = "sha256:49f4ad195d45f4a66a0eb9c1ba4832bb380570d361912fa3554746830d332149", size = 1636087, upload-time = "2026-01-23T15:33:47.486Z" },
@@ -2884,15 +2882,6 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/ff/fb/2984a686808b89a6781526129a4b51266f678b2d2b97ab2d325e56116df8/starlette-0.45.3.tar.gz", hash = "sha256:2cbcba2a75806f8a41c722141486f37c28e30a0921c5f6fe4346cb0dcee1302f", size = 2574076, upload-time = "2025-01-24T11:17:36.535Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/d9/61/f2b52e107b1fc8944b33ef56bf6ac4ebbe16d91b94d2b87ce013bf63fb84/starlette-0.45.3-py3-none-any.whl", hash = "sha256:dfb6d332576f136ec740296c7e8bb8c8a7125044e7c6da30744718880cdd059d", size = 71507, upload-time = "2025-01-24T11:17:34.182Z" },
-]
-
-[[package]]
-name = "stdlib-list"
-version = "0.11.1"
-source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/5d/09/8d5c564931ae23bef17420a6c72618463a59222ca4291a7dd88de8a0d490/stdlib_list-0.11.1.tar.gz", hash = "sha256:95ebd1d73da9333bba03ccc097f5bac05e3aa03e6822a0c0290f87e1047f1857", size = 60442, upload-time = "2025-02-18T15:39:38.769Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/88/c7/4102536de33c19d090ed2b04e90e7452e2e3dc653cf3323208034eaaca27/stdlib_list-0.11.1-py3-none-any.whl", hash = "sha256:9029ea5e3dfde8cd4294cfd4d1797be56a67fc4693c606181730148c3fd1da29", size = 83620, upload-time = "2025-02-18T15:39:37.02Z" },
 ]
 
 [[package]]
