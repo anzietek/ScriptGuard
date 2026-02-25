@@ -10,6 +10,7 @@ Schema version history:
   v4 — 33-dim output (FEATURE_DIM=33: added 8 FP/FN mitigation features)
   v5 — 27-dim output (FEATURE_DIM=27: removed 6 zero-delta features, kept benign_framework_score + repetitive_identifier_ratio)
   v6 — 26-dim output (FEATURE_DIM=26: removed repetitive_identifier_ratio, Δ=-0.018 wrong direction)
+  v7 — 27-dim output (FEATURE_DIM=27: malware_api_score now sums 50 flags; added 6 gadget/introspection binary flags at raw indices 69-74; narrowed has_ctypes_windll; C2 pattern excludes websocket libs)
 """
 
 import json
@@ -19,7 +20,7 @@ from scriptguard.database.db_schema import get_connection, return_connection
 from scriptguard.features.extractor import FeatureExtractor
 from scriptguard.utils.logger import logger
 
-_SCHEMA_VERSION = 6
+_SCHEMA_VERSION = 7
 
 
 def load_features_from_db(sample_ids: list[int]) -> dict[int, list[float]]:
@@ -83,9 +84,9 @@ def save_features_to_db(features_by_id: dict[int, list[float]]) -> None:
     Persist feature vectors to the database.
 
     Args:
-        features_by_id: Dict mapping sample_id → 26-float feature list.
+        features_by_id: Dict mapping sample_id → 27-float feature list.
 
-    Stores as JSONB: {"v": 6, "values": [26 floats]} for schema versioning.
+    Stores as JSONB: {"v": 7, "values": [27 floats]} for schema versioning.
     Uses a single batch UPDATE for efficiency.
     """
     if not features_by_id:

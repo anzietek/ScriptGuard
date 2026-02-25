@@ -8,17 +8,19 @@ Output vector (FEATURE_DIM=27):
     NOTE: indices 1, 15, 16, 17 are log1p-scaled (n_calls, total_lines,
     avg_line_len, max_line_len) to prevent high-variance length features
     from drowning out behavioural signals.
-  - 1 malware_api_score: integer sum of 44 binary indicator flags covering
+  - 1 malware_api_score: integer sum of 50 binary indicator flags covering
     dangerous API imports, obfuscation patterns, persistence mechanisms,
-    network C2 indicators, crypto operations, filesystem recon, and 5 extended
+    network C2 indicators, crypto operations, filesystem recon, 5 extended
     API flags (sys.gettrace, ctypes.VirtualAlloc, marshal.loads,
-    zlib.decompress, platform.uname).
+    zlib.decompress, platform.uname), and 6 gadget/introspection flags
+    (__builtins__, __subclasses__/__mro__, credential stuffing, env exfil,
+    file self-exec, importlib spec_from_loader).
   - 5 targeted features:
       structural_malware_ratio, bitwise_logic_density,
       data_to_logic_ratio, logic_less_payload_volume,
       lolbin_c2_density  ← NEW: LOLBin/C2-channel/LDAP-recon density.
 
-Sub-methods compute an intermediate 69-feature raw vector; extract() post-
+Sub-methods compute an intermediate 75-feature raw vector; extract() post-
 processes it into the final 27-dimensional form by separating continuous
 features from binary flags, applying log1p to 4 heavy features, aggregating
 the binary flags into malware_api_score, and appending the 5 targeted features.
@@ -45,14 +47,14 @@ class FeatureExtractor:
         15-19: Statistical (total_lines*, avg_line_len*, max_line_len*, line_len_cv,
                             long_line_ratio)  * log1p-scaled
         20:    benign_framework_score — weighted score of legitimate framework imports
-        21:    malware_api_score — sum of 44 binary indicator flags
+        21:    malware_api_score — sum of 50 binary indicator flags
         22:    structural_malware_ratio — ln(n_calls)/(1+ln(n_funcdefs+n_classdefs))
         23:    bitwise_logic_density — bitwise_ops / ln(1+total_chars)
         24:    data_to_logic_ratio — (Expr+Assign) / (1+If+For+While+Try)
         25:    logic_less_payload_volume — ln(1+lit_lens) / ln(1+n_ast_nodes)
         26:    lolbin_c2_density — LOLBin/C2-channel/LDAP-recon match count / ln(1+chars)
 
-    Sub-methods produce a 69-feature raw vector which is post-processed in
+    Sub-methods produce a 75-feature raw vector which is post-processed in
     extract() to yield this 27-dimensional output.
     """
 
@@ -85,6 +87,10 @@ class FeatureExtractor:
         # has_sys_gettrace(64), has_ctypes_virtual_alloc(65), has_marshal_loads(66),
         # has_zlib_decompress(67), has_platform_uname(68)
         64, 65, 66, 67, 68,
+        # Gadget / introspection flags: indices 69-74
+        # has_builtins_gadget(69), has_subclasses_gadget(70), has_credential_stuffing(71),
+        # has_env_secret_exfil(72), has_file_self_exec(73), has_specload_exec(74)
+        69, 70, 71, 72, 73, 74,
     })
 
     # Indices of continuous/count features kept in output (order preserved).
@@ -98,11 +104,11 @@ class FeatureExtractor:
         63,                       # benign_framework_score
     )
 
-    # _RAW_DIM is fixed at 69. _CONTINUOUS_INDICES retains 21 of the 69 raw
+    # _RAW_DIM is fixed at 75. _CONTINUOUS_INDICES retains 21 of the 75 raw
     # features; 4 former continuous features (n_exec_nodes raw[8], exec_eval_depth
     # raw[10], comment_density raw[57], max_str_literal_len raw[61]) are dropped
     # silently — they are absent from both _CONTINUOUS_INDICES and _BINARY_INDICES.
-    _RAW_DIM: int = 69
+    _RAW_DIM: int = 75
 
     # Indices in the final feature vector where math.log1p() is applied to prevent
     # high-variance length/count features from dominating the behavioural signals.
@@ -143,6 +149,7 @@ class FeatureExtractor:
                 + self._statistical_features(code)            # 7   indices 56-62
                 + self._extra_features(code)                  # 1   index 63
                 + self._extended_api_flags(code, _aliases)    # 5   indices 64-68
+                + self._gadget_features(code)                 # 6   indices 69-74
             )
             assert len(raw) == self._RAW_DIM, (
                 f"Raw dimension mismatch: expected {self._RAW_DIM}, got {len(raw)}"
@@ -582,7 +589,7 @@ class FeatureExtractor:
                     break
 
             has_ctypes_windll = 0.0
-            if re.search(r'ctypes\.windll|windll\.kernel32|windll\.ntdll', code):
+            if re.search(r'windll\.kernel32\b|windll\.ntdll\b|windll\.advapi32\b', code):
                 has_ctypes_windll = 1.0
 
             has_process_injection = 0.0
@@ -676,9 +683,23 @@ class FeatureExtractor:
         except Exception:
             return [0.0] * 6
 
+    # Async streaming libraries whose .connect() is a library-level coroutine,
+    # not a raw socket connect — exclude from C2 pattern detection.
+    _WS_LIBS: frozenset = frozenset({'websockets', 'aiohttp', 'httpx', 'trio', 'anyio'})
+
     def _detect_c2_pattern(self, code: str) -> float:
+        # Exclude async streaming libs — their connect() is not a socket primitive.
         try:
             tree = self._parse_ast(code)
+            imported: set[str] = set()
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Import):
+                    for alias in node.names:
+                        imported.add(alias.name.split('.')[0])
+                elif isinstance(node, ast.ImportFrom) and node.module:
+                    imported.add(node.module.split('.')[0])
+            if imported & self._WS_LIBS:
+                return 0.0
         except SyntaxError:
             if re.search(r'\.connect\(', code) and re.search(r'\.(send|recv|sendall|recvfrom)\(', code):
                 return 1.0
@@ -991,6 +1012,41 @@ class FeatureExtractor:
         except Exception:
             return [0.0] * 5
 
+    # ------------------------------------------------------------------
+    # Gadget / introspection flags (6) — indices 69-74 in raw vector
+    # Covers Python sandbox-escape primitives, credential stuffing,
+    # covert exfil, self-reading droppers, and stealthy module injection.
+    # ------------------------------------------------------------------
+
+    def _gadget_features(self, code: str) -> list[float]:
+        try:
+            return [
+                # 69: __builtins__ dict access — bypasses Name-node exec/eval checks
+                float(bool(re.search(r'__builtins__\b', code))),
+                # 70: __subclasses__() / __mro__ — CPython/Jinja2 sandbox escape primitives
+                float(bool(re.search(r'__subclasses__\s*\(\s*\)|__mro__\b', code))),
+                # 71: SSH/auth brute-force — paramiko exception types only appear in brute-force loops
+                float(bool(re.search(
+                    r'AuthenticationException|BadAuthenticationType|NoValidConnectionsError'
+                    r'|for\s+\w+\s+in\s+\w*(?:password|passwd|wordlist|credential)',
+                    code, re.IGNORECASE,
+                ))),
+                # 72: env var secret harvesting — os.environ scan + HTTP POST exfil
+                float(
+                    bool(re.search(r'os\.environ', code))
+                    and bool(re.search(r'requests\.post\s*\(|urllib.*urlopen|http\.client.*request', code))
+                ),
+                # 73: self-reading dropper — open(__file__) for payload delivery
+                float(bool(re.search(
+                    r'open\s*\(\s*__file__\s*\)|open\s*\(\s*sys\.argv\s*\[\s*0\s*\]', code
+                ))),
+                # 74: stealthy module injection — importlib spec_from_loader bypasses import system
+                float(bool(re.search(
+                    r'spec_from_loader\b|exec_module\s*\(|types\.ModuleType\s*\(', code
+                ))),
+            ]
+        except Exception:
+            return [0.0] * 6
 
     # ------------------------------------------------------------------
     # structural_malware_ratio (index 22)
