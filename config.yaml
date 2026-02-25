@@ -206,7 +206,7 @@ codebert:
   warmup_steps: 200
   lr_scheduler_type: "cosine"
   weight_decay: 0.1
-  num_epochs: 5
+  num_epochs: 2
   eval_threshold: 0.92
   focal_gamma: 2.0              # Focal Loss gamma: 0=CrossEntropy, 2=standard focal
   focal_alpha_malicious: 0.75  # Per-class focal alpha [benign=0.25, malicious=0.75]
