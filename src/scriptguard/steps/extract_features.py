@@ -89,9 +89,10 @@ def cache_features(
         "benign_framework_score",
         # Aggregated binary flags (1) — index 21
         "malware_api_score",
-        # Targeted features — indices 22-25
+        # Targeted features — indices 22-26
         "structural_malware_ratio", "bitwise_logic_density",
         "data_to_logic_ratio", "logic_less_payload_volume",
+        "lolbin_c2_density",
     ]
 
     all_vectors = {**cached, **newly_computed}

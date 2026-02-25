@@ -53,6 +53,7 @@ data_sources:
       # Modern Threats (Stealers/RATs)
       - "discord token stealer python"
       - "telegram rat python"
+      - "telegram c2 python"
       - "browser password stealer python"
       - "cookie grabber python"
       - "wifi password stealer python"
@@ -62,6 +63,25 @@ data_sources:
       - "uac bypass python"
       - "exploit python"
       - "payload python"
+      # Living-off-the-land (LOLBins)
+      - "certutil download python"
+      - "bitsadmin python"
+      - "lolbin python"
+      - "living off the land python"
+      # C2 via legitimate APIs
+      - "telegram bot shell python"
+      - "discord webhook exfil python"
+      # Reconnaissance & exfiltration
+      - "dns exfiltration python"
+      - "ldap enumeration python"
+      - "active directory recon python"
+      - "environment secrets stealer python"
+      # Clipboard & crypto hijacking
+      - "clipboard hijacker python"
+      - "crypto address hijacker python"
+      # Persistence
+      - "wmi persistence python"
+      - "scheduled task persistence python"
 
     benign_repos:
       # Administrative & DevOps (Critical for reducing False Positives)
@@ -221,7 +241,7 @@ codebert:
   num_labels: 2
   # Fusion architecture selector — options: "concat" | "gated"
   fusion_architecture: "concat"
-  feature_dim: 26              # must match FeatureExtractor.FEATURE_DIM
+  feature_dim: 27              # must match FeatureExtractor.FEATURE_DIM
   # Concat architecture params
   concat_mlp_hidden: 128
   concat_fusion_hidden: 256
@@ -267,7 +287,7 @@ validation:
 augmentation:
   enabled: true
   variants_per_sample: 3  # Increased from 2 for more malware variants
-  techniques: ["base64", "hex", "rename_vars", "split_strings"]
+  techniques: ["base64", "hex", "rot13", "rename_vars", "split_strings", "add_junk"]
 
   balance_dataset: false  # DISABLED: Using weighted loss + augmentation to preserve all data
   target_balance_ratio: 1.0

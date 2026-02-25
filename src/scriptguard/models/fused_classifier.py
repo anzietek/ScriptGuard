@@ -68,7 +68,7 @@ class FusedCodeBERTClassifier(nn.Module):
                        concat:     concat_mlp_hidden, concat_fusion_hidden, concat_dropout
                        gated:      gated_proj_hidden_1, gated_proj_hidden_2, gated_proj_dropout,
                                    gated_fusion_hidden, gated_fusion_dropout
-                     Defaults to concat with feature_dim=26 if None.
+                     Defaults to concat with feature_dim=27 if None.
     """
 
     def __init__(
@@ -84,12 +84,12 @@ class FusedCodeBERTClassifier(nn.Module):
         if config is None:
             logger.warning(
                 "FusedCodeBERTClassifier: no config provided; defaulting to concat "
-                "architecture with feature_dim=26, concat_mlp_hidden=128, "
+                "architecture with feature_dim=27, concat_mlp_hidden=128, "
                 "concat_fusion_hidden=256, concat_dropout=0.3"
             )
             config = SimpleNamespace(
                 fusion_architecture="concat",
-                feature_dim=26,
+                feature_dim=27,
                 concat_mlp_hidden=128,
                 concat_fusion_hidden=256,
                 concat_dropout=0.3,

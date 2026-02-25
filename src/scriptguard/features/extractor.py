@@ -1,8 +1,8 @@
 """
 Feature extractor for ScriptGuard fusion model.
-Extracts a 26-dimensional feature vector from Python source code.
+Extracts a 27-dimensional feature vector from Python source code.
 
-Output vector (FEATURE_DIM=26):
+Output vector (FEATURE_DIM=27):
   - 21 continuous/count features: AST structure metrics, import risk counts,
     entropy values, network counts, and statistical measures.
     NOTE: indices 1, 15, 16, 17 are log1p-scaled (n_calls, total_lines,
@@ -13,14 +13,15 @@ Output vector (FEATURE_DIM=26):
     network C2 indicators, crypto operations, filesystem recon, and 5 extended
     API flags (sys.gettrace, ctypes.VirtualAlloc, marshal.loads,
     zlib.decompress, platform.uname).
-  - 4 targeted features retained by |Δ| >= 0.05 diagnostics:
+  - 5 targeted features:
       structural_malware_ratio, bitwise_logic_density,
-      data_to_logic_ratio, logic_less_payload_volume.
+      data_to_logic_ratio, logic_less_payload_volume,
+      lolbin_c2_density  ← NEW: LOLBin/C2-channel/LDAP-recon density.
 
 Sub-methods compute an intermediate 69-feature raw vector; extract() post-
-processes it into the final 26-dimensional form by separating continuous
+processes it into the final 27-dimensional form by separating continuous
 features from binary flags, applying log1p to 4 heavy features, aggregating
-the binary flags into malware_api_score, and appending the 4 targeted features.
+the binary flags into malware_api_score, and appending the 5 targeted features.
 """
 
 import ast
@@ -33,9 +34,9 @@ from scriptguard.utils.logger import logger
 
 class FeatureExtractor:
     """
-    Extracts 26-dimensional feature vector from Python source code.
+    Extracts 27-dimensional feature vector from Python source code.
 
-    Output layout (indices 0-25):
+    Output layout (indices 0-26):
         0-7:   AST counts (tree_depth, n_calls*, n_imports, n_funcdefs, n_classdefs,
                            n_for, n_while, n_try)  * log1p-scaled
         8-9:   Import counts (total_imports, high_risk_imports)
@@ -49,9 +50,10 @@ class FeatureExtractor:
         23:    bitwise_logic_density — bitwise_ops / ln(1+total_chars)
         24:    data_to_logic_ratio — (Expr+Assign) / (1+If+For+While+Try)
         25:    logic_less_payload_volume — ln(1+lit_lens) / ln(1+n_ast_nodes)
+        26:    lolbin_c2_density — LOLBin/C2-channel/LDAP-recon match count / ln(1+chars)
 
     Sub-methods produce a 69-feature raw vector which is post-processed in
-    extract() to yield this 26-dimensional output.
+    extract() to yield this 27-dimensional output.
     """
 
     _HIGH_RISK_IMPORTS = {
@@ -107,8 +109,8 @@ class FeatureExtractor:
     # Positions: n_calls=1, total_lines=15, avg_line_len=16, max_line_len=17
     _LOG1P_INDICES: tuple[int, ...] = (1, 15, 16, 17)
 
-    # 21 continuous + 1 malware_api_score + 4 targeted
-    FEATURE_DIM: int = len(_CONTINUOUS_INDICES) + 1 + 4
+    # 21 continuous + 1 malware_api_score + 5 targeted
+    FEATURE_DIM: int = len(_CONTINUOUS_INDICES) + 1 + 5
 
     def extract(self, code: str) -> list[float]:
         """
@@ -154,14 +156,15 @@ class FeatureExtractor:
             for _idx in self._LOG1P_INDICES:
                 features[_idx] = math.log1p(features[_idx])
 
-            # Append 4 targeted features (indices 22-25)
+            # Append 5 targeted features (indices 22-26)
             # structural_malware_ratio reads features[1] (log1p n_calls), [3] (n_funcdefs), [4] (n_classdefs)
             features.append(self._structural_malware_ratio(features))          # 22
             features.append(self._bitwise_logic_density(code))                 # 23
             features.append(self._data_to_logic_ratio(code))                   # 24
             features.append(self._logic_less_payload_volume(code))             # 25
+            features.append(self._lolbin_c2_density(code))                     # 26
 
-            assert len(features) == self.FEATURE_DIM  # 26
+            assert len(features) == self.FEATURE_DIM  # 27
 
             # Sanity pass: replace non-finite values with 0.0, cap > 20.0
             for _i in range(len(features)):
@@ -1000,6 +1003,43 @@ class FeatureExtractor:
             n_funcdefs = features[3]
             n_classdefs = features[4]
             return ln_n_calls / (1.0 + math.log1p(n_funcdefs + n_classdefs))
+        except Exception:
+            return 0.0
+
+    # ------------------------------------------------------------------
+    # lolbin_c2_density (index 26)
+    # Matches LOLBin binary names, known C2 channels via legitimate APIs,
+    # LDAP/AD recon patterns, and clipboard-hijack libraries.
+    # These patterns are virtually absent in benign code but consistently
+    # appear in living-off-the-land, C2, and reconnaissance malware.
+    # ------------------------------------------------------------------
+
+    _LOLBIN_RE: re.Pattern = re.compile(
+        r'\b(certutil|bitsadmin|mshta|msiexec|regsvr32|rundll32|wmic|'
+        r'cscript|wscript|installutil|schtasks|regasm|regsvcs|odbcconf|'
+        r'msbuild|dnscmd|netsh|appsync|pcalua)\b'
+        r'|api\.telegram\.org'
+        r'|discord\.com/api/webhooks'
+        r'|\bldap3\b|\bldap://'
+        r'|\bsAMAccountName\b'
+        r'|\bpyperclip\b'
+        r'|\bwin32clipboard\b',
+        re.IGNORECASE,
+    )
+
+    def _lolbin_c2_density(self, code: str) -> float:
+        """Count LOLBin/C2/LDAP-recon matches normalised by log1p(code_chars).
+
+        Returns matches / log1p(total_chars) so the feature stays bounded
+        even for very long scripts.  Capped at 5.0 to prevent outlier
+        dominance after StandardScaler normalisation.
+        """
+        try:
+            total_chars = len(code)
+            if total_chars == 0:
+                return 0.0
+            matches = len(self._LOLBIN_RE.findall(code))
+            return min(matches / math.log1p(total_chars), 5.0)
         except Exception:
             return 0.0
 
