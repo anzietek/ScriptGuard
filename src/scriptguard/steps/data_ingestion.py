@@ -7,7 +7,7 @@ from scriptguard.exceptions import DataIngestionError
 from scriptguard.utils.logger import logger
 
 
-@step
+@step(enable_cache=False)
 def ingest_data(
     config: Dict[str, Any],
 ) -> Annotated[List[Dict[str, Any]], ArtifactConfig(name="clean_data")]:
