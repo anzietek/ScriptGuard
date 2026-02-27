@@ -10,8 +10,9 @@ Supports two fusion architectures, selected by config.fusion_architecture:
 
   "gated":
     feature_vector [B×F] → signed-log1p → projection(F→H2) [BN+GELU blocks]
-    alpha = sigmoid(gate(cat([CLS, feat_proj])))   [B×H2]
-    z = alpha * feat_proj + (1-alpha) * CLS[:, :H2]
+    cls_proj = bert_projection(CLS) [B×H2]  (Linear+GELU+Dropout, no hard slicing)
+    alpha = sigmoid(gate(cat([cls_proj, feat_proj])))   [B×H2]
+    z = alpha * feat_proj + (1-alpha) * cls_proj
     logits = fusion_head(z)
     (also returns alpha for gate monitoring)
 
@@ -57,7 +58,7 @@ class FusedCodeBERTClassifier(nn.Module):
 
     Fusion architecture is controlled by config.fusion_architecture:
       "concat": features → MLP → cat([CLS, feat]) → fusion_head → logits
-      "gated":  features → projection → gated_combine → fusion_head → logits
+      "gated":  features → projection → gated_combine(cls_proj, feat_proj) → fusion_head → logits
                 also returns alpha for gate monitoring
 
     Args:
@@ -129,7 +130,16 @@ class FusedCodeBERTClassifier(nn.Module):
                 nn.GELU(),
                 nn.Dropout(config.gated_proj_dropout),
             )
-            gate_input_dim = bert_hidden + config.gated_proj_hidden_2
+            # Project BERT CLS (768) → H2 so it is compatible with feat_proj for gating.
+            # A learned linear projection preserves all semantic information; the old
+            # approach of hard-slicing CLS[:, :H2] discarded 512 of 768 dimensions.
+            self.bert_projection = nn.Sequential(
+                nn.Linear(bert_hidden, config.gated_proj_hidden_2),
+                nn.GELU(),
+                nn.Dropout(config.gated_proj_dropout),
+            )
+            # Gate input is cat([cls_proj, feat_proj]) — both are H2-dimensional.
+            gate_input_dim = config.gated_proj_hidden_2 * 2
             self.gate = nn.Linear(gate_input_dim, config.gated_proj_hidden_2)
             self.fusion_head = nn.Sequential(
                 nn.Linear(config.gated_proj_hidden_2, config.gated_fusion_hidden),
@@ -185,13 +195,11 @@ class FusedCodeBERTClassifier(nn.Module):
         else:  # gated
             # Signed log1p: sign(x)·log1p(|x|) — handles Z-scored values < -1 without NaN
             feat_scaled: torch.Tensor = torch.sign(features) * torch.log1p(features.abs())
-            feat_proj = self.projection(feat_scaled)                    # [B, gated_proj_hidden_2]
-            concat: torch.Tensor = torch.cat([cls, feat_proj], dim=-1)
-            alpha: torch.Tensor = torch.sigmoid(self.gate(concat))      # [B, gated_proj_hidden_2]
-            z: torch.Tensor = (
-                alpha * feat_proj
-                + (1.0 - alpha) * cls[:, : self.config.gated_proj_hidden_2]
-            )
+            feat_proj: torch.Tensor = self.projection(feat_scaled)      # [B, H2]
+            cls_proj: torch.Tensor = self.bert_projection(cls)          # [B, H2]
+            concat: torch.Tensor = torch.cat([cls_proj, feat_proj], dim=-1)  # [B, H2*2]
+            alpha: torch.Tensor = torch.sigmoid(self.gate(concat))      # [B, H2]
+            z: torch.Tensor = alpha * feat_proj + (1.0 - alpha) * cls_proj  # [B, H2]
             logits = self.fusion_head(z)                                # [B, num_labels]
             return SimpleNamespace(logits=logits, alpha=alpha)
 
