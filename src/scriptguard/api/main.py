@@ -3,7 +3,9 @@ ScriptGuard Inference API
 
 Start:
     uvicorn scriptguard.api.main:app --host 0.0.0.0 --port 8000
-    SCRIPTGUARD_MODEL_PATH=/workspace/models/codebert uvicorn scriptguard.api.main:app ...
+    SCRIPTGUARD_MODEL_PATH=models/checkpoint-51676 \
+    SCRIPTGUARD_SCALER_PATH=models/feature_scaler.joblib \
+    uvicorn scriptguard.api.main:app ...
 
 Endpoints:
     POST /classify          JSON body {"code": "..."}
@@ -31,20 +33,13 @@ _classifier = None
 
 def _load_classifier() -> None:
     global _classifier
-    from scriptguard.config_loader import load_config
     from scriptguard.inference.classifier import ScriptGuardClassifier
 
-    model_path = os.environ.get("SCRIPTGUARD_MODEL_PATH")
-    if not model_path:
-        cfg = load_config()
-        model_path = cfg.get("codebert", {}).get("output_dir")
-    if not model_path:
-        raise RuntimeError(
-            "Model path not configured. Set SCRIPTGUARD_MODEL_PATH env var "
-            "or codebert.output_dir in config.yaml"
-        )
-    logger.info(f"Loading ScriptGuard model from {model_path}")
-    _classifier = ScriptGuardClassifier(model_path)
+    model_path = os.environ.get("SCRIPTGUARD_MODEL_PATH", "models/checkpoint-51676")
+    scaler_path = os.environ.get("SCRIPTGUARD_SCALER_PATH", "models/feature_scaler.joblib")
+
+    logger.info(f"Loading ScriptGuard model from {model_path} (scaler: {scaler_path})")
+    _classifier = ScriptGuardClassifier(model_path=model_path, scaler_path=scaler_path)
     logger.info("Model ready")
 
 
