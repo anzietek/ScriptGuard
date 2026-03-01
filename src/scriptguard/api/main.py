@@ -82,12 +82,14 @@ app = FastAPI(
 class ClassifyRequest(BaseModel):
     code: str
     threshold: Optional[float] = None
+    debug: bool = False
 
 
 class ClassifyResponse(BaseModel):
-    label: str           # "malicious" | "benign"
-    confidence: float    # probability for the predicted label
-    malicious_prob: float  # raw P(malicious) regardless of label
+    label: str                          # "malicious" | "benign"
+    confidence: float                   # probability for the predicted label
+    malicious_prob: float               # raw P(malicious) regardless of label
+    ai_malicious_prob: Optional[float] = None  # raw CodeBERT prob; None when short-circuited
 
 
 # ---------------------------------------------------------------------------
@@ -109,7 +111,7 @@ def ready():
     return {"status": "ready"}
 
 
-def _run_classify(code: str, threshold: Optional[float]) -> ClassifyResponse:
+def _run_classify(code: str, threshold: Optional[float], debug: bool = False) -> ClassifyResponse:
     if _classifier is None:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -125,7 +127,7 @@ def _run_classify(code: str, threshold: Optional[float]) -> ClassifyResponse:
     try:
         if threshold is not None:
             _classifier._decision_threshold = threshold
-        label, confidence = _classifier.classify(code)
+        label, confidence, ai_prob = _classifier.classify(code, debug=debug)
     finally:
         _classifier._decision_threshold = original_threshold
 
@@ -136,19 +138,25 @@ def _run_classify(code: str, threshold: Optional[float]) -> ClassifyResponse:
     else:
         malicious_prob = 1.0 - confidence
 
-    return ClassifyResponse(label=label, confidence=confidence, malicious_prob=malicious_prob)
+    return ClassifyResponse(
+        label=label,
+        confidence=confidence,
+        malicious_prob=malicious_prob,
+        ai_malicious_prob=ai_prob,
+    )
 
 
 @app.post("/classify", response_model=ClassifyResponse, tags=["classify"])
 def classify_json(request: ClassifyRequest):
     """Classify Python source code passed as JSON string."""
-    return _run_classify(request.code, request.threshold)
+    return _run_classify(request.code, request.threshold, debug=request.debug)
 
 
 @app.post("/classify/file", response_model=ClassifyResponse, tags=["classify"])
 async def classify_file(
     file: UploadFile = File(...),
     threshold: Optional[float] = None,
+    debug: bool = False,
 ):
     """Classify a Python script uploaded as a file."""
     raw = await file.read()
@@ -156,4 +164,4 @@ async def classify_file(
         code = raw.decode("utf-8", errors="replace")
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Could not decode file: {e}")
-    return _run_classify(code, threshold)
+    return _run_classify(code, threshold, debug=debug)

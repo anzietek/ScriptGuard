@@ -1203,33 +1203,37 @@ class ScriptGuardClassifier:
             label=0,
         )
 
-    def classify(self, script: str) -> tuple[str, float]:
+    def classify(self, script: str, debug: bool = False) -> tuple[str, float, Optional[float]]:
         if not script or not script.strip():
             raise InferenceError("Cannot classify empty script")
 
         # 1. TRUST ENGINE (Behavioral Allowlist)
-        if self._trust_engine.is_safe(script):
+        is_trusted: bool = self._trust_engine.is_safe(script)
+        if is_trusted and not debug:
             logger.info("TrustEngine: Script matches strictly safe behavioral profile. Allowed.")
-            return "benign", 1.0
+            return "benign", 1.0, None
 
         # 2. HEURISTIC SHORT-CIRCUIT (Malware Overrides)
-        # Pobieramy flagi bezpośrednio z metod ekstraktora.
-        # Nie tniemy wektora 27-D, bo zgubimy dane.
+        # Parse AST for gadget/taint evaluation; failure is non-fatal —
+        # the feature extractor handles its own fallback independently.
         try:
             tree = self._extractor._parse_ast(script)
             aliases = self._extractor._build_alias_map(tree)
-        except SyntaxError:
+        except Exception:
             tree = None
             aliases = {}
 
         gadget_flags = self._extractor._gadget_features(script)
         taint_flags = self._extractor._taint_features(script, tree, aliases)
-
         critical_count = sum(gadget_flags) + sum(taint_flags)
+        is_heuristic_blocked: bool = critical_count >= self._heuristic_threshold
 
-        if critical_count >= self._heuristic_threshold:
-            logger.info(f"Heuristic Block: {sum(gadget_flags)} gadgets, {sum(taint_flags)} taints. Immediate block.")
-            return "malicious", 1.0
+        if is_heuristic_blocked and not debug:
+            logger.info(
+                f"Heuristic Block: {int(sum(gadget_flags))} gadgets, "
+                f"{int(sum(taint_flags))} taints. Immediate block."
+            )
+            return "malicious", 1.0, None
 
         # 3. FEATURE EXTRACTION FOR ML
         features_27d = self._extractor.extract(script)
@@ -1250,15 +1254,31 @@ class ScriptGuardClassifier:
                     attention_mask=attention_mask,
                     feature_vector=feature_tensor,
                 )
-
                 probs = torch.softmax(outputs.logits, dim=-1)
                 malicious_prob = probs[0][1].item()
                 if malicious_prob > best_malicious_prob:
                     best_malicious_prob = malicious_prob
 
         # 5. FINAL DECISION
-        # Ufamy domyślnemu progowi (bez sztucznego zaniżania do 0.15)
-        if best_malicious_prob >= self._decision_threshold:
-            return "malicious", best_malicious_prob
+        # In debug mode the override flags are still applied so the returned
+        # label/confidence faithfully reflects what the pipeline would have
+        # decided, while ai_malicious_prob always carries the raw model output.
+        if is_trusted:
+            logger.info(
+                f"TrustEngine [debug]: safe pattern matched; "
+                f"AI prob={best_malicious_prob:.4f}. Returning benign override."
+            )
+            return "benign", 1.0, best_malicious_prob
 
-        return "benign", 1.0 - best_malicious_prob
+        if is_heuristic_blocked:
+            logger.info(
+                f"Heuristic [debug]: {int(sum(gadget_flags))} gadgets, "
+                f"{int(sum(taint_flags))} taints; "
+                f"AI prob={best_malicious_prob:.4f}. Returning malicious override."
+            )
+            return "malicious", 1.0, best_malicious_prob
+
+        if best_malicious_prob >= self._decision_threshold:
+            return "malicious", best_malicious_prob, best_malicious_prob
+
+        return "benign", 1.0 - best_malicious_prob, best_malicious_prob
