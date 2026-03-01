@@ -137,6 +137,7 @@ class TrustEngine:
                 and re.search(r'(?:map|join)\s*\(\s*chr', c) is not None
         )),
         # ── NEW VETOS ──────────────────────────────────────────────────────
+        ("gui_hijack", lambda c: _rx(r'BlockInput|ShowWindow.*SW_HIDE', c)),
         # C2 webhook / messaging exfil — these are never legitimate in code
         # being scanned for malware regardless of other positive patterns
         ("c2_webhook", lambda c: _rx(
@@ -1209,7 +1210,7 @@ class ScriptGuardClassifier:
         # 1. TRUST ENGINE (Behavioral Allowlist)
         if self._trust_engine.is_safe(script):
             logger.info("TrustEngine: Script matches strictly safe behavioral profile. Allowed.")
-            return "benign", 0.0
+            return "benign", 1.0
 
         # 2. HEURISTIC SHORT-CIRCUIT (Malware Overrides)
         # Pobieramy flagi bezpośrednio z metod ekstraktora.
