@@ -33,13 +33,23 @@ _classifier = None
 
 def _load_classifier() -> None:
     global _classifier
+    from scriptguard.config_loader import load_config
     from scriptguard.inference.classifier import ScriptGuardClassifier
 
-    model_path = os.environ.get("SCRIPTGUARD_MODEL_PATH", "models/checkpoint-51676")
-    scaler_path = os.environ.get("SCRIPTGUARD_SCALER_PATH", "models/feature_scaler.joblib")
+    model_path = os.environ.get("SCRIPTGUARD_MODEL_PATH")
+    if not model_path:
+        cfg = load_config()
+        model_path = cfg.get("codebert", {}).get("output_dir")
+
+    if not model_path:
+        raise RuntimeError("Model path not configured.")
+
+    # Resolve scaler path (defaults to model_path/feature_scaler.joblib)
+    scaler_path = os.environ.get("SCRIPTGUARD_SCALER_PATH", os.path.join(model_path, "feature_scaler.joblib"))
 
     logger.info(f"Loading ScriptGuard model from {model_path} (scaler: {scaler_path})")
-    _classifier = ScriptGuardClassifier(model_path=model_path, scaler_path=scaler_path)
+    # Initialize with both required paths
+    _classifier = ScriptGuardClassifier(model_path, scaler_path)
     logger.info("Model ready")
 
 

@@ -1021,33 +1021,32 @@ class FeatureExtractor:
     def _gadget_features(self, code: str) -> list[float]:
         try:
             return [
-                # 69: __builtins__ dict access — bypasses Name-node exec/eval checks
-                float(bool(re.search(r'__builtins__\b', code))),
-                # 70: __subclasses__() / __mro__ — CPython/Jinja2 sandbox escape primitives
-                float(bool(re.search(r'__subclasses__\s*\(\s*\)|__mro__\b', code))),
-                # 71: SSH/auth brute-force — paramiko exception types only appear in brute-force loops
+                # 69: __builtins__ dict access
+                float(bool(re.search(r'__builtins__', code))),
+                # 70: __subclasses__() / __mro__
+                float(bool(re.search(r'__subclasses__|__mro__', code))),
+                # 71: SSH/auth brute-force
                 float(bool(re.search(
                     r'AuthenticationException|BadAuthenticationType|NoValidConnectionsError'
                     r'|for\s+\w+\s+in\s+\w*(?:password|passwd|wordlist|credential)',
                     code, re.IGNORECASE,
                 ))),
-                # 72: env var secret harvesting — os.environ scan + HTTP POST exfil
+                # 72: env var secret harvesting
                 float(
                     bool(re.search(r'os\.environ', code))
-                    and bool(re.search(r'requests\.post\s*\(|urllib.*urlopen|http\.client.*request', code))
+                    and bool(re.search(r'requests\.post|urllib|http\.client', code))
                 ),
-                # 73: self-reading dropper — open(__file__) for payload delivery
+                # 73: self-reading dropper (NAPRAWIONY REGEX - łapie tylko otwieranie własnego pliku)
+                float(bool(re.search(r'open\s*\(\s*__file__\s*\)|open\s*\(\s*sys\.argv\s*\[\s*0\s*\]\s*\)', code))),
+                # 74: stealthy module injection & execution obfuscation (ROZSZERZONY - zabija 7 Duchów)
                 float(bool(re.search(
-                    r'open\s*\(\s*__file__\s*\)|open\s*\(\s*sys\.argv\s*\[\s*0\s*\]', code
-                ))),
-                # 74: stealthy module injection — importlib spec_from_loader bypasses import system
-                float(bool(re.search(
-                    r'spec_from_loader\b|exec_module\s*\(|types\.ModuleType\s*\(', code
+                    r'spec_from_loader|exec_module|ModuleType|types\.FunctionType|'
+                    r'exec\s*\(\s*[a-zA-Z0-9_.]*(?:compile|marshal|zlib|base64)|'
+                    r'eval\s*\(\s*compile', code
                 ))),
             ]
         except Exception:
             return [0.0] * 6
-
     # ------------------------------------------------------------------
     # structural_malware_ratio (index 22)
     # features[1] is already log1p-scaled (n_calls); features[3,4] are raw counts.

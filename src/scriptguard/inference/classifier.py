@@ -66,13 +66,25 @@ class ScriptGuardClassifier:
         if not script or not script.strip():
             raise InferenceError("Cannot classify empty script")
 
+        # 1. Feature extraction
+        # Uwaga: to zwraca 27 elementów
+        features_27d = self._extractor.extract(script)
+
+        # 2. HEURISTIC SHORT-CIRCUIT
+        # Zamiast ciąć tablicę, wywołujemy bezpośrednio detektor gadżetów
+        critical_gadgets = self._extractor._gadget_features(script)
+        gadget_count = sum(critical_gadgets)
+
+        if gadget_count >= 1.0:
+            logger.info(f"Heuristic Match: {gadget_count} gadgets. Immediate block.")
+            return "malicious", 1.0
+
+        # 3. Standard AI Path (przywrócona pętla!)
+        scaled_features = self._scaler.transform(np.array([features_27d], dtype=np.float32))
+        feature_tensor = torch.tensor(scaled_features, dtype=torch.float32).to(self.device)
+
         chunks = self._chunk_script(script)
         best_malicious_prob: float = 0.0
-
-        # Extract and scale features once for the whole script; reuse across all chunks.
-        raw_features = self._extractor.extract(script)
-        scaled_features = self._scaler.transform(np.array([raw_features], dtype=np.float32))
-        feature_tensor = torch.tensor(scaled_features, dtype=torch.float32).to(self.device)
 
         with torch.no_grad():
             for chunk in chunks:
@@ -83,11 +95,14 @@ class ScriptGuardClassifier:
                     attention_mask=attention_mask,
                     feature_vector=feature_tensor,
                 )
+
                 probs = torch.softmax(outputs.logits, dim=-1)
                 malicious_prob = probs[0][1].item()
                 if malicious_prob > best_malicious_prob:
                     best_malicious_prob = malicious_prob
 
+        # 4. Strict Threshold for Benign Safety
         if best_malicious_prob >= self._decision_threshold:
             return "malicious", best_malicious_prob
+
         return "benign", 1.0 - best_malicious_prob
