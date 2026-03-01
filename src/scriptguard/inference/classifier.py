@@ -95,7 +95,7 @@ class TrustEngine:
         ("injection_api", lambda c: _any(c, *_INJECTION_API)),
         ("persistence", lambda c: _any(c, *_PERSISTENCE)),
         ("exfil_domain", lambda c: _any(c, *_EXFIL)),
-        #("shell_sink", lambda c: _any(c, *_SHELL_SINK)),
+        # ("shell_sink", lambda c: _any(c, *_SHELL_SINK)),
         ("deserialization", lambda c: _any(c, *_DESER)),
         ("dangerous_dunder", lambda c: _any(c, *_DANGEROUS_DUNDER)),
         ("attacker_ip", lambda c: _rx(
@@ -803,8 +803,7 @@ class TrustEngine:
                 "string_template",
                 lambda c: (
                         "import string" in c
-                        and _any(c, "string.Template", "string.ascii",
-                                 "string.digits", "string.punctuation")
+                        and _any(c, "string.Template")
                         and _none(c, *_EXEC_FAMILY, *_SHELL_SINK, *_NETWORK_SINK)
                 ),
             ),
@@ -1077,6 +1076,8 @@ class TrustEngine:
                         and _none(c, *_EXEC_FAMILY, *_SHELL_SINK, *_EXFIL)
                 ),
             ),
+            # Ransomware / Wiper pattern block
+            ("ransomware_crypto", lambda c: _rx(r'Fernet\.encrypt|AES.*encrypt|encrypt.*payload', c, re.I)),
         ]
 
     # -------------------------------------------------------------------------
