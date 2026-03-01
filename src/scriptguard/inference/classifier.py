@@ -131,6 +131,52 @@ class TrustEngine:
             and re.search(r'\bexec\b|\beval\b', c) is not None
             and re.search(r'(?:map|join)\s*\(\s*chr', c) is not None
         )),
+        # ── NEW VETOS ──────────────────────────────────────────────────────
+        # C2 webhook / messaging exfil — these are never legitimate in code
+        # being scanned for malware regardless of other positive patterns
+        ("c2_webhook",        lambda c: _rx(
+            r'hooks\.slack\.com|api\.telegram\.org'
+            r'|discord\.com/api/webhooks'
+            r'|discord\.Client\s*\('
+            r'|t\.me/|telegram\.me/', c, re.I
+        )),
+        # Port scan: socket.connect_ex across range of ports
+        ("port_scan",         lambda c: _rx(
+            r'connect_ex\s*\(.*range\s*\('
+            r'|range\s*\(.*connect_ex\s*\('
+            r'|OPEN_PORTS|open_ports', c, re.DOTALL | re.I
+        )),
+        # sys.modules poisoning (replace stdlib module)
+        ("modules_poison",    lambda c: _rx(
+            r'sys\.modules\s*\[\s*["\'](?:os|subprocess|socket|builtins)["\']'
+            r'\s*\]\s*=', c
+        )),
+        # Network requests combined with env secret harvesting = exfil
+        ("env_secret_exfil",  lambda c: (
+            _rx(r'os\.environ\.items\(\)', c)
+            and _rx(r'(?:KEY|TOKEN|SECRET|PASSWORD)', c, re.I)
+            and _any(c, "requests.", "socket.", "urllib.", "httpx.")
+        )),
+        # codecs.register() as exec smuggling vector
+        ("codec_register",    lambda c: (
+            "codecs.register" in c
+            and _rx(r'\bexec\b|\beval\b', c)
+        )),
+        # threading.Timer used as deferred exec
+        ("timer_deferred_exec", lambda c: (
+            _rx(r'threading\.Timer|Timer\s*\(', c)
+            and _rx(r'\bexec\b|\beval\b', c)
+        )),
+        # __missing__ dunder used to exec on dict access
+        ("missing_exec",      lambda c: (
+            _rx(r'def\s+__missing__', c)
+            and _rx(r'\bexec\b|\beval\b', c)
+        )),
+        # contextlib.suppress wrapping exec (not just bare suppress)
+        ("suppress_exec",     lambda c: (
+            _rx(r'suppress\s*\([^)]*\).*\bexec\b'
+                r'|with\s+suppress\s*\([^)]*\)[^:]*:.*\bexec\b', c, re.DOTALL)
+        )),
     ]
 
     def __init__(self) -> None:
@@ -575,6 +621,13 @@ class TrustEngine:
                              "json.load", "json.dump")
                     and _none(c, *_EXEC_FAMILY, *_SHELL_SINK,
                               *_EXFIL, *_INJECTION_API)
+                    # Disqualify when json.dumps result is POSTed to external URL
+                    # (data exfil pattern)
+                    and not _rx(
+                        r'requests\.post\s*\(.*json\s*=|json\.dumps.*requests',
+                        c, re.DOTALL
+                    )
+                    and not _rx(r'hooks\.slack\.com|api\.telegram\.org', c, re.I)
                 ),
             ),
             (
@@ -795,7 +848,12 @@ class TrustEngine:
                              "RLock(", "Semaphore(", "Barrier(")
                     and _none(c, *_EXEC_FAMILY, *_SHELL_SINK,
                               *_INJECTION_API, *_EXFIL)
-                    and "Timer(" not in c  # Timer() used as deferred-exec trick
+                    and "Timer(" not in c
+                    # Exclude port scanners: Thread + socket + connect_ex over range
+                    and not (
+                        "socket" in c
+                        and "connect_ex" in c
+                    )
                 ),
             ),
             (

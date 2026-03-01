@@ -8,11 +8,11 @@ Output vector (FEATURE_DIM=27):
     NOTE: indices 1, 15, 16, 17 are log1p-scaled (n_calls, total_lines,
     avg_line_len, max_line_len) to prevent high-variance length features
     from drowning out behavioural signals.
-  - 1 malware_api_score: integer sum of 113 binary indicator flags covering
+  - 1 malware_api_score: integer sum of 121 binary indicator flags covering
     dangerous API imports, obfuscation patterns, persistence mechanisms,
     network C2 indicators, crypto operations, filesystem recon, 5 extended
     API flags (sys.gettrace, ctypes.VirtualAlloc, marshal.loads,
-    zlib.decompress, platform.uname), 39 gadget/introspection flags,
+    zlib.decompress, platform.uname), 47 gadget/introspection flags,
     and 30 taint/data-flow flags (source->sink variable tracking).
   - 5 targeted features:
       structural_malware_ratio, bitwise_logic_density,
@@ -24,7 +24,7 @@ processes it into the final 27-dimensional form by separating continuous
 features from binary flags, applying log1p to 4 heavy features, aggregating
 the binary flags into malware_api_score, and appending the 5 targeted features.
 
-Raw vector layout (138 features):
+Raw vector layout (146 features):
   0-12  : _ast_features           (13)
   13-23 : _import_features        (11)
   24-27 : _entropy_features       (4)
@@ -36,8 +36,8 @@ Raw vector layout (138 features):
   56-62 : _statistical_features   (7)
   63    : _extra_features          (1)
   64-68 : _extended_api_flags     (5)
-  69-107: _gadget_features        (39)
-  108-137: _taint_features        (30)
+  69-115: _gadget_features        (47)
+  116-145: _taint_features        (30)
 """
 
 import ast
@@ -63,7 +63,7 @@ class FeatureExtractor:
         15-19: Statistical (total_lines*, avg_line_len*, max_line_len*,
                             line_len_cv, long_line_ratio)  *log1p-scaled
         20   : benign_framework_score
-        21   : malware_api_score -- sum of 113 binary flags
+        21   : malware_api_score -- sum of 121 binary flags
         22   : structural_malware_ratio
         23   : bitwise_logic_density
         24   : data_to_logic_ratio
@@ -106,15 +106,16 @@ class FeatureExtractor:
         53, 54, 55,
         # Extended API
         64, 65, 66, 67, 68,
-        # Gadget flags
+        # Gadget flags (47: indices 69-115)
         69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79,
         80, 81, 82, 83, 84, 85, 86, 87, 88, 89,
         90, 91, 92, 93, 94, 95, 96, 97, 98, 99,
         100, 101, 102, 103, 104, 105, 106, 107,
-        # Taint/data-flow flags
-        108, 109, 110, 111, 112, 113, 114, 115, 116, 117,
-        118, 119, 120, 121, 122, 123, 124, 125, 126, 127,
-        128, 129, 130, 131, 132, 133, 134, 135, 136, 137,
+        108, 109, 110, 111, 112, 113, 114, 115,
+        # Taint/data-flow flags (30: indices 116-145)
+        116, 117, 118, 119, 120, 121, 122, 123, 124, 125,
+        126, 127, 128, 129, 130, 131, 132, 133, 134, 135,
+        136, 137, 138, 139, 140, 141, 142, 143, 144, 145,
     })
 
     _CONTINUOUS_INDICES: tuple = (
@@ -126,7 +127,7 @@ class FeatureExtractor:
         63,
     )
 
-    _RAW_DIM: int = 138
+    _RAW_DIM: int = 146
 
     _LOG1P_INDICES: tuple[int, ...] = (1, 15, 16, 17)
 
@@ -206,8 +207,8 @@ class FeatureExtractor:
                 + self._statistical_features(code)             # 7   [56-62]
                 + self._extra_features(code)                   # 1   [63]
                 + self._extended_api_flags(code, _aliases)     # 5   [64-68]
-                + self._gadget_features(code)                  # 39  [69-107]
-                + self._taint_features(code, _tree, _aliases)  # 30  [108-137]
+                + self._gadget_features(code)                  # 47  [69-115]
+                + self._taint_features(code, _tree, _aliases)  # 30  [116-145]
             )
 
             assert len(raw) == self._RAW_DIM, (
@@ -1047,16 +1048,17 @@ class FeatureExtractor:
             return [0.0] * 5
 
     # -------------------------------------------------------------------------
-    # Gadget / introspection flags (39) -- indices 69-107
+    # Gadget / introspection flags (47) -- indices 69-115
     # -------------------------------------------------------------------------
 
     def _gadget_features(self, code: str) -> list[float]:
         """
-        39 binary behavioral flags covering Python sandbox-escape primitives,
+        47 binary behavioral flags covering Python sandbox-escape primitives,
         credential/secret theft, container/cloud escapes, OS-level recon,
         persistence, self-replication, advanced module loaders, unsafe
         deserialization, memory manipulation, stealthy exec patterns,
-        deferred execution, and C2 communication channels.
+        deferred execution, C2 communication channels, and newly-added
+        indirect-exec and obfuscation primitives.
         """
         try:
             def hit(pattern: str, flags: int = 0) -> float:
@@ -1074,9 +1076,10 @@ class FeatureExtractor:
                 hit(r'__subclasses__\s*\(\s*\).*catch_warnings'
                     r'|catch_warnings.*__subclasses__', re.DOTALL),
 
-                # ── Exception hiding (73) ─────────────────────────────────
-                hit(r'contextlib\.suppress.*exec'
-                    r'|except\s*[:\(].*\bpass\b.*exec', re.DOTALL),
+                # Exception hiding (73) — suppress()+exec in any order
+                hit(r'suppress\s*\([^)]*\).*\bexec\b'
+                    r'|with\s+suppress\s*\([^)]*\)[^:]*:.*\bexec\b'
+                    r'|\bexec\b.*with\s+suppress', re.DOTALL),
 
                 # ── Credential & secret theft (74-79) ────────────────────
                 hit(r'AuthenticationException|ftplib\.FTP'
@@ -1160,12 +1163,36 @@ class FeatureExtractor:
                 hit(r'gethostbyname.*base3[26]|exfil.*dns|dns.*exfil', I),
                 hit(r'while\s+True.*requests\.post.*sleep'
                     r'|beacon.*C2|jitter.*sleep', re.DOTALL),
+
+                # ── NEW: Indirect exec via getattr(builtins) (108-local equiv) ──
+                # Unicode/homoglyph: chr() list -> getattr(builtins, name) -> call
+                hit(r'getattr\s*\(\s*(?:_b|builtins|__builtins__)\s*,\s*\w'),
+                # sys.modules poisoning: replace stdlib module with malicious class
+                hit(r'sys\.modules\s*\[\s*["\'](?:os|subprocess|socket|importlib)["\']'
+                    r'\s*\]\s*='),
+                # __missing__ hook used to execute payload on dict key access
+                hit(r'def\s+__missing__\s*\(\s*self\s*,\s*\w+\s*\)'
+                    r'.*(?:exec|eval|compile|__import__)', re.DOTALL),
+                # threading.Timer used as deferred exec vector
+                hit(r'threading\.Timer\s*\(.*function\s*=\s*\w+'
+                    r'|Timer\s*\(\s*\d+[\.\d]*\s*,\s*\w+\s*\)', re.DOTALL),
+                # codecs.register() used to smuggle exec inside codec search fn
+                hit(r'codecs\.register\s*\('),
+                # port scan pattern: socket.connect_ex to range of ports
+                hit(r'connect_ex\s*\(.*\brange\s*\(|range\s*\(.*connect_ex\s*\(',
+                    re.DOTALL),
+                # type() used to construct code/function objects from compiled code
+                hit(r'types\.FunctionType\s*\([^)]*\.co_consts'
+                    r'|types\.CodeType\s*\('),
+                # env var used as payload carrier: assign b64/hex to os.environ then exec
+                hit(r'os\.environ\s*\[\s*["\'][^"\']+["\']\s*\]\s*='
+                    r'.*(?:b64encode|hexlify|encode)', re.DOTALL),
             ]
         except Exception:
-            return [0.0] * 39
+            return [0.0] * 47
 
     # -------------------------------------------------------------------------
-    # Taint / data-flow features (30) -- indices 108-137
+    # Taint / data-flow features (30) -- indices 116-145
     #
     # Lightweight intra-procedural taint analysis on the AST detecting
     # source->sink variable flows that regex alone cannot catch, e.g.:
