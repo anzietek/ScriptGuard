@@ -1283,3 +1283,141 @@ class ScriptGuardClassifier:
             return "malicious", best_malicious_prob, best_malicious_prob
 
         return "benign", 1.0 - best_malicious_prob, best_malicious_prob
+
+
+# =============================================================================
+# EnsembleClassifier — soft-voting: CodeBERT + XGBoost
+# =============================================================================
+
+class EnsembleClassifier(ScriptGuardClassifier):
+    """
+    Soft-voting ensemble: CodeBERT fused model + XGBoost (146-dim raw features).
+
+    Voting:
+        xgb_calibrated = min(prob_xgb / (xgb_threshold * 2), 1.0)
+        prob_final = w_bert * prob_bert + w_xgb * xgb_calibrated
+
+    Kalibracja XGBoost: skaluje surowe prob przez próg żeby 0.5 odpowiadało
+    skalibrowanemu threshold — normalizuje skalę XGBoost do tej samej co BERT.
+
+    Wagi domyślne: bert=0.6, xgb=0.4 (BERT dominuje, XGBoost jako dodatkowy głos).
+    Wszystkie parametry można nadpisać w inference_config.json.
+    """
+
+    def __init__(
+        self,
+        model_path: str,
+        scaler_path: str,
+        xgb_path: str,
+    ) -> None:
+        super().__init__(model_path, scaler_path)
+
+        # Odczytaj wagi i próg z inference_config.json
+        config_file = Path(model_path) / "inference_config.json"
+        w_bert      = 0.6
+        w_xgb       = 0.4
+        xgb_threshold = 0.75
+        if config_file.exists():
+            with open(config_file) as f:
+                cfg = json.load(f)
+            w_bert        = cfg.get("ensemble_weight_bert", w_bert)
+            w_xgb         = cfg.get("ensemble_weight_xgb",  w_xgb)
+            xgb_threshold = cfg.get("xgb_threshold", xgb_threshold)
+
+        self._w_bert: float         = w_bert
+        self._w_xgb: float          = w_xgb
+        self._xgb_threshold: float  = xgb_threshold
+
+        from scriptguard.models.xgb_classifier import XGBMalwareClassifier
+        self._xgb = XGBMalwareClassifier(xgb_path, threshold=xgb_threshold)
+        logger.info(
+            f"EnsembleClassifier ready — "
+            f"bert={w_bert}, xgb={w_xgb}, xgb_threshold={xgb_threshold:.3f}"
+        )
+
+    def classify(
+        self, script: str, debug: bool = False
+    ) -> tuple[str, float, Optional[float]]:
+        if not script or not script.strip():
+            raise InferenceError("Cannot classify empty script")
+
+        # 1. TRUST ENGINE
+        is_trusted = self._trust_engine.is_safe(script)
+        if is_trusted and not debug:
+            logger.info("TrustEngine: safe. Allowed.")
+            return "benign", 1.0, None
+
+        # 2. HEURISTIC SHORT-CIRCUIT
+        try:
+            tree = self._extractor._parse_ast(script)
+            aliases = self._extractor._build_alias_map(tree)
+        except Exception:
+            tree = None
+            aliases = {}
+
+        gadget_flags = self._extractor._gadget_features(script)
+        taint_flags  = self._extractor._taint_features(script, tree, aliases)
+        critical_count = sum(gadget_flags) + sum(taint_flags)
+        is_heuristic_blocked = critical_count >= self._heuristic_threshold
+
+        if is_heuristic_blocked and not debug:
+            logger.info(f"Heuristic Block: {int(critical_count)} flags.")
+            return "malicious", 1.0, None
+
+        # 3. XGBoost — raw prob + kalibracja progu
+        raw_features  = self._extractor.extract_raw(script)
+        prob_xgb_raw  = self._xgb.predict_proba(raw_features)
+        # Normalizacja: prob_xgb_raw / (threshold * 2) → 0.5 przy threshold
+        xgb_calibrated = min(prob_xgb_raw / (self._xgb_threshold * 2), 1.0)
+
+        # 4. CodeBERT probability (27-dim scaled features)
+        features_27d = self._extractor.extract(script)
+        scaled = self._scaler.transform(
+            np.array([features_27d], dtype=np.float32)
+        )
+        feature_tensor = torch.tensor(scaled, dtype=torch.float32).to(self.device)
+
+        chunks = self._chunk_script(script)
+        best_bert_prob: float = 0.0
+        with torch.no_grad():
+            for chunk in chunks:
+                input_ids = torch.tensor(
+                    [chunk["input_ids"]], dtype=torch.long
+                ).to(self.device)
+                attention_mask = torch.tensor(
+                    [chunk["attention_mask"]], dtype=torch.long
+                ).to(self.device)
+                outputs = self.model(
+                    input_ids=input_ids,
+                    attention_mask=attention_mask,
+                    feature_vector=feature_tensor,
+                )
+                probs = torch.softmax(outputs.logits, dim=-1)
+                mp = probs[0][1].item()
+                if mp > best_bert_prob:
+                    best_bert_prob = mp
+
+        # 5. Weighted soft-vote ze skalibrowaną prob XGBoost
+        prob_final = self._w_bert * best_bert_prob + self._w_xgb * xgb_calibrated
+        logger.info(
+            f"Ensemble: bert={best_bert_prob:.3f} (w={self._w_bert}), "
+            f"xgb_raw={prob_xgb_raw:.3f} xgb_cal={xgb_calibrated:.3f} (w={self._w_xgb}), "
+            f"final={prob_final:.3f}"
+        )
+
+        # 6. Zastosuj flagi override (debug mode)
+        if is_trusted:
+            logger.info(f"TrustEngine [debug]: final={prob_final:.3f}. benign override.")
+            return "benign", 1.0, prob_final
+
+        if is_heuristic_blocked:
+            logger.info(
+                f"Heuristic [debug]: {int(critical_count)} flags, "
+                f"final={prob_final:.3f}. malicious override."
+            )
+            return "malicious", 1.0, prob_final
+
+        if prob_final >= self._decision_threshold:
+            return "malicious", prob_final, prob_final
+
+        return "benign", 1.0 - prob_final, prob_final

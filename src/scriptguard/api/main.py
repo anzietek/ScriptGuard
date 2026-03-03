@@ -34,7 +34,7 @@ _classifier = None
 def _load_classifier() -> None:
     global _classifier
     from scriptguard.config_loader import load_config
-    from scriptguard.inference.classifier import ScriptGuardClassifier
+    from scriptguard.inference.classifier import ScriptGuardClassifier, EnsembleClassifier
 
     model_path = os.environ.get("SCRIPTGUARD_MODEL_PATH")
     if not model_path:
@@ -45,11 +45,29 @@ def _load_classifier() -> None:
         raise RuntimeError("Model path not configured.")
 
     # Resolve scaler path (defaults to model_path/feature_scaler.joblib)
-    scaler_path = os.environ.get("SCRIPTGUARD_SCALER_PATH", os.path.join(model_path, "feature_scaler.joblib"))
+    scaler_path = os.environ.get(
+        "SCRIPTGUARD_SCALER_PATH",
+        os.path.join(model_path, "feature_scaler.joblib"),
+    )
 
-    logger.info(f"Loading ScriptGuard model from {model_path} (scaler: {scaler_path})")
-    # Initialize with both required paths
-    _classifier = ScriptGuardClassifier(model_path, scaler_path)
+    # Check for XGBoost model — use ensemble if present
+    xgb_path = os.environ.get(
+        "SCRIPTGUARD_XGB_PATH",
+        os.path.join(model_path, "xgb_model.json"),
+    )
+
+    if os.path.exists(xgb_path):
+        logger.info(
+            f"XGBoost model found at {xgb_path}. "
+            f"Loading EnsembleClassifier (bert+xgb)."
+        )
+        _classifier = EnsembleClassifier(model_path, scaler_path, xgb_path)
+    else:
+        logger.info(
+            f"Loading ScriptGuard model from {model_path} (scaler: {scaler_path})"
+        )
+        _classifier = ScriptGuardClassifier(model_path, scaler_path)
+
     logger.info("Model ready")
 
 

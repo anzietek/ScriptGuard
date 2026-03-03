@@ -132,6 +132,7 @@ class FeatureExtractor:
     _LOG1P_INDICES: tuple[int, ...] = (1, 15, 16, 17)
 
     FEATURE_DIM: int = len(_CONTINUOUS_INDICES) + 1 + 5  # 27
+    RAW_FEATURE_DIM: int = 146  # public alias for extract_raw() output dimension
 
     # Taint source/sink classification sets
     _DECODE_SOURCES:  frozenset = frozenset({
@@ -242,6 +243,74 @@ class FeatureExtractor:
         except Exception as e:
             logger.warning(f"FeatureExtractor.extract failed: {e}")
             return [0.0] * self.FEATURE_DIM
+
+    def extract_raw(self, code: str) -> list[float]:
+        """
+        Extract 146-dimensional raw feature vector from Python source code.
+
+        Unlike extract() — which aggregates all 121 binary flags into a single
+        malware_api_score and returns a 27-dim vector — this method exposes
+        every individual flag so that tree-based models (XGBoost, gradient
+        boosting, random forests) can split on them independently.
+
+        Processing applied:
+          - Same raw 146-dim vector as extract()
+          - log1p normalisation on all positions in _CONTINUOUS_INDICES
+          - Binary flags remain 0.0 / 1.0, unchanged
+          - Values clipped to [0.0, 20.0]; NaN / Inf replaced with 0.0
+
+        Returns [0.0] * 146 on any top-level exception.
+        """
+        try:
+            _aliases: dict[str, str] = {}
+            _tree: Optional[ast.AST] = None
+            try:
+                _tree = self._parse_ast(code)
+                _aliases = self._build_alias_map(_tree)
+            except SyntaxError:
+                pass
+
+            raw: list[float] = (
+                self._ast_features(code, _aliases)             # 13  [0-12]
+                + self._import_features(code, _aliases)        # 11  [13-23]
+                + self._entropy_features(code)                 # 4   [24-27]
+                + self._obfuscation_features(code, _aliases)   # 11  [28-38]
+                + self._network_features(code)                 # 6   [39-44]
+                + self._persistence_features(code)             # 4   [45-48]
+                + self._crypto_features(code)                  # 4   [49-52]
+                + self._recon_fs_features(code)                # 3   [53-55]
+                + self._statistical_features(code)             # 7   [56-62]
+                + self._extra_features(code)                   # 1   [63]
+                + self._extended_api_flags(code, _aliases)     # 5   [64-68]
+                + self._gadget_features(code)                  # 47  [69-115]
+                + self._taint_features(code, _tree, _aliases)  # 30  [116-145]
+            )
+
+            assert len(raw) == self._RAW_DIM, (
+                f"Raw dimension mismatch: expected {self._RAW_DIM}, got {len(raw)}"
+            )
+
+            # Apply log1p to continuous positions to reduce scale variance
+            for i in self._CONTINUOUS_INDICES:
+                v = raw[i]
+                if math.isfinite(v) and v >= 0.0:
+                    raw[i] = math.log1p(v)
+
+            # Sanitise: replace non-finite values and clip to [0.0, 20.0]
+            for i in range(len(raw)):
+                v = raw[i]
+                if not math.isfinite(v):
+                    raw[i] = 0.0
+                elif v < 0.0:
+                    raw[i] = 0.0
+                elif v > 20.0:
+                    raw[i] = 20.0
+
+            return raw
+
+        except Exception as e:
+            logger.warning(f"FeatureExtractor.extract_raw failed: {e}")
+            return [0.0] * self._RAW_DIM
 
     # -------------------------------------------------------------------------
     # AST helpers

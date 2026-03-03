@@ -610,8 +610,8 @@ def load_fused_model(
     model.to(device)
     model.eval()
 
-    tokenizer = AutoTokenizer.from_pretrained(model_dir)
-    #tokenizer = AutoTokenizer.from_pretrained(model_name)
+    #tokenizer = AutoTokenizer.from_pretrained(model_dir)
+    tokenizer = AutoTokenizer.from_pretrained(model_name)
 
     logger.info(f"Loaded fused model ({fusion_config.fusion_architecture}) from {model_dir} on {device}")
     return model, tokenizer
